@@ -25,8 +25,11 @@ backend/            # FastAPI server
 3. The background forwards it to the **FastAPI backend** (`POST /check`).
 4. The backend calls an AI model (OpenAI, Anthropic, etc.) with a grammar-checking prompt.
 5. The AI returns structured JSON with error positions and corrections.
-6. Errors are shown in a **floating notification panel** (bottom-right) with the original text struck through and the correction in green.
-7. The notification auto-dismisses after 30 seconds, or can be closed manually.
+6. Issues are **highlighted inline** with colored wavy underlines:
+   - 🔴 **Red** — errors (spelling, grammar, punctuation)
+   - 🟢 **Green** — improvements (awkward phrasing, wordiness)
+   - 🔵 **Blue** — idioms (more natural expressions)
+7. **Hover or click** on highlighted text to see the correction in a tooltip. Click "Apply fix" to correct inline.
 
 ## Setup
 

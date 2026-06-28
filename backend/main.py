@@ -23,20 +23,27 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
 DEFAULT_MAX_TEXT_CHARS = 50_000
 
-GRAMMAR_SYSTEM_PROMPT = """You are a precise grammar and spelling checker. Analyze the provided text and identify all errors: spelling mistakes, grammar errors, punctuation errors, and awkward phrasing.
+GRAMMAR_SYSTEM_PROMPT = """You are a precise grammar and writing assistant. Analyze the provided text and identify issues in three categories:
 
-Return a JSON array of error objects. Each object must have these fields:
-- "start": integer, 0-indexed character offset where the error begins in the original text
-- "end": integer, 0-indexed character offset where the error ends (exclusive)
-- "error": string, the original erroneous text at that position
-- "correction": string, the corrected version
-- "explanation": string, brief explanation of the error type and correction (max 100 chars)
+1. **error** — spelling mistakes, grammar errors, punctuation errors (must be fixed)
+2. **improvement** — awkward phrasing, wordy constructions, unclear wording (suggested better version)
+3. **idiom** — places where an idiomatic expression or more natural phrasing would sound better
+
+Return a JSON array of issue objects. Each object must have these fields:
+- "start": integer, 0-indexed character offset where the issue begins in the original text
+- "end": integer, 0-indexed character offset where the issue ends (exclusive)
+- "error": string, the original text at that position
+- "correction": string, the corrected or improved version
+- "explanation": string, brief explanation (max 100 chars)
+- "type": string, one of "error", "improvement", or "idiom"
 
 Rules:
-- Only flag genuine errors. Do not flag stylistic preferences or regional spelling variants.
-- The "start" and "end" must be exact character offsets in the original text as provided.
-- Count characters as they appear — include spaces, newlines, and punctuation in your offset calculation.
-- If the text has no errors, return an empty array [].
+- "error" = genuine mistakes (spelling, grammar, punctuation). Use red for these.
+- "improvement" = the text is not wrong but could be clearer or more concise. Use green for these.
+- "idiom" = a more natural or idiomatic way to express the same idea. Use blue for these.
+- The "start" and "end" must be exact character offsets in the original text.
+- Count characters as they appear — include spaces, newlines, and punctuation.
+- If the text has no issues, return an empty array [].
 - Return ONLY the JSON array, no other text, no markdown fences, no explanation."""
 
 
@@ -59,6 +66,7 @@ class ErrorItem(BaseModel):
     error: str
     correction: str
     explanation: str
+    type: str = "error"  # "error", "improvement", or "idiom"
 
 
 class CheckResponse(BaseModel):
@@ -314,6 +322,7 @@ def _parse_errors(content: str) -> list[ErrorItem]:
                     error=str(item["error"]),
                     correction=str(item["correction"]),
                     explanation=str(item.get("explanation", "")),
+                    type=str(item.get("type", "error")),
                 )
             )
         except (KeyError, ValueError, TypeError) as exc:

@@ -18,7 +18,7 @@
     'SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA', 'INPUT',
     'SVG', 'MATH', 'NOSCRIPT', 'IFRAME', 'CANVAS',
   ]);
-  const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-tooltip', 'ai-grammar-badge'];
+  const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge'];
   const CHECKED_ATTR = 'data-ai-grammar-checked';
 
   // -----------------------------------------------------------------------
@@ -29,6 +29,7 @@
   let pendingChecks = new Map();       // id → { container, text }
   let checkedElements = new WeakSet(); // elements already checked
   let debounceTimer = null;
+  let isHighlighting = false;
   let tooltipEl = null;
   let currentErrorEl = null;
 
@@ -55,7 +56,25 @@
         border-radius: 2px;
       }
       .ai-grammar-error:hover {
-        background-color: rgba(220, 38, 38, 0.1);
+        background-color: rgba(220, 38, 38, 0.08);
+      }
+      .ai-grammar-improvement {
+        text-decoration: underline wavy #4ade80;
+        text-underline-offset: 3px;
+        cursor: pointer;
+        border-radius: 2px;
+      }
+      .ai-grammar-improvement:hover {
+        background-color: rgba(74, 222, 128, 0.08);
+      }
+      .ai-grammar-idiom {
+        text-decoration: underline wavy #60a5fa;
+        text-underline-offset: 3px;
+        cursor: pointer;
+        border-radius: 2px;
+      }
+      .ai-grammar-idiom:hover {
+        background-color: rgba(96, 165, 250, 0.08);
       }
       .ai-grammar-error:focus-visible {
         outline: 2px solid #dc2626;
@@ -354,13 +373,22 @@
       if (!range) continue;
 
       try {
+        // Map type to CSS class
+        const typeMap = {
+          error: 'ai-grammar-error',
+          improvement: 'ai-grammar-improvement',
+          idiom: 'ai-grammar-idiom',
+        };
+        const cls = typeMap[err.type] || 'ai-grammar-error';
+
         // Create wrapper span
         const span = document.createElement('span');
-        span.className = 'ai-grammar-error';
+        span.className = cls;
         span.setAttribute('data-correction', err.correction || '');
         span.setAttribute('data-explanation', err.explanation || '');
         span.setAttribute('data-error', err.error || '');
-        span.setAttribute('tabindex', '0'); // focusable for keyboard access
+        span.setAttribute('data-type', err.type || 'error');
+        span.setAttribute('tabindex', '0');
 
         try {
           range.surroundContents(span);
@@ -402,9 +430,14 @@
     const correction = errorEl.getAttribute('data-correction') || '';
     const explanation = errorEl.getAttribute('data-explanation') || '';
     const original = errorEl.getAttribute('data-error') || '';
+    const type = errorEl.getAttribute('data-type') || 'error';
+
+    const typeLabel = { error: '🔴 Error', improvement: '🟢 Improvement', idiom: '🔵 Idiom' };
+    const typeColor = { error: '#f87171', improvement: '#4ade80', idiom: '#60a5fa' };
 
     tip.innerHTML = `
       <div class="ag-arrow"></div>
+      <div style="font-size:11px;color:${typeColor[type]};margin-bottom:4px;font-weight:600;">${typeLabel[type] || 'Error'}</div>
       <div><span style="text-decoration:line-through;color:#f87171;">${escapeHtml(original)}</span> → <span class="ag-correction">${escapeHtml(correction)}</span></div>
       ${explanation ? `<div class="ag-explanation">${escapeHtml(explanation)}</div>` : ''}
       <div class="ag-actions">
@@ -451,10 +484,11 @@
     const correction = errorEl.getAttribute('data-correction');
     if (!correction) return;
     errorEl.textContent = correction;
-    errorEl.classList.remove('ai-grammar-error');
+    errorEl.classList.remove('ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom');
     errorEl.removeAttribute('data-correction');
     errorEl.removeAttribute('data-explanation');
     errorEl.removeAttribute('data-error');
+    errorEl.removeAttribute('data-type');
     errorEl.removeAttribute('tabindex');
     hideTooltip();
   }
@@ -463,8 +497,10 @@
   // Event delegation for tooltips and corrections
   // -----------------------------------------------------------------------
 
+  const GRAMMAR_CLASSES = '.ai-grammar-error, .ai-grammar-improvement, .ai-grammar-idiom';
+
   document.addEventListener('mouseover', (e) => {
-    const errorEl = e.target.closest('.ai-grammar-error');
+    const errorEl = e.target.closest(GRAMMAR_CLASSES);
     if (errorEl) {
       showTooltip(errorEl);
     } else if (!e.target.closest('.ai-grammar-tooltip')) {
@@ -473,7 +509,7 @@
   });
 
   document.addEventListener('focusin', (e) => {
-    const errorEl = e.target.closest('.ai-grammar-error');
+    const errorEl = e.target.closest(GRAMMAR_CLASSES);
     if (errorEl) {
       showTooltip(errorEl);
     }
@@ -495,14 +531,14 @@
     }
 
     // Click on error span itself — apply on click (convenience)
-    const errorEl = e.target.closest('.ai-grammar-error');
+    const errorEl = e.target.closest(GRAMMAR_CLASSES);
     if (errorEl && !e.target.closest('.ai-grammar-tooltip')) {
       applyCorrection(errorEl);
       return;
     }
 
     // Click elsewhere — hide
-    if (!e.target.closest('.ai-grammar-tooltip') && !e.target.closest('.ai-grammar-error')) {
+    if (!e.target.closest('.ai-grammar-tooltip') && !e.target.closest(GRAMMAR_CLASSES)) {
       hideTooltip();
     }
   });
@@ -629,7 +665,20 @@
       const errors = resp.errors || [];
       if (errors.length === 0) return;
 
-      showErrorFloat(errors);
+      // Highlight errors inline with colored underlines
+      isHighlighting = true;
+      const count = highlightErrors(container, errors);
+      isHighlighting = false;
+
+      if (count > 0) {
+        const breakdown = { error: 0, improvement: 0, idiom: 0 };
+        for (const e of errors) { breakdown[e.type] = (breakdown[e.type] || 0) + 1; }
+        const parts = [];
+        if (breakdown.error) parts.push(`${breakdown.error} error${breakdown.error > 1 ? 's' : ''}`);
+        if (breakdown.improvement) parts.push(`${breakdown.improvement} improvement${breakdown.improvement > 1 ? 's' : ''}`);
+        if (breakdown.idiom) parts.push(`${breakdown.idiom} idiom${breakdown.idiom > 1 ? 's' : ''}`);
+        showBadge(parts.join(', ') + ' found');
+      }
     } catch (e) {
       removeBadge();
       console.debug('[AI Grammar] Check error:', e);
@@ -641,6 +690,8 @@
   // -----------------------------------------------------------------------
 
   const observer = new MutationObserver((mutations) => {
+    if (isHighlighting) return; // Ignore our own DOM changes
+
     const newBlocks = findNewTextBlocks(mutations);
     if (newBlocks.length === 0) return;
 
