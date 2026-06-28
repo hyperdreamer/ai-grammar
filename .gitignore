@@ -12,6 +12,9 @@ backend/config.yaml
 *.swp
 *.swo
 
+# Design docs (not part of the project)
+prompt
+
 # OS
 .DS_Store
 Thumbs.db
