@@ -14,7 +14,9 @@ import httpx
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 
@@ -182,6 +184,18 @@ def load_server_config() -> ServerConfig:
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="AI Grammar Checker", version="0.0.12")
+
+# Allow requests from any origin (content scripts run in page context)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount static files for testing
+app.mount("/static", StaticFiles(directory="/tmp"), name="static")
 
 
 @app.exception_handler(RequestValidationError)

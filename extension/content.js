@@ -639,32 +639,50 @@
   }
 
   // -----------------------------------------------------------------------
+  // Page-world fetch (bypasses content script fetch restrictions)
+  // -----------------------------------------------------------------------
+
+  function fetchViaPage(url, options) {
+    return new Promise((resolve, reject) => {
+      const reqId = Math.random().toString(36).slice(2);
+      const handler = (e) => {
+        if (e.data?.type === 'ag-result' && e.data.id === reqId) {
+          window.removeEventListener('message', handler);
+          resolve(e.data.data);
+        } else if (e.data?.type === 'ag-error' && e.data.id === reqId) {
+          window.removeEventListener('message', handler);
+          reject(new Error(e.data.error));
+        }
+      };
+      window.addEventListener('message', handler);
+      window.postMessage({ type: 'ag-fetch', id: reqId, url, body: options.body }, '*');
+      setTimeout(() => {
+        window.removeEventListener('message', handler);
+        reject(new Error('fetchViaPage timeout'));
+      }, 25000);
+    });
+  }
+
+  // -----------------------------------------------------------------------
   // Check pipeline
   // -----------------------------------------------------------------------
 
   async function checkText(text, container) {
     const id = ++checkIdCounter;
-    console.debug('[AI Grammar] checkText #' + id + ':', text.slice(0, 60));
     showBadge('Checking grammar...', true);
 
     try {
-      const resp = await chrome.runtime.sendMessage({
-        type: 'grammar:check',
-        text,
-        id,
+      // Fetch via injected page-world script (content script fetch is restricted in MV3)
+      const data = await fetchViaPage(`http://127.0.0.1:8766/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, language: 'auto' }),
       });
 
-      console.debug('[AI Grammar] checkText #' + id + ' response:', JSON.stringify({ok: resp?.ok, errors: resp?.errors?.length, error: resp?.error}));
       removeBadge();
 
-      if (!resp?.ok) {
-        if (!resp?.aborted) {
-          console.debug('[AI Grammar] Check failed:', resp?.error);
-        }
-        return;
-      }
-
-      const errors = resp.errors || [];
+      if (!data?.errors) return;
+      const errors = data.errors;
       if (errors.length === 0) return;
 
       // Highlight errors inline with colored underlines
@@ -695,18 +713,15 @@
     if (isHighlighting) return; // Ignore our own DOM changes
 
     const newBlocks = findNewTextBlocks(mutations);
-    console.debug('[AI Grammar] MutationObserver: found', newBlocks.length, 'new blocks, pending lastUserText:', lastUserText ? lastUserText.slice(0, 40) : '(none)');
     if (newBlocks.length === 0) return;
 
     // Add to pending and debounce — only user-authored content
     for (const block of newBlocks) {
       const text = getTextContent(block);
-      console.debug('[AI Grammar] Block text:', text.slice(0, 60), 'isUserText:', isUserText(text));
       if (text.length >= MIN_TEXT_LENGTH && isUserText(text)) {
         pendingChecks.set(block, text);
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
-        console.debug('[AI Grammar] Queued for checking, pending size:', pendingChecks.size);
       }
     }
 
@@ -1028,16 +1043,13 @@
     // Helper: process captured text — handle commands, otherwise store for matching
     async function processCapturedText(captured) {
       if (!captured || captured.length < MIN_TEXT_LENGTH) return;
-      console.debug('[AI Grammar] processCapturedText:', captured.slice(0, 60));
       // Check for ?/ postfix commands first
       if (captured.startsWith(COMMAND_PREFIX)) {
-        console.debug('[AI Grammar] Command detected, handling...');
         await handleCommand(captured);
         return;
       }
       lastUserText = captured;
       lastUserTextTime = Date.now();
-      console.debug('[AI Grammar] Stored lastUserText:', captured.slice(0, 60));
     }
 
     // Capture text when the user submits a form (e.g., chat send)

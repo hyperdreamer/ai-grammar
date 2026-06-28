@@ -39,7 +39,12 @@ async function getEnabled() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'grammar:check') {
-    handleCheck(message, sender.tab?.id).then(sendResponse);
+    handleCheck(message, sender.tab?.id)
+      .then(sendResponse)
+      .catch(err => {
+        console.error('[AI Grammar BG] handleCheck failed:', err);
+        sendResponse({ ok: false, error: err.message || String(err) });
+      });
     return true; // async
   }
 
@@ -50,7 +55,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'grammar:get-settings') {
-    getSettings().then(sendResponse);
+    getSettings()
+      .then(sendResponse)
+      .catch(err => {
+        console.error('[AI Grammar BG] getSettings failed:', err);
+        sendResponse({});
+      });
     return true;
   }
 });
@@ -79,9 +89,6 @@ async function handleCheck(msg, tabId) {
     const language = await getLanguage();
     const url = `${baseUrl}/check?_=${Date.now()}`;
 
-    console.debug('[AI Grammar BG] Fetching:', url);
-    console.debug('[AI Grammar BG] Text:', text.slice(0, 60));
-
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -95,10 +102,8 @@ async function handleCheck(msg, tabId) {
     }
 
     const data = await resp.json();
-    console.debug('[AI Grammar BG] Response:', data.errors?.length, 'errors');
     return { ok: true, errors: data.errors || [], model: data.model || '', id };
   } catch (e) {
-    console.debug('[AI Grammar BG] Error:', e.name, e.message);
     if (e.name === 'AbortError') return { ok: true, aborted: true, id };
     return { ok: false, error: e.message, id };
   } finally {
