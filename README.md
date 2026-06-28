@@ -68,6 +68,20 @@ Click the extension icon to:
 - Select language (helps AI focus on language-specific errors)
 - Configure backend host and port
 
+### Inline commands (`?/` prefix)
+
+Type these commands directly in any text input and submit — the extension executes the command instead of grammar-checking it:
+
+| Command | Action |
+|---------|--------|
+| `?/off` | Disable auto grammar checking |
+| `?/on` | Enable auto grammar checking |
+| `?/check` | Force grammar check of all text on the current page |
+| `?/lang en` | Set language to English (also: zh, ja, ko, fr, de, es, ru, pt, it, ar, auto) |
+| `?/help` | Show all available commands |
+
+Commands are detected and intercepted before submission — they never reach the AI backend.
+
 ## Configuration
 
 ### Environment variables

@@ -519,7 +519,7 @@
   // Status badge
   // -----------------------------------------------------------------------
 
-  function showBadge(text, isPending = false) {
+  function showBadge(text, isPending = false, durationMs = 4000) {
     removeBadge();
     const badge = document.createElement('div');
     badge.className = 'ai-grammar-badge';
@@ -528,7 +528,7 @@
       : text;
     document.body.appendChild(badge);
     if (!isPending) {
-      setTimeout(removeBadge, 4000);
+      setTimeout(removeBadge, durationMs);
     }
   }
 
@@ -658,8 +658,90 @@
   }
 
   // -----------------------------------------------------------------------
-  // Initialization
+  // Command system (?/ prefix)
   // -----------------------------------------------------------------------
+
+  const COMMAND_PREFIX = '?/';
+  const COMMANDS = {
+    off: {
+      help: 'Disable auto grammar checking',
+      async run() {
+        await chrome.storage.sync.set({ grammarEnabled: false });
+        showBadge('Grammar checker disabled');
+      },
+    },
+    on: {
+      help: 'Enable auto grammar checking',
+      async run() {
+        await chrome.storage.sync.set({ grammarEnabled: true });
+        showBadge('Grammar checker enabled');
+      },
+    },
+    check: {
+      help: 'Force grammar check of the page',
+      async run() {
+        // Walk the page for unchecked text blocks and check them
+        const candidates = document.querySelectorAll('p, div, article, section, li, blockquote, td, th, dd, h1, h2, h3, h4, h5, h6');
+        let checked = 0;
+        for (const el of candidates) {
+          if (isIgnored(el) || checkedElements.has(el) || el.hasAttribute(CHECKED_ATTR)) continue;
+          const text = getTextContent(el);
+          if (text.length >= MIN_TEXT_LENGTH) {
+            checkedElements.add(el);
+            el.setAttribute(CHECKED_ATTR, '');
+            checkText(text, el);
+            checked++;
+          }
+        }
+        showBadge(checked > 0 ? `Checking ${checked} text block${checked > 1 ? 's' : ''}...` : 'No new text to check');
+      },
+    },
+    lang: {
+      help: 'Set language (e.g., ?/lang en, ?/lang zh, ?/lang auto)',
+      async run(args) {
+        const valid = ['auto', 'en', 'zh', 'ja', 'ko', 'fr', 'de', 'es', 'ru', 'pt', 'it', 'ar'];
+        const lang = (args || '').toLowerCase();
+        if (!valid.includes(lang)) {
+          showBadge(`Unknown language: "${args}". Use: ${valid.join(', ')}`);
+          return;
+        }
+        const label = lang === 'auto' ? 'Auto-detect' : lang.toUpperCase();
+        await chrome.storage.sync.set({ grammarLanguage: lang });
+        showBadge(`Language set to ${label}`);
+      },
+    },
+    help: {
+      help: 'Show available commands',
+      run() {
+        const lines = Object.entries(COMMANDS).map(([name, cmd]) => `?/${name} — ${cmd.help}`);
+        showBadge(lines.join(' | '), false, 8000);
+      },
+    },
+  };
+
+  /**
+   * Check if text is a command and execute it. Returns true if a command was handled.
+   */
+  async function handleCommand(text) {
+    if (!text.startsWith(COMMAND_PREFIX)) return false;
+
+    const parts = text.slice(COMMAND_PREFIX.length).trim().split(/\s+/);
+    const cmdName = parts[0].toLowerCase();
+    const args = parts.slice(1).join(' ');
+
+    const cmd = COMMANDS[cmdName];
+    if (!cmd) {
+      showBadge(`Unknown command: ?/${cmdName}. Try ?/help`);
+      return true;
+    }
+
+    try {
+      await cmd.run(args);
+    } catch (e) {
+      showBadge(`Command failed: ${e.message}`);
+    }
+    return true;
+  }
 
   function init() {
     injectStyles();
@@ -671,6 +753,18 @@
     });
 
     // --- Track user-submitted text so we only check the user's content ---
+    // Helper: process captured text — handle commands, otherwise store for matching
+    async function processCapturedText(captured) {
+      if (!captured || captured.length < MIN_TEXT_LENGTH) return;
+      // Check for ?/ commands first
+      if (captured.startsWith(COMMAND_PREFIX)) {
+        await handleCommand(captured);
+        return;
+      }
+      lastUserText = captured;
+      lastUserTextTime = Date.now();
+    }
+
     // Capture text when the user submits a form (e.g., chat send)
     document.addEventListener('submit', (e) => {
       const form = e.target;
@@ -687,10 +781,7 @@
           if (captured) break;
         }
       }
-      if (captured && captured.length >= MIN_TEXT_LENGTH) {
-        lastUserText = captured;
-        lastUserTextTime = Date.now();
-      }
+      processCapturedText(captured);
     }, true);
 
     // Capture text on Enter (without Shift) in textareas
@@ -699,10 +790,7 @@
       const ta = e.target;
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
       const text = (ta.value || ta.textContent || '').trim();
-      if (text.length >= MIN_TEXT_LENGTH) {
-        lastUserText = text;
-        lastUserTextTime = Date.now();
-      }
+      processCapturedText(text);
     }, true);
 
     console.debug('[AI Grammar] Content script initialized');
