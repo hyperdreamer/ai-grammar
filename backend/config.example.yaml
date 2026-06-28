@@ -3,6 +3,11 @@
 # Copy this file to config.yaml and fill in your settings.
 # config.yaml is gitignored.
 
+# --- Server listen address ---
+server:
+  host: 127.0.0.1
+  port: 8766
+
 ai:
   # Provider type: "openai" for OpenAI-compatible APIs (includes most proxies)
   provider: openai

@@ -95,6 +95,14 @@ class AIConfig:
     timeout: TimeoutConfig = TimeoutConfig()
 
 
+@dataclass(frozen=True)
+class ServerConfig:
+    """Server listen address loaded from config.yaml."""
+
+    host: str = "127.0.0.1"
+    port: int = 8766
+
+
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
@@ -148,6 +156,22 @@ def load_config() -> AIConfig:
         api_base=ai_section.get("api_base", "https://api.openai.com/v1"),
         timeout=timeout,
     )
+
+
+def load_server_config() -> ServerConfig:
+    """Load server listen address from config.yaml, with env-var override."""
+    if not CONFIG_PATH.exists():
+        return ServerConfig()
+
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    server_section = raw.get("server", {})
+
+    host = os.environ.get("GRAMMAR_HOST") or server_section.get("host", DEFAULT_HOST)
+    port = int(os.environ.get("GRAMMAR_PORT", 0)) or server_section.get("port", DEFAULT_PORT)
+
+    return ServerConfig(host=host, port=port)
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +382,5 @@ async def check_grammar(request: CheckRequest) -> Response:
 if __name__ == "__main__":
     import uvicorn
 
-    host = os.environ.get("GRAMMAR_HOST", DEFAULT_HOST)
-    port = int(os.environ.get("GRAMMAR_PORT", DEFAULT_PORT))
-    uvicorn.run(app, host=host, port=port)
+    server = load_server_config()
+    uvicorn.run(app, host=server.host, port=server.port)
