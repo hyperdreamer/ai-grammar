@@ -71,19 +71,19 @@ Click the extension icon to:
 - Select language (helps AI focus on language-specific errors)
 - Configure backend host and port
 
-### Inline commands (`?/` postfix)
+### Inline commands (`?/` prefix)
 
-Type `?/` in any text input to open the **command palette** — a popup menu listing all available commands. Use arrow keys to navigate, Enter to select, or click a command. You can also type the full command directly (e.g., `off?/`).
+Type `?/` in any text input to open the **command palette** — a popup menu listing all available commands. Use arrow keys to navigate, Enter to select, or click a command. You can also type the full command directly (e.g., `?/off`).
 
 | Command | Action |
 |---------|--------|
-| `off?/` | Disable auto grammar checking |
-| `on?/` | Enable auto grammar checking |
-| `check?/` | Force grammar check of all text on the current page |
-| `lang en?/` | Set language to English (also: zh, ja, ko, fr, de, es, ru, pt, it, ar, auto) |
-| `help?/` | Show all available commands |
+| `?/off` | Disable auto grammar checking |
+| `?/on` | Enable auto grammar checking |
+| `?/check` | Force grammar check of all text on the current page |
+| `?/lang en` | Set language to English (also: zh, ja, ko, fr, de, es, ru, pt, it, ar, auto) |
+| `?/help` | Show all available commands |
 
-The palette appears when you type `?/` and closes on Escape or when you type a full command.
+The palette opens when you type `?/`. Arrow keys navigate, Enter selects, Escape closes. Type more to filter (e.g., `?/o` filters to `?/off` and `?/on`).
 
 ## Configuration
 

@@ -765,10 +765,10 @@
   }
 
   // -----------------------------------------------------------------------
-  // Command system (?/ postfix)
+  // Command system (?/ prefix)
   // -----------------------------------------------------------------------
 
-  const COMMAND_SUFFIX = '?/';
+  const COMMAND_PREFIX = '?/';
   const COMMANDS = {
     off: {
       help: 'Disable auto grammar checking',
@@ -803,7 +803,7 @@
       },
     },
     lang: {
-      help: 'Set language (e.g., lang en?/, lang zh?/, lang auto?/)',
+      help: 'Set language (e.g., ?/lang en, ?/lang zh, ?/lang auto)',
       async run(args) {
         const valid = ['auto', 'en', 'zh', 'ja', 'ko', 'fr', 'de', 'es', 'ru', 'pt', 'it', 'ar'];
         const lang = (args || '').toLowerCase();
@@ -819,7 +819,7 @@
     help: {
       help: 'Show available commands',
       run() {
-        const lines = Object.entries(COMMANDS).map(([name, cmd]) => `${name}?/ — ${cmd.help}`);
+        const lines = Object.entries(COMMANDS).map(([name, cmd]) => `?/${name} — ${cmd.help}`);
         showBadge(lines.join(' | '), false, 8000);
       },
     },
@@ -829,16 +829,15 @@
    * Check if text ends with a ?/ command and execute it. Returns true if handled.
    */
   async function handleCommand(text) {
-    if (!text.endsWith(COMMAND_SUFFIX)) return false;
+    if (!text.startsWith(COMMAND_PREFIX)) return false;
 
-    const before = text.slice(0, -COMMAND_SUFFIX.length).trim();
-    const parts = before.split(/\s+/);
-    const cmdName = parts[parts.length - 1].toLowerCase();
-    const args = parts.slice(0, -1).join(' ');
+    const parts = text.slice(COMMAND_PREFIX.length).trim().split(/\s+/);
+    const cmdName = parts[0].toLowerCase();
+    const args = parts.slice(1).join(' ');
 
     const cmd = COMMANDS[cmdName];
     if (!cmd) {
-      showBadge(`Unknown command: ${cmdName}?/. Try help?/`);
+      showBadge(`Unknown command: ?/${cmdName}. Try ?/help`);
       return true;
     }
 
@@ -862,7 +861,7 @@
     return Object.entries(COMMANDS).map(([name, cmd]) => ({
       name,
       help: cmd.help,
-      full: name === 'lang' ? `lang en?/` : `${name}?/`,
+      full: name === 'lang' ? `?/lang en` : `?/${name}`,
       needsArg: name === 'lang',
     }));
   }
@@ -964,7 +963,7 @@
     const ta = paletteTarget;
     const value = ta.value || ta.textContent || '';
     // Replace the ?/ at the end with the new text
-    const newValue = value.replace(/\?\/\s*$/, text);
+    const newValue = text + value.replace(/^\?\/\s*/, '');
     if (ta.tagName === 'TEXTAREA') {
       ta.value = newValue;
       ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -981,8 +980,8 @@
 
     // Replace ?/ with the full command in the textarea
     const value = ta.value || ta.textContent || '';
-    const fullCmd = cmdName === 'lang' ? 'lang en?/' : `${cmdName}?/`;
-    const newValue = value.replace(/\?\/\s*$/, fullCmd);
+    const fullCmd = cmdName === 'lang' ? '?/lang en' : `?/${cmdName}`;
+    const newValue = value.replace(/^\?\/\s*/, fullCmd);
     if (ta.tagName === 'TEXTAREA') {
       ta.value = newValue;
       ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1000,7 +999,7 @@
     // Clear the command text from the input
     setTimeout(() => {
       const v = ta.value || ta.textContent || '';
-      const cleaned = v.replace(fullCmd, '').trimEnd();
+      const cleaned = v.replace(fullCmd, '').trimStart();
       if (ta.tagName === 'TEXTAREA') {
         ta.value = cleaned;
         ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1025,7 +1024,7 @@
     async function processCapturedText(captured) {
       if (!captured || captured.length < MIN_TEXT_LENGTH) return;
       // Check for ?/ postfix commands first
-      if (captured.endsWith(COMMAND_SUFFIX)) {
+      if (captured.startsWith(COMMAND_PREFIX)) {
         await handleCommand(captured);
         return;
       }
@@ -1088,20 +1087,19 @@
       const value = ta.value || ta.textContent || '';
 
       // Bare ?/ at end → show command palette
-      if (/\?\/\s*$/.test(value) && !/\w+\?\/\s*$/.test(value)) {
+      if (/^\s*\?\/$/.test(value)) {
         showCommandPalette(ta);
         return;
       }
 
       // Full command typed (e.g., "off?/", "lang en?/") → hide palette, execute
-      const match = value.match(/\w+(\s+\S+)?\?\/$/);
+      const match = value.match(/^\s*\?\/\w+(\s+\S+)?/);
       if (match) {
         hideCommandPalette();
-        const cmdText = match[0];
-        const body = cmdText.slice(0, -2).trim();
-        const bodyParts = body.split(/\s+/);
-        const cmdName = bodyParts[bodyParts.length - 1].toLowerCase();
-        const cmdArgs = bodyParts.slice(0, -1).join(' ');
+        const cmdText = match[0].trim();
+        const parts = cmdText.slice(2).trim().split(/\s+/);
+        const cmdName = parts[0].toLowerCase();
+        const cmdArgs = parts.slice(1).join(' ');
 
         if (!COMMANDS[cmdName]) return;
 
@@ -1115,7 +1113,7 @@
             showBadge(`Command failed: ${err.message}`);
           }
 
-          const cleaned = currentValue.replace(cmdText, '').trimEnd();
+          const cleaned = currentValue.replace(cmdText, '').trimStart();
           if (ta.tagName === 'TEXTAREA') {
             ta.value = cleaned;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
