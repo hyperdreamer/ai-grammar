@@ -25,8 +25,8 @@ backend/            # FastAPI server
 3. The background forwards it to the **FastAPI backend** (`POST /check`).
 4. The backend calls an AI model (OpenAI, Anthropic, etc.) with a grammar-checking prompt.
 5. The AI returns structured JSON with error positions and corrections.
-6. Errors are **highlighted** with wavy red underlines in the page.
-7. **Hover or click** on highlighted text to see the correction in a tooltip. Click "Apply fix" to correct inline.
+6. Errors are shown in a **floating notification panel** (bottom-right) with the original text struck through and the correction in green.
+7. The notification auto-dismisses after 30 seconds, or can be closed manually.
 
 ## Setup
 
@@ -68,19 +68,19 @@ Click the extension icon to:
 - Select language (helps AI focus on language-specific errors)
 - Configure backend host and port
 
-### Inline commands (`?/` prefix)
+### Inline commands (`?/` postfix)
 
 Type these commands directly in any text input — the extension detects them **as you type** (no submit needed) and executes immediately, then strips the command from your input:
 
 | Command | Action |
 |---------|--------|
-| `?/off` | Disable auto grammar checking |
-| `?/on` | Enable auto grammar checking |
-| `?/check` | Force grammar check of all text on the current page |
-| `?/lang en` | Set language to English (also: zh, ja, ko, fr, de, es, ru, pt, it, ar, auto) |
-| `?/help` | Show all available commands |
+| `off?/` | Disable auto grammar checking |
+| `on?/` | Enable auto grammar checking |
+| `check?/` | Force grammar check of all text on the current page |
+| `lang en?/` | Set language to English (also: zh, ja, ko, fr, de, es, ru, pt, it, ar, auto) |
+| `help?/` | Show all available commands |
 
-Commands are detected inline via a 600ms debounce after you stop typing — they never reach the AI backend.
+Commands use `?/` as a **postfix** (e.g., `off?/`), detected inline via a 600ms debounce after you stop typing.
 
 ## Configuration
 

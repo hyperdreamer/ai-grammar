@@ -4,6 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR/backend"
 
+# Source user profile for API keys and tokens (suppress conda init noise)
+if [ -f "$HOME/.profile" ]; then
+    set +euo pipefail
+    source "$HOME/.profile" 2>/dev/null
+    set -euo pipefail
+fi
+
 cd "$BACKEND_DIR"
 
 if [ ! -f config.yaml ]; then

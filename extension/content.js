@@ -29,7 +29,6 @@
   let pendingChecks = new Map();       // id → { container, text }
   let checkedElements = new WeakSet(); // elements already checked
   let debounceTimer = null;
-  let isHighlighting = false;
   let tooltipEl = null;
   let currentErrorEl = null;
 
@@ -538,6 +537,72 @@
   }
 
   // -----------------------------------------------------------------------
+  // Floating error notification (replaces inline underlines)
+  // -----------------------------------------------------------------------
+
+  function showErrorFloat(errors) {
+    removeErrorFloat();
+
+    const panel = document.createElement('div');
+    panel.id = 'ai-grammar-float';
+    panel.innerHTML = `
+      <style>
+        #ai-grammar-float {
+          position: fixed; bottom: 16px; right: 16px; z-index: 2147483646;
+          background: #1e293b; color: #f1f5f9; border-radius: 12px;
+          box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          font-size: 13px; line-height: 1.5; max-width: 420px; max-height: 60vh;
+          overflow-y: auto; padding: 0; animation: ai-gfadein 0.2s ease;
+        }
+        #ai-grammar-float .agf-header {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 12px 16px; border-bottom: 1px solid #334155;
+          font-weight: 600; font-size: 14px; position: sticky; top: 0;
+          background: #1e293b; border-radius: 12px 12px 0 0; z-index: 1;
+        }
+        #ai-grammar-float .agf-close {
+          background: none; border: none; color: #94a3b8; cursor: pointer;
+          font-size: 18px; line-height: 1; padding: 0 0 0 12px;
+        }
+        #ai-grammar-float .agf-close:hover { color: #f1f5f9; }
+        #ai-grammar-float .agf-item {
+          padding: 10px 16px; border-bottom: 1px solid #1e293b;
+        }
+        #ai-grammar-float .agf-item:last-child { border-bottom: none; }
+        #ai-grammar-float .agf-item:hover { background: #0f172a; }
+        #ai-grammar-float .agf-original {
+          color: #f87171; text-decoration: line-through; margin-right: 8px;
+        }
+        #ai-grammar-float .agf-correction { color: #4ade80; font-weight: 600; }
+        #ai-grammar-float .agf-explain { color: #64748b; font-size: 11px; margin-top: 2px; }
+      </style>
+      <div class="agf-header">
+        <span>🔍 ${errors.length} error${errors.length > 1 ? 's' : ''} found</span>
+        <button class="agf-close" onclick="document.getElementById('ai-grammar-float').remove()">✕</button>
+      </div>
+      ${errors.map(e => `
+        <div class="agf-item">
+          <div>
+            <span class="agf-original">${escapeHtml(e.error)}</span>
+            <span class="agf-correction">${escapeHtml(e.correction)}</span>
+          </div>
+          ${e.explanation ? `<div class="agf-explain">${escapeHtml(e.explanation)}</div>` : ''}
+        </div>
+      `).join('')}
+    `;
+    document.body.appendChild(panel);
+
+    // Auto-dismiss after 30 seconds
+    setTimeout(removeErrorFloat, 30_000);
+  }
+
+  function removeErrorFloat() {
+    const panel = document.getElementById('ai-grammar-float');
+    if (panel) panel.remove();
+  }
+
+  // -----------------------------------------------------------------------
   // Check pipeline
   // -----------------------------------------------------------------------
 
@@ -564,14 +629,7 @@
       const errors = resp.errors || [];
       if (errors.length === 0) return;
 
-      // Highlight errors in the container
-      isHighlighting = true;
-      const count = highlightErrors(container, errors);
-      isHighlighting = false;
-
-      if (count > 0) {
-        showBadge(`${count} error${count > 1 ? 's' : ''} found`);
-      }
+      showErrorFloat(errors);
     } catch (e) {
       removeBadge();
       console.debug('[AI Grammar] Check error:', e);
@@ -583,8 +641,6 @@
   // -----------------------------------------------------------------------
 
   const observer = new MutationObserver((mutations) => {
-    if (isHighlighting) return; // Ignore our own DOM changes
-
     const newBlocks = findNewTextBlocks(mutations);
     if (newBlocks.length === 0) return;
 
@@ -658,10 +714,10 @@
   }
 
   // -----------------------------------------------------------------------
-  // Command system (?/ prefix)
+  // Command system (?/ postfix)
   // -----------------------------------------------------------------------
 
-  const COMMAND_PREFIX = '?/';
+  const COMMAND_SUFFIX = '?/';
   const COMMANDS = {
     off: {
       help: 'Disable auto grammar checking',
@@ -680,7 +736,6 @@
     check: {
       help: 'Force grammar check of the page',
       async run() {
-        // Walk the page for unchecked text blocks and check them
         const candidates = document.querySelectorAll('p, div, article, section, li, blockquote, td, th, dd, h1, h2, h3, h4, h5, h6');
         let checked = 0;
         for (const el of candidates) {
@@ -697,7 +752,7 @@
       },
     },
     lang: {
-      help: 'Set language (e.g., ?/lang en, ?/lang zh, ?/lang auto)',
+      help: 'Set language (e.g., lang en?/, lang zh?/, lang auto?/)',
       async run(args) {
         const valid = ['auto', 'en', 'zh', 'ja', 'ko', 'fr', 'de', 'es', 'ru', 'pt', 'it', 'ar'];
         const lang = (args || '').toLowerCase();
@@ -713,25 +768,26 @@
     help: {
       help: 'Show available commands',
       run() {
-        const lines = Object.entries(COMMANDS).map(([name, cmd]) => `?/${name} — ${cmd.help}`);
+        const lines = Object.entries(COMMANDS).map(([name, cmd]) => `${name}?/ — ${cmd.help}`);
         showBadge(lines.join(' | '), false, 8000);
       },
     },
   };
 
   /**
-   * Check if text is a command and execute it. Returns true if a command was handled.
+   * Check if text ends with a ?/ command and execute it. Returns true if handled.
    */
   async function handleCommand(text) {
-    if (!text.startsWith(COMMAND_PREFIX)) return false;
+    if (!text.endsWith(COMMAND_SUFFIX)) return false;
 
-    const parts = text.slice(COMMAND_PREFIX.length).trim().split(/\s+/);
-    const cmdName = parts[0].toLowerCase();
-    const args = parts.slice(1).join(' ');
+    const before = text.slice(0, -COMMAND_SUFFIX.length).trim();
+    const parts = before.split(/\s+/);
+    const cmdName = parts[parts.length - 1].toLowerCase();
+    const args = parts.slice(0, -1).join(' ');
 
     const cmd = COMMANDS[cmdName];
     if (!cmd) {
-      showBadge(`Unknown command: ?/${cmdName}. Try ?/help`);
+      showBadge(`Unknown command: ${cmdName}?/. Try help?/`);
       return true;
     }
 
@@ -756,8 +812,8 @@
     // Helper: process captured text — handle commands, otherwise store for matching
     async function processCapturedText(captured) {
       if (!captured || captured.length < MIN_TEXT_LENGTH) return;
-      // Check for ?/ commands first
-      if (captured.startsWith(COMMAND_PREFIX)) {
+      // Check for ?/ postfix commands first
+      if (captured.endsWith(COMMAND_SUFFIX)) {
         await handleCommand(captured);
         return;
       }
@@ -802,12 +858,15 @@
       clearTimeout(commandDebounce);
       const value = ta.value || ta.textContent || '';
 
-      // Match ?/command at the end of the input (e.g., "?/off", "?/lang en")
-      const match = value.match(/\?\/\w+(\s+\S+)?$/);
+      // Match command?/ at the end of the input (e.g., "off?/", "lang en?/")
+      const match = value.match(/\w+(\s+\S+)?\?\/$/);
       if (!match) return;
 
-      const cmdText = match[0];
-      const cmdName = cmdText.slice(2).split(/\s+/)[0].toLowerCase();
+      const cmdText = match[0];                               // e.g., "off?/" or "lang en?/"
+      const body = cmdText.slice(0, -2).trim();              // e.g., "off" or "lang en"
+      const bodyParts = body.split(/\s+/);
+      const cmdName = bodyParts[bodyParts.length - 1].toLowerCase();  // last word
+      const cmdArgs = bodyParts.slice(0, -1).join(' ');      // everything before the command word
 
       if (!COMMANDS[cmdName]) return; // unknown command, let user finish typing
 
@@ -816,7 +875,7 @@
         const currentValue = ta.value || ta.textContent || '';
         if (!currentValue.includes(cmdText)) return;
 
-        const args = cmdText.slice(2).split(/\s+/).slice(1).join(' ');
+        const args = cmdArgs;
         try {
           await COMMANDS[cmdName].run(args);
         } catch (err) {
