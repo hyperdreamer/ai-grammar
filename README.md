@@ -70,7 +70,7 @@ Click the extension icon to:
 
 ### Inline commands (`?/` postfix)
 
-Type these commands directly in any text input — the extension detects them **as you type** (no submit needed) and executes immediately, then strips the command from your input:
+Type `?/` in any text input to open the **command palette** — a popup menu listing all available commands. Use arrow keys to navigate, Enter to select, or click a command. You can also type the full command directly (e.g., `off?/`).
 
 | Command | Action |
 |---------|--------|
@@ -80,7 +80,7 @@ Type these commands directly in any text input — the extension detects them **
 | `lang en?/` | Set language to English (also: zh, ja, ko, fr, de, es, ru, pt, it, ar, auto) |
 | `help?/` | Show all available commands |
 
-Commands use `?/` as a **postfix** (e.g., `off?/`), detected inline via a 600ms debounce after you stop typing.
+The palette appears when you type `?/` and closes on Escape or when you type a full command.
 
 ## Configuration
 

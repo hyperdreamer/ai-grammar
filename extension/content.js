@@ -799,6 +799,167 @@
     return true;
   }
 
+  // -----------------------------------------------------------------------
+  // Command palette (shown when user types ?/ in a text input)
+  // -----------------------------------------------------------------------
+
+  let paletteEl = null;
+  let paletteTarget = null;
+  let paletteSelectedIdx = 0;
+
+  function buildPaletteCommands() {
+    return Object.entries(COMMANDS).map(([name, cmd]) => ({
+      name,
+      help: cmd.help,
+      full: name === 'lang' ? `lang en?/` : `${name}?/`,
+      needsArg: name === 'lang',
+    }));
+  }
+
+  function showCommandPalette(ta) {
+    hideCommandPalette();
+    paletteTarget = ta;
+    paletteSelectedIdx = 0;
+
+    const items = buildPaletteCommands();
+    const rect = ta.getBoundingClientRect();
+
+    paletteEl = document.createElement('div');
+    paletteEl.id = 'ai-grammar-palette';
+    paletteEl.innerHTML = `
+      <style>
+        #ai-grammar-palette {
+          position: fixed; z-index: 2147483647;
+          background: #1e293b; color: #f1f5f9; border-radius: 10px;
+          box-shadow: 0 8px 32px rgba(0,0,0,0.4); min-width: 280px;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          font-size: 13px; overflow: hidden; animation: ai-gfadein 0.12s ease;
+        }
+        #ai-grammar-palette .agp-item {
+          padding: 8px 14px; cursor: pointer; display: flex;
+          justify-content: space-between; align-items: center;
+          border-bottom: 1px solid #0f172a;
+        }
+        #ai-grammar-palette .agp-item:last-child { border-bottom: none; }
+        #ai-grammar-palette .agp-item.active { background: #334155; }
+        #ai-grammar-palette .agp-item:hover { background: #334155; }
+        #ai-grammar-palette .agp-cmd { color: #4ade80; font-weight: 600; font-family: monospace; }
+        #ai-grammar-palette .agp-help { color: #94a3b8; font-size: 11px; }
+      </style>
+      ${items.map((item, i) => `
+        <div class="agp-item${i === 0 ? ' active' : ''}" data-idx="${i}" data-cmd="${item.name}">
+          <span class="agp-cmd">${item.full}</span>
+          <span class="agp-help">${item.help}</span>
+        </div>
+      `).join('')}
+    `;
+    document.body.appendChild(paletteEl);
+
+    // Position below or above the textarea
+    const pH = paletteEl.offsetHeight;
+    let top = rect.bottom + 4;
+    if (top + pH > window.innerHeight - 10) {
+      top = rect.top - pH - 4;
+    }
+    paletteEl.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 296)) + 'px';
+    paletteEl.style.top = Math.max(8, top) + 'px';
+
+    // Click handler
+    paletteEl.addEventListener('mousedown', (e) => {
+      const item = e.target.closest('.agp-item');
+      if (item) {
+        e.preventDefault();
+        const cmdName = item.dataset.cmd;
+        selectPaletteCommand(cmdName);
+
+        // If it's the 'lang' command, insert "lang " and let user type the code
+        if (cmdName === 'lang') {
+          insertPaletteText('lang ');
+        } else {
+          applyPaletteCommand(cmdName);
+        }
+      }
+    });
+  }
+
+  function hideCommandPalette() {
+    if (paletteEl) { paletteEl.remove(); paletteEl = null; }
+    paletteTarget = null;
+    paletteSelectedIdx = 0;
+  }
+
+  function updatePaletteSelection(delta) {
+    if (!paletteEl) return;
+    const items = paletteEl.querySelectorAll('.agp-item');
+    if (items.length === 0) return;
+    items[paletteSelectedIdx].classList.remove('active');
+    paletteSelectedIdx = (paletteSelectedIdx + delta + items.length) % items.length;
+    items[paletteSelectedIdx].classList.add('active');
+    items[paletteSelectedIdx].scrollIntoView({ block: 'nearest' });
+  }
+
+  function selectPaletteCommand(cmdName) {
+    if (cmdName === 'lang') {
+      // Insert "lang " for the user to complete with a language code
+      insertPaletteText('lang ');
+      return;
+    }
+    applyPaletteCommand(cmdName);
+  }
+
+  function insertPaletteText(text) {
+    if (!paletteTarget) return;
+    hideCommandPalette();
+    const ta = paletteTarget;
+    const value = ta.value || ta.textContent || '';
+    // Replace the ?/ at the end with the new text
+    const newValue = value.replace(/\?\/\s*$/, text);
+    if (ta.tagName === 'TEXTAREA') {
+      ta.value = newValue;
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      ta.textContent = newValue;
+    }
+    ta.focus();
+  }
+
+  async function applyPaletteCommand(cmdName) {
+    if (!paletteTarget) return;
+    const ta = paletteTarget;
+    hideCommandPalette();
+
+    // Replace ?/ with the full command in the textarea
+    const value = ta.value || ta.textContent || '';
+    const fullCmd = cmdName === 'lang' ? 'lang en?/' : `${cmdName}?/`;
+    const newValue = value.replace(/\?\/\s*$/, fullCmd);
+    if (ta.tagName === 'TEXTAREA') {
+      ta.value = newValue;
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      ta.textContent = newValue;
+    }
+
+    // Execute the command
+    try {
+      await COMMANDS[cmdName].run('');
+    } catch (err) {
+      showBadge(`Command failed: ${err.message}`);
+    }
+
+    // Clear the command text from the input
+    setTimeout(() => {
+      const v = ta.value || ta.textContent || '';
+      const cleaned = v.replace(fullCmd, '').trimEnd();
+      if (ta.tagName === 'TEXTAREA') {
+        ta.value = cleaned;
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        ta.textContent = cleaned;
+      }
+      ta.focus();
+    }, 100);
+  }
+
   function init() {
     injectStyles();
 
@@ -840,11 +1001,28 @@
       processCapturedText(captured);
     }, true);
 
-    // Capture text on Enter (without Shift) in textareas
+    // Capture text on Enter + palette keyboard navigation
     document.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
       const ta = e.target;
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
+
+      // Palette keyboard navigation
+      if (paletteEl) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); updatePaletteSelection(1); return; }
+        if (e.key === 'ArrowUp')   { e.preventDefault(); updatePaletteSelection(-1); return; }
+        if (e.key === 'Escape')    { e.preventDefault(); hideCommandPalette(); return; }
+        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          const active = paletteEl.querySelector('.agp-item.active');
+          if (active) selectPaletteCommand(active.dataset.cmd);
+          return;
+        }
+        return; // Block other keys while palette is open
+      }
+
+      // Normal Enter → capture text for grammar checking
+      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
       const text = (ta.value || ta.textContent || '').trim();
       processCapturedText(text);
     }, true);
@@ -858,39 +1036,47 @@
       clearTimeout(commandDebounce);
       const value = ta.value || ta.textContent || '';
 
-      // Match command?/ at the end of the input (e.g., "off?/", "lang en?/")
+      // Bare ?/ at end → show command palette
+      if (/\?\/\s*$/.test(value) && !/\w+\?\/\s*$/.test(value)) {
+        showCommandPalette(ta);
+        return;
+      }
+
+      // Full command typed (e.g., "off?/", "lang en?/") → hide palette, execute
       const match = value.match(/\w+(\s+\S+)?\?\/$/);
-      if (!match) return;
+      if (match) {
+        hideCommandPalette();
+        const cmdText = match[0];
+        const body = cmdText.slice(0, -2).trim();
+        const bodyParts = body.split(/\s+/);
+        const cmdName = bodyParts[bodyParts.length - 1].toLowerCase();
+        const cmdArgs = bodyParts.slice(0, -1).join(' ');
 
-      const cmdText = match[0];                               // e.g., "off?/" or "lang en?/"
-      const body = cmdText.slice(0, -2).trim();              // e.g., "off" or "lang en"
-      const bodyParts = body.split(/\s+/);
-      const cmdName = bodyParts[bodyParts.length - 1].toLowerCase();  // last word
-      const cmdArgs = bodyParts.slice(0, -1).join(' ');      // everything before the command word
+        if (!COMMANDS[cmdName]) return;
 
-      if (!COMMANDS[cmdName]) return; // unknown command, let user finish typing
+        commandDebounce = setTimeout(async () => {
+          const currentValue = ta.value || ta.textContent || '';
+          if (!currentValue.includes(cmdText)) return;
 
-      // Debounce: wait for typing to stop before executing
-      commandDebounce = setTimeout(async () => {
-        const currentValue = ta.value || ta.textContent || '';
-        if (!currentValue.includes(cmdText)) return;
+          try {
+            await COMMANDS[cmdName].run(cmdArgs);
+          } catch (err) {
+            showBadge(`Command failed: ${err.message}`);
+          }
 
-        const args = cmdArgs;
-        try {
-          await COMMANDS[cmdName].run(args);
-        } catch (err) {
-          showBadge(`Command failed: ${err.message}`);
-        }
+          const cleaned = currentValue.replace(cmdText, '').trimEnd();
+          if (ta.tagName === 'TEXTAREA') {
+            ta.value = cleaned;
+            ta.dispatchEvent(new Event('input', { bubbles: true }));
+          } else {
+            ta.textContent = cleaned;
+          }
+        }, 600);
+        return;
+      }
 
-        // Strip the command from the input, keep the rest
-        const cleaned = currentValue.replace(cmdText, '').trimEnd();
-        if (ta.tagName === 'TEXTAREA') {
-          ta.value = cleaned;
-          ta.dispatchEvent(new Event('input', { bubbles: true }));
-        } else {
-          ta.textContent = cleaned;
-        }
-      }, 600);
+      // User typed something else → hide palette
+      hideCommandPalette();
     }, true);
 
     console.debug('[AI Grammar] Content script initialized');
