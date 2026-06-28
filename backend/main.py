@@ -125,28 +125,23 @@ def load_config() -> AIConfig:
 
     ai_section = raw.get("ai", {})
 
-    # Resolve API key: api_key_env takes priority
+    # Resolve API key: $ prefix means read from env var
     api_key = ""
-    env_ref = ai_section.get("api_key_env")
-    if isinstance(env_ref, str) and env_ref:
-        env_name = env_ref[1:] if env_ref.startswith("$") else env_ref
-        api_key = os.getenv(env_name) or ""
-        if not api_key:
-            raise RuntimeError(
-                f"API key not found in environment variable: {env_name}"
-            )
-
-    if not api_key:
-        raw_key = ai_section.get("api_key", "")
-        if isinstance(raw_key, str) and raw_key:
-            if raw_key.startswith("$"):
-                api_key = os.getenv(raw_key[1:]) or ""
-            else:
-                api_key = raw_key
+    raw_key = ai_section.get("api_key", "")
+    if isinstance(raw_key, str) and raw_key:
+        if raw_key.startswith("$"):
+            env_name = raw_key[1:]
+            api_key = os.getenv(env_name) or ""
+            if not api_key:
+                raise RuntimeError(
+                    f"API key not found in environment variable: {env_name}"
+                )
+        else:
+            api_key = raw_key
 
     if not api_key:
         raise RuntimeError(
-            "No API key configured. Set ai.api_key_env or ai.api_key in config.yaml."
+            "No API key configured. Set ai.api_key in config.yaml."
         )
 
     timeout_raw = ai_section.get("timeout", {})
@@ -186,7 +181,7 @@ def load_server_config() -> ServerConfig:
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="AI Grammar Checker", version="1.0.0")
+app = FastAPI(title="AI Grammar Checker", version="0.0.12")
 
 
 @app.exception_handler(RequestValidationError)

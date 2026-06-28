@@ -644,6 +644,7 @@
 
   async function checkText(text, container) {
     const id = ++checkIdCounter;
+    console.debug('[AI Grammar] checkText #' + id + ':', text.slice(0, 60));
     showBadge('Checking grammar...', true);
 
     try {
@@ -653,6 +654,7 @@
         id,
       });
 
+      console.debug('[AI Grammar] checkText #' + id + ' response:', JSON.stringify({ok: resp?.ok, errors: resp?.errors?.length, error: resp?.error}));
       removeBadge();
 
       if (!resp?.ok) {
@@ -693,15 +695,18 @@
     if (isHighlighting) return; // Ignore our own DOM changes
 
     const newBlocks = findNewTextBlocks(mutations);
+    console.debug('[AI Grammar] MutationObserver: found', newBlocks.length, 'new blocks, pending lastUserText:', lastUserText ? lastUserText.slice(0, 40) : '(none)');
     if (newBlocks.length === 0) return;
 
     // Add to pending and debounce — only user-authored content
     for (const block of newBlocks) {
       const text = getTextContent(block);
+      console.debug('[AI Grammar] Block text:', text.slice(0, 60), 'isUserText:', isUserText(text));
       if (text.length >= MIN_TEXT_LENGTH && isUserText(text)) {
         pendingChecks.set(block, text);
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
+        console.debug('[AI Grammar] Queued for checking, pending size:', pendingChecks.size);
       }
     }
 
@@ -1023,13 +1028,16 @@
     // Helper: process captured text — handle commands, otherwise store for matching
     async function processCapturedText(captured) {
       if (!captured || captured.length < MIN_TEXT_LENGTH) return;
+      console.debug('[AI Grammar] processCapturedText:', captured.slice(0, 60));
       // Check for ?/ postfix commands first
       if (captured.startsWith(COMMAND_PREFIX)) {
+        console.debug('[AI Grammar] Command detected, handling...');
         await handleCommand(captured);
         return;
       }
       lastUserText = captured;
       lastUserTextTime = Date.now();
+      console.debug('[AI Grammar] Stored lastUserText:', captured.slice(0, 60));
     }
 
     // Capture text when the user submits a form (e.g., chat send)

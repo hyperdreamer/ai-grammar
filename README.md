@@ -87,9 +87,15 @@ The palette opens when you type `?/`. Arrow keys navigate, Enter selects, Escape
 
 ## Configuration
 
-### Environment variables
+### Server
 
-Set `GRAMMAR_HOST` and `GRAMMAR_PORT` to override the default listen address.
+The backend listens on `127.0.0.1:8766` by default. Change in `backend/config.yaml`:
+
+```yaml
+server:
+  host: 127.0.0.1
+  port: 8766
+```
 
 ### AI Provider
 
@@ -98,10 +104,10 @@ The backend uses OpenAI-compatible chat APIs. Configure in `backend/config.yaml`
 ```yaml
 ai:
   provider: openai
-  model: gpt-4o-mini          # Fast and cheap, good for grammar
+  model: gpt-4o-mini
   api_base: https://api.openai.com/v1
-  api_key_env: OPENAI_API_KEY  # Reads from environment variable
-```
+  api_key: ***            # reads from env var
+  # api_key: sk-abc123    # or inline key
 
 Works with:
 - OpenAI (gpt-4o-mini, gpt-4o)

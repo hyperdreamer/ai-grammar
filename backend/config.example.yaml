@@ -24,16 +24,10 @@ ai:
   #   DeepSeek:      https://api.deepseek.com/v1
   api_base: https://api.openai.com/v1
 
-  # --- API Key (choose ONE) ---
-
-  # Option A: Environment variable name (recommended).
-  # Points to an env var like OPENAI_API_KEY in ~/.profile.
-  # Prefix with $ if you prefer, both work: "OPENAI_API_KEY" or "$OPENAI_API_KEY"
-  api_key_env: OPENAI_API_KEY
-
-  # Option B: Inline API key (only if api_key_env is empty/absent).
-  # Prefix with $ to read from an env var by name.
-  # api_key: sk-...
+  # --- API Key ---
+  # $ prefix: read from environment variable (recommended).
+  # No prefix: inline key directly in this file.
+  api_key: $OPENAI_API_KEY
 
   # --- Timeouts (all values in seconds) ---
   timeout:
