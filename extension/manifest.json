@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "AI Grammar Checker",
+  "version": "1.0.0",
+  "description": "Detect grammar and spelling errors in submitted text using AI. Highlights errors and shows corrections.",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://localhost:*/*",
+    "http://127.0.0.1:*/*",
+    "http://[::1]:*/*",
+    "https://localhost:*/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI Grammar Checker"
+  },
+  "commands": {
+    "check-selection": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+G",
+        "mac": "Command+Shift+G"
+      },
+      "description": "Check selected text for grammar errors"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+# AI Grammar Checker — Backend Configuration
+#
+# Copy this file to config.yaml and fill in your settings.
+# config.yaml is gitignored.
+
+ai:
+  # Provider type: "openai" for OpenAI-compatible APIs (includes most proxies)
+  provider: openai
+
+  # Model to use for grammar checking.
+  # Smaller/faster models (gpt-4o-mini, claude-haiku, deepseek-chat) work well
+  # and are much cheaper than flagship models for this task.
+  model: gpt-4o-mini
+
+  # API base URL. Change this for proxies or alternative providers.
+  # Examples:
+  #   OpenAI:        https://api.openai.com/v1
+  #   chat2api:      http://127.0.0.1:23333/v1
+  #   DeepSeek:      https://api.deepseek.com/v1
+  api_base: https://api.openai.com/v1
+
+  # --- API Key (choose ONE) ---
+
+  # Option A: Environment variable name (recommended).
+  # Points to an env var like OPENAI_API_KEY in ~/.profile.
+  # Prefix with $ if you prefer, both work: "OPENAI_API_KEY" or "$OPENAI_API_KEY"
+  api_key_env: OPENAI_API_KEY
+
+  # Option B: Inline API key (only if api_key_env is empty/absent).
+  # Prefix with $ to read from an env var by name.
+  # api_key: sk-...
+
+  # --- Timeouts (all values in seconds) ---
+  timeout:
+    connect: 10     # TCP/TLS handshake
+    read: 120        # Waiting for AI response (grammar checks are fast)
+    write: 60        # Sending request body
+    pool: 10         # Connection pool acquire
