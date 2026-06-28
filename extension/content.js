@@ -33,6 +33,13 @@
   let tooltipEl = null;
   let currentErrorEl = null;
 
+  // Track the last text the user submitted so we only check their content,
+  // not AI replies or other page text that happens to appear in the DOM.
+  let lastUserText = '';
+  let lastUserTextTime = 0;
+  const USER_TEXT_TTL_MS = 8000;       // how long we remember user text
+  const USER_TEXT_MIN_MATCH = 0.6;     // fraction of user text that must appear in rendered block
+
   // -----------------------------------------------------------------------
   // CSS injection
   // -----------------------------------------------------------------------
@@ -197,6 +204,47 @@
     if (linkText > text.length * 0.5) return false;
 
     return true;
+  }
+
+  /**
+   * Check whether a DOM text block matches the user's last submitted text.
+   * Only blocks that plausibly contain the user's own content pass this filter
+   * — AI replies and unrelated page mutations are silently ignored.
+   */
+  function isUserText(blockText) {
+    if (!lastUserText) return false;
+
+    const now = Date.now();
+    if (now - lastUserTextTime > USER_TEXT_TTL_MS) {
+      lastUserText = '';
+      return false;
+    }
+
+    // Normalize both strings for comparison
+    const normUser = lastUserText.replace(/\s+/g, ' ').trim().toLowerCase();
+    const normBlock = blockText.replace(/\s+/g, ' ').trim().toLowerCase();
+
+    if (!normUser || !normBlock) return false;
+
+    // The rendered block should contain most of the submitted text
+    return normBlock.includes(normUser) ||
+           (normUser.length > 0 && normBlock.length > 0 &&
+            longestCommonSubstring(normUser, normBlock) >= normUser.length * USER_TEXT_MIN_MATCH);
+  }
+
+  function longestCommonSubstring(a, b) {
+    const shorter = a.length < b.length ? a : b;
+    const longer = a.length < b.length ? b : a;
+    let maxLen = 0;
+    for (let i = 0; i < shorter.length; i++) {
+      for (let j = shorter.length - i; j > maxLen; j--) {
+        if (longer.includes(shorter.slice(i, i + j))) {
+          maxLen = j;
+          break;
+        }
+      }
+    }
+    return maxLen;
   }
 
   function findNewTextBlocks(mutations) {
@@ -540,14 +588,19 @@
     const newBlocks = findNewTextBlocks(mutations);
     if (newBlocks.length === 0) return;
 
-    // Add to pending and debounce
+    // Add to pending and debounce — only user-authored content
     for (const block of newBlocks) {
       const text = getTextContent(block);
-      if (text.length >= MIN_TEXT_LENGTH) {
+      if (text.length >= MIN_TEXT_LENGTH && isUserText(text)) {
         pendingChecks.set(block, text);
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
       }
+    }
+
+    // Clear stored user text once consumed so it isn't reused
+    if (pendingChecks.size > 0) {
+      lastUserText = '';
     }
 
     // Reset debounce timer
@@ -616,6 +669,41 @@
       childList: true,
       subtree: true,
     });
+
+    // --- Track user-submitted text so we only check the user's content ---
+    // Capture text when the user submits a form (e.g., chat send)
+    document.addEventListener('submit', (e) => {
+      const form = e.target;
+      const textareas = form.querySelectorAll('textarea');
+      const inputs = form.querySelectorAll('input[type="text"]');
+      let captured = '';
+      for (const ta of textareas) {
+        captured = ta.value.trim();
+        if (captured) break;
+      }
+      if (!captured) {
+        for (const inp of inputs) {
+          captured = inp.value.trim();
+          if (captured) break;
+        }
+      }
+      if (captured && captured.length >= MIN_TEXT_LENGTH) {
+        lastUserText = captured;
+        lastUserTextTime = Date.now();
+      }
+    }, true);
+
+    // Capture text on Enter (without Shift) in textareas
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      const ta = e.target;
+      if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
+      const text = (ta.value || ta.textContent || '').trim();
+      if (text.length >= MIN_TEXT_LENGTH) {
+        lastUserText = text;
+        lastUserTextTime = Date.now();
+      }
+    }, true);
 
     console.debug('[AI Grammar] Content script initialized');
   }
