@@ -793,6 +793,47 @@
       processCapturedText(text);
     }, true);
 
+    // Detect ?/ commands inline as the user types — no submit needed
+    let commandDebounce = null;
+    document.addEventListener('input', (e) => {
+      const ta = e.target;
+      if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
+
+      clearTimeout(commandDebounce);
+      const value = ta.value || ta.textContent || '';
+
+      // Match ?/command at the end of the input (e.g., "?/off", "?/lang en")
+      const match = value.match(/\?\/\w+(\s+\S+)?$/);
+      if (!match) return;
+
+      const cmdText = match[0];
+      const cmdName = cmdText.slice(2).split(/\s+/)[0].toLowerCase();
+
+      if (!COMMANDS[cmdName]) return; // unknown command, let user finish typing
+
+      // Debounce: wait for typing to stop before executing
+      commandDebounce = setTimeout(async () => {
+        const currentValue = ta.value || ta.textContent || '';
+        if (!currentValue.includes(cmdText)) return;
+
+        const args = cmdText.slice(2).split(/\s+/).slice(1).join(' ');
+        try {
+          await COMMANDS[cmdName].run(args);
+        } catch (err) {
+          showBadge(`Command failed: ${err.message}`);
+        }
+
+        // Strip the command from the input, keep the rest
+        const cleaned = currentValue.replace(cmdText, '').trimEnd();
+        if (ta.tagName === 'TEXTAREA') {
+          ta.value = cleaned;
+          ta.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+          ta.textContent = cleaned;
+        }
+      }, 600);
+    }, true);
+
     console.debug('[AI Grammar] Content script initialized');
   }
 

@@ -70,7 +70,7 @@ Click the extension icon to:
 
 ### Inline commands (`?/` prefix)
 
-Type these commands directly in any text input and submit — the extension executes the command instead of grammar-checking it:
+Type these commands directly in any text input — the extension detects them **as you type** (no submit needed) and executes immediately, then strips the command from your input:
 
 | Command | Action |
 |---------|--------|
@@ -80,7 +80,7 @@ Type these commands directly in any text input and submit — the extension exec
 | `?/lang en` | Set language to English (also: zh, ja, ko, fr, de, es, ru, pt, it, ar, auto) |
 | `?/help` | Show all available commands |
 
-Commands are detected and intercepted before submission — they never reach the AI backend.
+Commands are detected inline via a 600ms debounce after you stop typing — they never reach the AI backend.
 
 ## Configuration
 
