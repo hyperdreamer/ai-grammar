@@ -672,8 +672,12 @@
     showBadge('Checking grammar...', true);
 
     try {
-      // Fetch via injected page-world script (content script fetch is restricted in MV3)
-      const data = await fetchViaPage(`http://127.0.0.1:8766/check`, {
+      // Read backend URL from storage, then fetch via page-world bridge
+      const settings = await chrome.storage.sync.get({
+        grammarHost: '127.0.0.1',
+        grammarPort: 8766,
+      });
+      const data = await fetchViaPage(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, language: 'auto' }),

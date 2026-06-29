@@ -122,6 +122,35 @@
       min-height: 16px;
       transition: opacity 0.3s;
     }
+    .test-btn {
+      width: 100%;
+      padding: 10px 0;
+      border: 1px solid #4ade80;
+      border-radius: 8px;
+      background: transparent;
+      color: #4ade80;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      margin-top: 4px;
+      transition: background 0.15s;
+    }
+    .test-btn:hover { background: rgba(74, 222, 128, 0.1); }
+    .backend-status {
+      font-size: 11px;
+      text-align: center;
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+    .backend-status .dot {
+      width: 6px; height: 6px; border-radius: 50%; display: inline-block;
+    }
+    .backend-status .dot.online { background: #4ade80; }
+    .backend-status .dot.offline { background: #f87171; }
   </style>
 </head>
 <body>
@@ -163,6 +192,12 @@
 
   <div class="shortcut-hint">
     Manual check: select text and press <kbd>Ctrl+Shift+G</kbd>
+  </div>
+
+  <button class="test-btn" id="test-page">🧪 Open Test Page</button>
+
+  <div class="backend-status" id="backend-status">
+    <span class="dot offline"></span> Backend offline
   </div>
 
   <div class="status" id="status"></div>
