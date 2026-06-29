@@ -46,6 +46,7 @@
 
   // Function to cancel pending live draft check — set by setupLiveDraftCheck
   let cancelLiveDraft = null;
+  let commandInFlight = false;
 
   // Track the last text the user submitted so we only check their content,
   // not AI replies or other page text that happens to appear in the DOM.
@@ -930,7 +931,7 @@
       clearLiveDraftHighlights();
       removeErrorFloat();
       activeCheckController?.abort();
-      removeBadge();
+      if (!commandInFlight) removeBadge();
 
       // Skip placeholder-only text or empty value — and clear highlights
       const raw = ta.value || ta.textContent || '';
@@ -1175,6 +1176,7 @@
           return;
         }
         showBadge('Fixing...', true);
+        commandInFlight = true;
         try {
           const settings = await chrome.storage.sync.get({
             grammarHost: '127.0.0.1',
@@ -1216,7 +1218,10 @@
           showBadge(`✓ Fixed ${sorted.length} issue${sorted.length > 1 ? 's' : ''}`);
         } catch (e) {
           removeBadge();
-          showBadge(`Fix failed: ${e.message}`);
+          const reason = e.name === 'AbortError' ? 'Request timed out or was cancelled' : e.message;
+          showBadge(`Fix failed: ${reason}`);
+        } finally {
+          commandInFlight = false;
         }
       },
     },
@@ -1231,6 +1236,7 @@
           return;
         }
         showBadge('Polishing...', true);
+        commandInFlight = true;
         try {
           const settings = await chrome.storage.sync.get({
             grammarHost: '127.0.0.1',
@@ -1271,7 +1277,10 @@
           showBadge('✓ Polished');
         } catch (e) {
           removeBadge();
-          showBadge(`Polish failed: ${e.message}`);
+          const reason = e.name === 'AbortError' ? 'Request timed out or was cancelled' : e.message;
+          showBadge(`Polish failed: ${reason}`);
+        } finally {
+          commandInFlight = false;
         }
       },
     },
@@ -1308,6 +1317,7 @@
           return true;
         }
         showBadge('Fixing...', true);
+        commandInFlight = true;
         try {
           const settings = await chrome.storage.sync.get({
             grammarHost: '127.0.0.1',
@@ -1337,7 +1347,10 @@
           showBadge(`Corrected: "${fixed.slice(0, 80)}${fixed.length > 80 ? '...' : ''}"`, false, 10000);
         } catch (e) {
           removeBadge();
-          showBadge(`Fix failed: ${e.message}`);
+          const reason = e.name === 'AbortError' ? 'Request timed out or was cancelled' : e.message;
+          showBadge(`Fix failed: ${reason}`);
+        } finally {
+          commandInFlight = false;
         }
       } else if (cmdName === 'polish') {
         // Called from submit handler — extract text before ?/polish and polish
@@ -1348,6 +1361,7 @@
           return true;
         }
         showBadge('Polishing...', true);
+        commandInFlight = true;
         try {
           const settings = await chrome.storage.sync.get({
             grammarHost: '127.0.0.1',
@@ -1376,7 +1390,10 @@
           showBadge(`Polished: "${polished.slice(0, 80)}${polished.length > 80 ? '...' : ''}"`, false, 10000);
         } catch (e) {
           removeBadge();
-          showBadge(`Polish failed: ${e.message}`);
+          const reason = e.name === 'AbortError' ? 'Request timed out or was cancelled' : e.message;
+          showBadge(`Polish failed: ${reason}`);
+        } finally {
+          commandInFlight = false;
         }
       } else {
         await cmd.run(args);
@@ -1609,6 +1626,8 @@
           if (captured) break;
         }
       }
+      clearTimeout(commandDebounce);
+      commandDebounce = null;
       processCapturedText(captured);
     }, true);
 
@@ -1631,6 +1650,8 @@
           captured = (active.value || active.textContent || '').trim();
         }
       }
+      clearTimeout(commandDebounce);
+      commandDebounce = null;
       processCapturedText(captured);
     }, true);
 
@@ -1657,6 +1678,8 @@
       // Normal Enter → capture text for grammar checking
       if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
       const text = (ta.value || ta.textContent || '').trim();
+      clearTimeout(commandDebounce);
+      commandDebounce = null;
       processCapturedText(text);
     }, true);
 
