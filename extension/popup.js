@@ -110,18 +110,26 @@ async function saveHostPort() {
   checkBackend();
 }
 
-liveDelayInput.addEventListener('change', async () => {
-  const val = Math.max(1, Math.min(30, parseInt(liveDelayInput.value, 10) || DEFAULT_LIVE_DELAY));
-  liveDelayInput.value = val;
-  await chrome.storage.sync.set({ grammarLiveDelay: val });
-  showStatus('Live delay saved ✓');
+let liveDelayDebounce = null;
+liveDelayInput.addEventListener('input', () => {
+  clearTimeout(liveDelayDebounce);
+  liveDelayDebounce = setTimeout(async () => {
+    const val = Math.max(1, Math.min(30, parseInt(liveDelayInput.value, 10) || DEFAULT_LIVE_DELAY));
+    liveDelayInput.value = val;
+    await chrome.storage.sync.set({ grammarLiveDelay: val });
+    showStatus('Live delay saved ✓');
+  }, 400);
 });
 
-liveMinCharsInput.addEventListener('change', async () => {
-  const val = Math.max(5, Math.min(500, parseInt(liveMinCharsInput.value, 10) || DEFAULT_LIVE_MIN_CHARS));
-  liveMinCharsInput.value = val;
-  await chrome.storage.sync.set({ grammarLiveMinChars: val });
-  showStatus('Min chars saved ✓');
+let minCharsDebounce = null;
+liveMinCharsInput.addEventListener('input', () => {
+  clearTimeout(minCharsDebounce);
+  minCharsDebounce = setTimeout(async () => {
+    const val = Math.max(5, Math.min(500, parseInt(liveMinCharsInput.value, 10) || DEFAULT_LIVE_MIN_CHARS));
+    liveMinCharsInput.value = val;
+    await chrome.storage.sync.set({ grammarLiveMinChars: val });
+    showStatus('Min chars saved ✓');
+  }, 400);
 });
 
 // ---------------------------------------------------------------------------
