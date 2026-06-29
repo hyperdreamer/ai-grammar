@@ -645,32 +645,7 @@
   }
 
   // -----------------------------------------------------------------------
-  // Page-world fetch (bypasses content script fetch restrictions)
-  // -----------------------------------------------------------------------
-
-  function fetchViaPage(url, options) {
-    return new Promise((resolve, reject) => {
-      const reqId = Math.random().toString(36).slice(2);
-      const handler = (e) => {
-        if (e.data?.type === 'ag-result' && e.data.id === reqId) {
-          window.removeEventListener('message', handler);
-          resolve(e.data.data);
-        } else if (e.data?.type === 'ag-error' && e.data.id === reqId) {
-          window.removeEventListener('message', handler);
-          reject(new Error(e.data.error));
-        }
-      };
-      window.addEventListener('message', handler);
-      window.postMessage({ type: 'ag-fetch', id: reqId, url, body: options.body }, '*');
-      setTimeout(() => {
-        window.removeEventListener('message', handler);
-        reject(new Error('fetchViaPage timeout'));
-      }, 25000);
-    });
-  }
-
-  // -----------------------------------------------------------------------
-  // Live draft highlighting (overlay for textarea, inline for contenteditable)
+  // Check pipeline (post-submit grammar checking)
   // -----------------------------------------------------------------------
 
   const LIVE_HIGHLIGHT_CLASS = 'ag-live-highlight';
@@ -812,11 +787,12 @@
           grammarHost: '127.0.0.1',
           grammarPort: 8766,
         });
-        const data = await fetchViaPage(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
+        const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text, language: 'auto' }),
         });
+        const data = await resp.json();
         removeBadge();
         if (data?.errors?.length > 0) {
           highlightLiveDraft(ta, data.errors);
@@ -867,11 +843,12 @@
         grammarHost: '127.0.0.1',
         grammarPort: 8766,
       });
-      const data = await fetchViaPage(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
+      const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, language: 'auto' }),
       });
+      const data = await resp.json();
 
       removeBadge();
 
@@ -1053,11 +1030,12 @@
             grammarHost: '127.0.0.1',
             grammarPort: 8766,
           });
-          const data = await fetchViaPage(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
+          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: draft, language: 'auto' }),
           });
+          const data = await resp.json();
           removeBadge();
           if (!data?.errors?.length) {
             showBadge('✓ No corrections needed');
@@ -1123,11 +1101,12 @@
             grammarHost: '127.0.0.1',
             grammarPort: 8766,
           });
-          const data = await fetchViaPage(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
+          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: draft, language: 'auto' }),
           });
+          const data = await resp.json();
           removeBadge();
           if (!data?.errors?.length) {
             showBadge('✓ No corrections needed');
