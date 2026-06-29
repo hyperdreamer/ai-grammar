@@ -13,6 +13,7 @@
   // -----------------------------------------------------------------------
 
   const MIN_TEXT_LENGTH = 30;
+  const LIVE_MIN_TEXT_LENGTH = 10;  // lower threshold for live draft checks
   const DEBOUNCE_MS = 2000;
   const IGNORE_TAGS = new Set([
     'SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA', 'INPUT',
@@ -691,7 +692,7 @@
       liveCheckTarget = null;
 
       const text = (ta.value || ta.textContent || '').trim();
-      if (text.length < MIN_TEXT_LENGTH) return;
+      if (text.length < LIVE_MIN_TEXT_LENGTH) return;
 
       checkLiveDraft(ta, text);
     }, 500);
@@ -722,7 +723,7 @@
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
 
       const text = (ta.value || ta.textContent || '').trim();
-      if (text.length < MIN_TEXT_LENGTH) return;
+      if (text.length < LIVE_MIN_TEXT_LENGTH) return;
 
       removeErrorFloat();
       liveCheckTarget = ta;
