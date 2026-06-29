@@ -692,6 +692,7 @@
   function highlightLiveDraftTextarea(textarea, errors) {
     const styles = window.getComputedStyle(textarea);
     const rect = textarea.getBoundingClientRect();
+    const textColor = styles.color || '#e2e8f0';
 
     // Create backdrop div that mirrors textarea rendering
     const backdrop = document.createElement('div');
@@ -707,7 +708,7 @@
       overflow: hidden; overflow-wrap: ${styles.overflowWrap || 'break-word'};
       padding: ${styles.paddingTop} ${styles.paddingRight} ${styles.paddingBottom} ${styles.paddingLeft};
       border: ${styles.borderWidth} solid transparent;
-      color: transparent; background: transparent;
+      color: ${textColor}; background: transparent;
       text-align: ${styles.textAlign || 'start'};
     `;
 
@@ -720,10 +721,9 @@
       if (err.start < pos) continue;
       // Text before this error
       html += escapeHtml(text.slice(pos, err.start));
-      // Error span with colored underline
-      const colors = { error: '#dc2626', improvement: '#4ade80', idiom: '#60a5fa' };
-      const color = colors[err.type] || '#dc2626';
-      html += `<span style="text-decoration:underline wavy ${color}; text-underline-offset:3px;">${escapeHtml(text.slice(err.start, err.end))}</span>`;
+      // Error span with colored underline — use grammar classes for tooltip support
+      const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
+      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer;" data-correction="${escapeHtml(err.correction)}" data-explanation="${escapeHtml(err.explanation || '')}" data-error="${escapeHtml(err.error)}" data-type="${err.type}" tabindex="0">${escapeHtml(text.slice(err.start, err.end))}</span>`;
       pos = err.end;
     }
     html += escapeHtml(text.slice(pos));
@@ -734,10 +734,9 @@
     liveHighlightTarget = textarea;
 
     // Make textarea text transparent so backdrop underlines show through
-    const origColor = textarea.style.color;
     textarea.style.color = 'transparent';
-    textarea.style.caretColor = origColor || styles.color;
-    textarea.dataset.agOrigColor = origColor || styles.color;
+    textarea.style.caretColor = textColor;
+    textarea.dataset.agOrigColor = textColor;
 
     // Sync scroll
     const syncScroll = () => { backdrop.scrollTop = textarea.scrollTop; backdrop.scrollLeft = textarea.scrollLeft; };
