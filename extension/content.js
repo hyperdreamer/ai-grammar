@@ -924,11 +924,14 @@
         const settings = await chrome.storage.sync.get({
           grammarHost: '127.0.0.1',
           grammarPort: 8766,
+          grammarMaxTokens: 0,
         });
+        const body = { text, language: 'auto' };
+        if (settings.grammarMaxTokens > 0) body.max_tokens = settings.grammarMaxTokens;
         const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, language: 'auto' }),
+          body: JSON.stringify(body),
         });
         const data = await resp.json();
         removeBadge();
@@ -988,11 +991,14 @@
     showBadge('Checking grammar...', true);
 
     try {
-      // Read backend URL from storage, then fetch via page-world bridge
+      // Read backend URL and settings from storage
       const settings = await chrome.storage.sync.get({
         grammarHost: '127.0.0.1',
         grammarPort: 8766,
+        grammarMaxTokens: 0,
       });
+      const body = { text, language: 'auto' };
+      if (settings.grammarMaxTokens > 0) body.max_tokens = settings.grammarMaxTokens;
       const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

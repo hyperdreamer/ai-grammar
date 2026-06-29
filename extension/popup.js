@@ -4,6 +4,7 @@ const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8766;
 const DEFAULT_LIVE_DELAY = 5;
 const DEFAULT_LIVE_MIN_CHARS = 30;
+const DEFAULT_MAX_TOKENS = 0;  // 0 = unbounded
 
 const enabledToggle = document.getElementById('enabled');
 const languageSelect = document.getElementById('language');
@@ -11,6 +12,7 @@ const hostInput = document.getElementById('host');
 const portInput = document.getElementById('port');
 const liveDelayInput = document.getElementById('live-delay');
 const liveMinCharsInput = document.getElementById('live-min-chars');
+const maxTokensInput = document.getElementById('max-tokens');
 const statusEl = document.getElementById('status');
 const testBtn = document.getElementById('test-page');
 const backendStatus = document.getElementById('backend-status');
@@ -28,6 +30,7 @@ async function init() {
     portInput.value = settings.grammarPort || DEFAULT_PORT;
     liveDelayInput.value = settings.grammarLiveDelay || DEFAULT_LIVE_DELAY;
     liveMinCharsInput.value = settings.grammarLiveMinChars || DEFAULT_LIVE_MIN_CHARS;
+    maxTokensInput.value = settings.grammarMaxTokens ?? DEFAULT_MAX_TOKENS;
   } catch {
     const stored = await chrome.storage.sync.get({
       grammarEnabled: true,
@@ -36,6 +39,7 @@ async function init() {
       grammarPort: DEFAULT_PORT,
       grammarLiveDelay: DEFAULT_LIVE_DELAY,
       grammarLiveMinChars: DEFAULT_LIVE_MIN_CHARS,
+      grammarMaxTokens: DEFAULT_MAX_TOKENS,
     });
     enabledToggle.checked = stored.grammarEnabled;
     languageSelect.value = stored.grammarLanguage;
@@ -43,6 +47,7 @@ async function init() {
     portInput.value = stored.grammarPort;
     liveDelayInput.value = stored.grammarLiveDelay;
     liveMinCharsInput.value = stored.grammarLiveMinChars;
+    maxTokensInput.value = stored.grammarMaxTokens;
   }
 
   checkBackend();
@@ -129,6 +134,17 @@ liveMinCharsInput.addEventListener('input', () => {
     liveMinCharsInput.value = val;
     await chrome.storage.sync.set({ grammarLiveMinChars: val });
     showStatus('Min chars saved ✓');
+  }, 400);
+});
+
+let maxTokensDebounce = null;
+maxTokensInput.addEventListener('input', () => {
+  clearTimeout(maxTokensDebounce);
+  maxTokensDebounce = setTimeout(async () => {
+    const val = Math.max(0, Math.min(16384, parseInt(maxTokensInput.value, 10) || 0));
+    maxTokensInput.value = val;
+    await chrome.storage.sync.set({ grammarMaxTokens: val });
+    showStatus('Max tokens saved ✓');
   }, 400);
 });
 

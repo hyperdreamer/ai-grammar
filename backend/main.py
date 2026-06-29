@@ -61,6 +61,7 @@ class CheckRequest(BaseModel):
 
     text: str
     language: str = "auto"
+    max_tokens: int | None = None  # 0 or None = unbounded
 
 
 class ErrorItem(BaseModel):
@@ -246,7 +247,7 @@ def _load_debug() -> bool:
 # AI provider call
 # ---------------------------------------------------------------------------
 
-async def _call_ai(text: str, language: str, config: AIConfig) -> dict[str, Any]:
+async def _call_ai(text: str, language: str, config: AIConfig, max_tokens: int | None = None) -> dict[str, Any]:
     """Send text to AI provider for grammar checking and parse the response."""
     system_prompt = GRAMMAR_SYSTEM_PROMPT
     if language != "auto":
@@ -273,8 +274,10 @@ async def _call_ai(text: str, language: str, config: AIConfig) -> dict[str, Any]
             {"role": "user", "content": text},
         ],
         "temperature": 0.1,
-        # "max_tokens" omitted — unbounded, model decides
     }
+    # Only include max_tokens if explicitly set (0 or None = unbounded)
+    if max_tokens and max_tokens > 0:
+        body["max_tokens"] = max_tokens
 
     debug = _load_debug()
     _debug("ai", f"calling provider={config.provider} model={config.model} base={config.api_base} text={len(text)}chars lang={language}", enabled=debug)
@@ -429,7 +432,7 @@ async def check_grammar(request: CheckRequest) -> Response:
         )
 
     try:
-        result = await _call_ai(text, request.language, config)
+        result = await _call_ai(text, request.language, config, request.max_tokens)
     except HTTPException:
         raise
     except Exception as exc:
