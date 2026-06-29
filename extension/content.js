@@ -281,9 +281,6 @@
           border-color: #e2e8f0;
           border-top-color: #16a34a;
         }
-        .ai-grammar-ok {
-          background: #166534;
-        }
       }
       .ai-grammar-ok {
         display: inline-block;
@@ -294,11 +291,6 @@
         vertical-align: super;
         line-height: 1;
         animation: ai-gfadein 0.3s ease;
-        opacity: 1;
-        transition: opacity 0.5s ease 4s;
-      }
-      .ai-grammar-ok.fading {
-        opacity: 0;
       }
       .ai-grammar-ok-ta {
         position: fixed;
@@ -812,21 +804,12 @@
         window.removeEventListener('scroll', reposition, true);
       }});
     } else {
-      // Inline checkmark at end of text for block-level containers
+      // Inline checkmark at end of text for block-level containers — permanent
       const check = document.createElement('span');
       check.className = 'ai-grammar-ok';
       check.textContent = '✓';
       container.appendChild(check);
-
-      // Auto-fade + remove after 5s
-      const fadeTimer = setTimeout(() => {
-        if (document.contains(check)) check.classList.add('fading');
-      }, 4500);
-      const removeTimer = setTimeout(() => {
-        if (document.contains(check)) check.remove();
-        greenCheckTimers.delete(container);
-      }, 5500);
-      greenCheckTimers.set(container, { el: check, timers: [fadeTimer, removeTimer] });
+      greenCheckTimers.set(container, { el: check, timers: [] });
     }
   }
 
