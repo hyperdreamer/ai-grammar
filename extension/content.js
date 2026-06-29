@@ -48,6 +48,32 @@
   let cancelLiveDraft = null;
   let commandInFlight = false;
 
+  // Track whether the extension context has been invalidated (MV3 service worker
+  // termination / extension reload). Once invalidated, chrome.* APIs throw
+  // "Extension context invalidated" — we fall back to hardcoded defaults.
+  let contextInvalidated = false;
+
+  /**
+   * Wrapper around chrome.storage.sync.get() that catches
+   * "Extension context invalidated" and returns the caller's defaults.
+   * Content scripts can outlive the service worker; storage should work
+   * independently, but Chrome sometimes throws this error after an
+   * extension reload or aggressive SW termination.
+   */
+  async function safeGetStorage(defaults) {
+    if (contextInvalidated) return defaults;
+    try {
+      return await chrome.storage.sync.get(defaults);
+    } catch (e) {
+      if (e.message?.includes('Extension context invalidated')) {
+        contextInvalidated = true;
+        console.debug('[AI Grammar] Extension context invalidated, using defaults');
+        return defaults;
+      }
+      throw e;
+    }
+  }
+
   // Track the last text the user submitted so we only check their content,
   // not AI replies or other page text that happens to appear in the DOM.
   let lastUserText = '';
@@ -845,7 +871,7 @@
     };
 
     // Load settings from storage
-    chrome.storage.sync.get({
+    safeGetStorage({
       grammarLiveDelay: 5,
       grammarLiveMinChars: 30,
     }).then(s => {
@@ -854,14 +880,18 @@
     });
 
     // Also listen for storage changes to update live
-    chrome.storage.onChanged.addListener((changes) => {
-      if (changes.grammarLiveDelay) {
-        liveDelay = (changes.grammarLiveDelay.newValue || 5) * 1000;
-      }
-      if (changes.grammarLiveMinChars) {
-        minChars = changes.grammarLiveMinChars.newValue || 30;
-      }
-    });
+    try {
+      chrome.storage.onChanged.addListener((changes) => {
+        if (changes.grammarLiveDelay) {
+          liveDelay = (changes.grammarLiveDelay.newValue || 5) * 1000;
+        }
+        if (changes.grammarLiveMinChars) {
+          minChars = changes.grammarLiveMinChars.newValue || 30;
+        }
+      });
+    } catch {
+      // Extension context invalidated — events won't fire, use defaults
+    }
 
     // Poll every 500ms to check if delay has elapsed since last input
     setInterval(() => {
@@ -896,7 +926,7 @@
         activeCheckController?.abort();
         activeCheckController = new AbortController();
 
-        const settings = await chrome.storage.sync.get({
+        const settings = await safeGetStorage({
           grammarHost: '127.0.0.1',
           grammarPort: 8766,
           grammarMaxTokens: 4096,
@@ -977,7 +1007,7 @@
 
     try {
       // Read backend URL and settings from storage
-      const settings = await chrome.storage.sync.get({
+      const settings = await safeGetStorage({
         grammarHost: '127.0.0.1',
         grammarPort: 8766,
         grammarMaxTokens: 4096,
@@ -1178,7 +1208,7 @@
         showBadge('Fixing...', true);
         commandInFlight = true;
         try {
-          const settings = await chrome.storage.sync.get({
+          const settings = await safeGetStorage({
             grammarHost: '127.0.0.1',
             grammarPort: 8766,
           });
@@ -1218,7 +1248,14 @@
           showBadge(`✓ Fixed ${sorted.length} issue${sorted.length > 1 ? 's' : ''}`);
         } catch (e) {
           removeBadge();
-          const reason = e.name === 'AbortError' ? 'Request timed out or was cancelled' : e.message;
+          let reason;
+          if (e.name === 'AbortError') {
+            reason = 'Request timed out or was cancelled';
+          } else if (e.message?.includes('Extension context invalidated')) {
+            reason = 'Extension reloaded — please reload this page';
+          } else {
+            reason = e.message;
+          }
           showBadge(`Fix failed: ${reason}`);
         } finally {
           commandInFlight = false;
@@ -1238,7 +1275,7 @@
         showBadge('Polishing...', true);
         commandInFlight = true;
         try {
-          const settings = await chrome.storage.sync.get({
+          const settings = await safeGetStorage({
             grammarHost: '127.0.0.1',
             grammarPort: 8766,
           });
@@ -1277,7 +1314,14 @@
           showBadge('✓ Polished');
         } catch (e) {
           removeBadge();
-          const reason = e.name === 'AbortError' ? 'Request timed out or was cancelled' : e.message;
+          let reason;
+          if (e.name === 'AbortError') {
+            reason = 'Request timed out or was cancelled';
+          } else if (e.message?.includes('Extension context invalidated')) {
+            reason = 'Extension reloaded — please reload this page';
+          } else {
+            reason = e.message;
+          }
           showBadge(`Polish failed: ${reason}`);
         } finally {
           commandInFlight = false;
@@ -1319,7 +1363,7 @@
         showBadge('Fixing...', true);
         commandInFlight = true;
         try {
-          const settings = await chrome.storage.sync.get({
+          const settings = await safeGetStorage({
             grammarHost: '127.0.0.1',
             grammarPort: 8766,
           });
@@ -1347,7 +1391,14 @@
           showBadge(`Corrected: "${fixed.slice(0, 80)}${fixed.length > 80 ? '...' : ''}"`, false, 10000);
         } catch (e) {
           removeBadge();
-          const reason = e.name === 'AbortError' ? 'Request timed out or was cancelled' : e.message;
+          let reason;
+          if (e.name === 'AbortError') {
+            reason = 'Request timed out or was cancelled';
+          } else if (e.message?.includes('Extension context invalidated')) {
+            reason = 'Extension reloaded — please reload this page';
+          } else {
+            reason = e.message;
+          }
           showBadge(`Fix failed: ${reason}`);
         } finally {
           commandInFlight = false;
@@ -1363,7 +1414,7 @@
         showBadge('Polishing...', true);
         commandInFlight = true;
         try {
-          const settings = await chrome.storage.sync.get({
+          const settings = await safeGetStorage({
             grammarHost: '127.0.0.1',
             grammarPort: 8766,
           });
@@ -1390,7 +1441,14 @@
           showBadge(`Polished: "${polished.slice(0, 80)}${polished.length > 80 ? '...' : ''}"`, false, 10000);
         } catch (e) {
           removeBadge();
-          const reason = e.name === 'AbortError' ? 'Request timed out or was cancelled' : e.message;
+          let reason;
+          if (e.name === 'AbortError') {
+            reason = 'Request timed out or was cancelled';
+          } else if (e.message?.includes('Extension context invalidated')) {
+            reason = 'Extension reloaded — please reload this page';
+          } else {
+            reason = e.message;
+          }
           showBadge(`Polish failed: ${reason}`);
         } finally {
           commandInFlight = false;
