@@ -959,11 +959,9 @@
       const ta = e.target;
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
 
-      // Clear old highlights when user starts typing fresh
-      clearPostSubmitHighlights();
+      // Clear live draft highlights and abort in-flight checks
+      // (submitted message highlights are kept — those are permanent)
       clearLiveDraftHighlights();
-
-      // Abort any in-flight grammar check
       activeCheckController?.abort();
       removeBadge();
 
@@ -984,13 +982,11 @@
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
       liveCheckTarget = null;
       clearLiveDraftHighlights();
-      clearPostSubmitHighlights();
     }, true);
 
     document.addEventListener('submit', () => {
       liveCheckTarget = null;
       clearLiveDraftHighlights();
-      clearPostSubmitHighlights();
     }, true);
   }
 
