@@ -692,9 +692,7 @@
   function highlightLiveDraftTextarea(textarea, errors) {
     const text = textarea.value;
     const styles = window.getComputedStyle(textarea);
-
-    // Save original display state
-    textarea.dataset.agLiveOrigDisplay = textarea.style.display || '';
+    const textColor = styles.color || '#e2e8f0';
 
     // Create a wrapper around the textarea
     const wrapper = document.createElement('div');
@@ -713,7 +711,7 @@
       padding: ${styles.paddingTop} ${styles.paddingRight} ${styles.paddingBottom} ${styles.paddingLeft};
       border: ${styles.borderTopWidth} ${styles.borderRightWidth} ${styles.borderBottomWidth} ${styles.borderLeftWidth};
       border-style: solid; border-color: transparent;
-      color: transparent; background: transparent;
+      color: ${textColor}; background: transparent;
       box-sizing: border-box;
     `;
 
