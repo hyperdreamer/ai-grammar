@@ -532,7 +532,7 @@
           data: correction,
         }));
       }
-      clearLiveDraftHighlights();
+      removeErrorFloat();
       hideTooltip();
       return;
     }
@@ -730,7 +730,7 @@
   // -----------------------------------------------------------------------
 
   function highlightLiveDraft(ta, errors) {
-    clearLiveDraftHighlights();
+    removeErrorFloat();
     if (!errors?.length) return;
 
     if (ta.tagName === 'TEXTAREA') {
@@ -862,44 +862,6 @@
     liveHighlightTarget = textarea;
   }
 
-  function clearLiveDraftHighlights() {
-    if (liveHighlightEl && liveHighlightTarget) {
-      // Restore textarea to its original position
-      const parent = liveHighlightEl.parentNode;
-      if (parent) {
-        parent.insertBefore(liveHighlightTarget, liveHighlightEl);
-      }
-      liveHighlightEl.remove();
-
-      // Restore textarea appearance
-      if (liveHighlightScrollHandler) {
-        liveHighlightTarget.removeEventListener('scroll', liveHighlightScrollHandler);
-      }
-      if (liveHighlightMouseMoveHandler) {
-        liveHighlightEl.removeEventListener('mousemove', liveHighlightMouseMoveHandler);
-      }
-      if (liveHighlightMouseLeaveHandler) {
-        liveHighlightEl.removeEventListener('mouseleave', liveHighlightMouseLeaveHandler);
-      }
-      if (liveHighlightRestore) {
-        liveHighlightTarget.style.color = liveHighlightRestore.color;
-        liveHighlightTarget.style.caretColor = liveHighlightRestore.caretColor;
-        liveHighlightTarget.style.margin = liveHighlightRestore.margin;
-        liveHighlightTarget.style.position = liveHighlightRestore.position;
-        liveHighlightTarget.style.zIndex = liveHighlightRestore.zIndex;
-        liveHighlightTarget.style.width = liveHighlightRestore.width;
-        liveHighlightTarget.style.height = liveHighlightRestore.height;
-        liveHighlightTarget.style.boxSizing = liveHighlightRestore.boxSizing;
-      }
-    }
-    liveHighlightEl = null;
-    liveHighlightTarget = null;
-    liveHighlightRestore = null;
-    liveHighlightScrollHandler = null;
-    liveHighlightMouseMoveHandler = null;
-    liveHighlightMouseLeaveHandler = null;
-  }
-
   // -----------------------------------------------------------------------
   // Live draft checking (checks text as you type after configurable pause)
   // -----------------------------------------------------------------------
@@ -934,7 +896,7 @@
       if (liveCheckTarget && document.contains(liveCheckTarget)) {
         const val = (liveCheckTarget.value || liveCheckTarget.textContent || '').trim();
         if (!val) {
-          clearLiveDraftHighlights();
+          removeErrorFloat();
           liveCheckTarget = null;
         }
       }
@@ -981,7 +943,7 @@
           return;
         }
         if (data?.errors?.length > 0) {
-          highlightLiveDraft(ta, data.errors);
+          showErrorFloat(data.errors, ta);
         }
       } catch (err) {
         console.debug('[AI Grammar] Live check error:', err);
@@ -992,9 +954,8 @@
       const ta = e.target;
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
 
-      // Clear live draft highlights and abort in-flight checks
-      // (submitted message highlights are kept — those are permanent)
-      clearLiveDraftHighlights();
+      // Clear live draft results and abort in-flight checks
+      removeErrorFloat();
       activeCheckController?.abort();
       removeBadge();
 
@@ -1017,12 +978,12 @@
       const ta = e.target;
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
       liveCheckTarget = null;
-      clearLiveDraftHighlights();
+      removeErrorFloat();
     }, true);
 
     document.addEventListener('submit', () => {
       liveCheckTarget = null;
-      clearLiveDraftHighlights();
+      removeErrorFloat();
     }, true);
   }
 
