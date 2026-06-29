@@ -272,8 +272,13 @@ async def _call_ai(text: str, language: str, config: AIConfig) -> dict[str, Any]
             last_exc = HTTPException(
                 status_code=502, detail=f"AI provider error: {exc.response.status_code} — {detail}"
             )
-        except (httpx.RequestError, ValueError) as exc:
-            last_exc = HTTPException(status_code=502, detail=f"AI provider connection error: {exc}")
+        except (httpx.RequestError, httpx.TimeoutException, ValueError, KeyError, IndexError) as exc:
+            last_exc = HTTPException(status_code=502, detail=f"AI provider error: {exc}")
+        except Exception as exc:
+            # Any other unexpected error — log and return 502 instead of 500
+            import traceback
+            traceback.print_exc()
+            last_exc = HTTPException(status_code=502, detail=f"Unexpected AI error: {type(exc).__name__}: {exc}")
 
         if attempt == 1:
             await asyncio.sleep(1)
