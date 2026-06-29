@@ -3,7 +3,7 @@
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8766;
 const DEFAULT_LIVE_DELAY = 5;
-const DEFAULT_LIVE_MIN_CHARS = 10;
+const DEFAULT_LIVE_MIN_CHARS = 30;
 
 const enabledToggle = document.getElementById('enabled');
 const languageSelect = document.getElementById('language');
@@ -118,7 +118,7 @@ liveDelayInput.addEventListener('change', async () => {
 });
 
 liveMinCharsInput.addEventListener('change', async () => {
-  const val = Math.max(5, Math.min(100, parseInt(liveMinCharsInput.value, 10) || DEFAULT_LIVE_MIN_CHARS));
+  const val = Math.max(5, Math.min(500, parseInt(liveMinCharsInput.value, 10) || DEFAULT_LIVE_MIN_CHARS));
   liveMinCharsInput.value = val;
   await chrome.storage.sync.set({ grammarLiveMinChars: val });
   showStatus('Min chars saved ✓');

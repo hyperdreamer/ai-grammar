@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Grammar Checker",
-  "version": "0.0.32",
+  "version": "0.0.33",
   "description": "Detect grammar and spelling errors in submitted text using AI. Highlights errors and shows corrections.",
   "permissions": [
     "activeTab",

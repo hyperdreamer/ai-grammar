@@ -12,8 +12,8 @@
   // Constants
   // -----------------------------------------------------------------------
 
-  const MIN_TEXT_LENGTH = 30;
   const DEBOUNCE_MS = 2000;
+  let minChars = 30;  // read from storage (grammarMinChars)
   const IGNORE_TAGS = new Set([
     'SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA', 'INPUT',
     'SVG', 'MATH', 'NOSCRIPT', 'IFRAME', 'CANVAS',
@@ -247,7 +247,7 @@
 
     // Skip inline elements that are just small formatting
     const text = getTextContent(el);
-    if (text.length < MIN_TEXT_LENGTH) return false;
+    if (text.length < minChars) return false;
 
     // Skip elements that are mostly links/navigation
     const links = el.querySelectorAll('a');
@@ -886,15 +886,14 @@
     let lastInputTime = 0;
     let liveCheckTarget = null;
     let liveDelay = 5000;       // ms, read from storage
-    let liveMinChars = 10;
 
     // Load settings from storage
     chrome.storage.sync.get({
       grammarLiveDelay: 5,
-      grammarLiveMinChars: 10,
+      grammarLiveMinChars: 30,
     }).then(s => {
       liveDelay = (s.grammarLiveDelay || 5) * 1000;
-      liveMinChars = s.grammarLiveMinChars || 10;
+      minChars = s.grammarLiveMinChars || 30;
     });
 
     // Also listen for storage changes to update live
@@ -903,7 +902,7 @@
         liveDelay = (changes.grammarLiveDelay.newValue || 5) * 1000;
       }
       if (changes.grammarLiveMinChars) {
-        liveMinChars = changes.grammarLiveMinChars.newValue || 10;
+        minChars = changes.grammarLiveMinChars.newValue || 30;
       }
     });
 
@@ -919,7 +918,7 @@
       liveCheckTarget = null;
 
       const text = (ta.value || ta.textContent || '').trim();
-      if (text.length < liveMinChars) return;
+      if (text.length < minChars) return;
 
       checkLiveDraft(ta, text);
     }, 500);
@@ -951,7 +950,7 @@
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
 
       const text = (ta.value || ta.textContent || '').trim();
-      if (text.length < liveMinChars) return;
+      if (text.length < minChars) return;
 
       clearLiveDraftHighlights();
       liveCheckTarget = ta;
@@ -1033,7 +1032,7 @@
     // Add to pending and debounce — only user-authored content
     for (const block of newBlocks) {
       const text = getTextContent(block);
-      if (text.length >= MIN_TEXT_LENGTH && isUserText(text)) {
+      if (text.length >= minChars && isUserText(text)) {
         pendingChecks.set(block, text);
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
@@ -1077,7 +1076,7 @@
 
     const range = sel.getRangeAt(0);
     const text = range.toString().trim();
-    if (text.length < MIN_TEXT_LENGTH) {
+    if (text.length < minChars) {
       showBadge('Selection too short to check');
       return;
     }
@@ -1127,7 +1126,7 @@
         for (const el of candidates) {
           if (isIgnored(el) || checkedElements.has(el) || el.hasAttribute(CHECKED_ATTR)) continue;
           const text = getTextContent(el);
-          if (text.length >= MIN_TEXT_LENGTH) {
+          if (text.length >= minChars) {
             checkedElements.add(el);
             el.setAttribute(CHECKED_ATTR, '');
             checkText(text, el);
@@ -1164,8 +1163,8 @@
         const value = ta.value || ta.textContent || '';
         const cmdIdx = value.lastIndexOf('?/fix');
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
-        if (!draft || draft.length < MIN_TEXT_LENGTH) {
-          showBadge('No text to fix (need at least ' + MIN_TEXT_LENGTH + ' characters)');
+        if (!draft || draft.length < minChars) {
+          showBadge('No text to fix (need at least ' + minChars + ' characters)');
           return;
         }
         showBadge('Fixing...', true);
@@ -1235,8 +1234,8 @@
         // Called from submit handler — extract text before ?/fix and apply
         const cmdIdx = text.lastIndexOf('?/fix');
         const draft = (cmdIdx >= 0 ? text.slice(0, cmdIdx) : text).trim();
-        if (!draft || draft.length < MIN_TEXT_LENGTH) {
-          showBadge('No text to fix (need at least ' + MIN_TEXT_LENGTH + ' characters)');
+        if (!draft || draft.length < minChars) {
+          showBadge('No text to fix (need at least ' + minChars + ' characters)');
           return true;
         }
         showBadge('Fixing...', true);
@@ -1453,7 +1452,7 @@
     // --- Track user-submitted text so we only check the user's content ---
     // Helper: process captured text — handle commands, otherwise store for matching
     async function processCapturedText(captured) {
-      if (!captured || captured.length < MIN_TEXT_LENGTH) return;
+      if (!captured || captured.length < minChars) return;
       // Check for ?/ prefix commands at the end
       if (/\?\/\w+(\s+\S+)?$/.test(captured)) {
         await handleCommand(captured);

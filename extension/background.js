@@ -127,7 +127,7 @@ async function getSettings() {
     grammarEnabled: true,
     grammarLanguage: 'auto',
     grammarLiveDelay: 5,
-    grammarLiveMinChars: 10,
+    grammarLiveMinChars: 30,
   });
   return items;
 }
