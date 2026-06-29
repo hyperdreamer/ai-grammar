@@ -932,6 +932,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
+          signal: AbortSignal.timeout(30000),
         });
         const data = await resp.json();
         removeBadge();
@@ -1003,6 +1004,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, language: 'auto' }),
+        signal: AbortSignal.timeout(30000),
       });
       const data = await resp.json();
 
@@ -1195,7 +1197,8 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: draft, language: 'auto' }),
-          });
+                      signal: AbortSignal.timeout(30000),
+                    });
           const data = await resp.json();
           removeBadge();
           if (!data?.errors?.length) {
@@ -1266,7 +1269,8 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: draft, language: 'auto' }),
-          });
+                      signal: AbortSignal.timeout(30000),
+                    });
           const data = await resp.json();
           removeBadge();
           if (!data?.errors?.length) {
