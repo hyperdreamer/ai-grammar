@@ -954,7 +954,8 @@
       const ta = e.target;
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
 
-      // Clear live draft results and abort in-flight checks
+      // Clear live draft highlights and abort in-flight checks
+      clearLiveDraftHighlights();
       removeErrorFloat();
       activeCheckController?.abort();
       removeBadge();
@@ -978,11 +979,13 @@
       const ta = e.target;
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
       liveCheckTarget = null;
+      clearLiveDraftHighlights();
       removeErrorFloat();
     }, true);
 
     document.addEventListener('submit', () => {
       liveCheckTarget = null;
+      clearLiveDraftHighlights();
       removeErrorFloat();
     }, true);
   }
