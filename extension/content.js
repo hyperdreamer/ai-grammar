@@ -44,6 +44,9 @@
   // AbortController for in-flight grammar checks — aborted when user resumes typing
   let activeCheckController = null;
 
+  // Function to cancel pending live draft check — set by setupLiveDraftCheck
+  let cancelLiveDraft = null;
+
   // Track the last text the user submitted so we only check their content,
   // not AI replies or other page text that happens to appear in the DOM.
   let lastUserText = '';
@@ -834,6 +837,12 @@
     let liveCheckTarget = null;
     let liveDelay = 5000;       // ms, read from storage
 
+    // Expose cancel so ?/fix can abort pending live checks
+    cancelLiveDraft = () => {
+      liveCheckTarget = null;
+      removeErrorFloat();
+    };
+
     // Load settings from storage
     chrome.storage.sync.get({
       grammarLiveDelay: 5,
@@ -1197,6 +1206,9 @@
             ta.textContent = fixed;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
           }
+          // Cancel pending live draft check — text is already corrected
+          cancelLiveDraft?.();
+          activeCheckController?.abort();
           ta.focus();
           showBadge(`✓ Fixed ${sorted.length} issue${sorted.length > 1 ? 's' : ''}`);
         } catch (e) {
