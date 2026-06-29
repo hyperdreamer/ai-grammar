@@ -576,15 +576,21 @@
   // Floating error notification (replaces inline underlines)
   // -----------------------------------------------------------------------
 
-  function showErrorFloat(errors) {
+  function showErrorFloat(errors, anchorEl = null) {
     removeErrorFloat();
 
     const panel = document.createElement('div');
     panel.id = 'ai-grammar-float';
+    // Position near anchor if provided, otherwise bottom-right
+    let posStyle = '';
+    if (anchorEl && document.contains(anchorEl)) {
+      const rect = anchorEl.getBoundingClientRect();
+      posStyle = `top: ${Math.max(8, rect.top - 8)}px; left: ${Math.max(8, rect.right + 8)}px;`;
+    }
     panel.innerHTML = `
       <style>
         #ai-grammar-float {
-          position: fixed; bottom: 16px; right: 16px; z-index: 2147483646;
+          position: fixed; ${posStyle || 'bottom: 16px; right: 16px;'} z-index: 2147483646;
           background: #1e293b; color: #f1f5f9; border-radius: 12px;
           box-shadow: 0 8px 32px rgba(0,0,0,0.35);
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -664,7 +670,80 @@
   }
 
   // -----------------------------------------------------------------------
-  // Check pipeline
+  // Live draft checking (checks text as you type after 5s pause)
+  // -----------------------------------------------------------------------
+
+  const LIVE_CHECK_DELAY_MS = 5000;
+
+  function setupLiveDraftCheck() {
+    let lastInputTime = 0;
+    let liveCheckTarget = null;
+
+    // Poll every 500ms to check if 5s have elapsed since last input
+    setInterval(() => {
+      if (!liveCheckTarget || !document.contains(liveCheckTarget)) return;
+
+      const elapsed = Date.now() - lastInputTime;
+      if (elapsed < LIVE_CHECK_DELAY_MS) return;
+
+      // 5s elapsed since last input — trigger the check
+      const ta = liveCheckTarget;
+      liveCheckTarget = null;
+
+      const text = (ta.value || ta.textContent || '').trim();
+      if (text.length < MIN_TEXT_LENGTH) return;
+
+      checkLiveDraft(ta, text);
+    }, 500);
+
+    async function checkLiveDraft(ta, text) {
+      try {
+        const settings = await chrome.storage.sync.get({
+          grammarHost: '127.0.0.1',
+          grammarPort: 8766,
+        });
+        const data = await fetchViaPage(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, language: 'auto' }),
+        });
+        if (data?.errors?.length > 0) {
+          showErrorFloat(data.errors, ta);
+        }
+      } catch (err) {
+        console.debug('[AI Grammar] Live check error:', err);
+      }
+    }
+
+    document.addEventListener('input', (e) => {
+      const ta = e.target;
+      if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
+
+      const text = (ta.value || ta.textContent || '').trim();
+      if (text.length < MIN_TEXT_LENGTH) return;
+
+      removeErrorFloat();
+      liveCheckTarget = ta;
+      lastInputTime = Date.now();
+    }, true);
+
+    // Cancel on submit/Enter
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      const ta = e.target;
+      if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
+      liveCheckTarget = null;
+      removeErrorFloat();
+    }, true);
+
+    document.addEventListener('submit', () => {
+      liveCheckTarget = null;
+      removeErrorFloat();
+    }, true);
+  }
+
+  // -----------------------------------------------------------------------
+  // Check pipeline (post-submit grammar checking)
   // -----------------------------------------------------------------------
 
   async function checkText(text, container) {
@@ -1160,6 +1239,9 @@
       // User typed something else → hide palette
       hideCommandPalette();
     }, true);
+
+    // Start live draft checking (checks text as you type after 5s pause)
+    setupLiveDraftCheck();
 
     console.debug('[AI Grammar] Content script initialized');
   }
