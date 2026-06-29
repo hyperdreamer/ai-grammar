@@ -31,6 +31,8 @@ if [[ -n "$OLD_PID" ]] && [[ "$OLD_PID" =~ ^[0-9]+$ ]]; then
     if [[ "$PROC_CWD" == "$BACKEND_DIR"* ]]; then
         kill "$OLD_PID" 2>/dev/null || true
         sleep 0.5
+    else
+        echo "Port $PORT occupied by non-ai-grammar process (pid $OLD_PID, cwd: $PROC_CWD) — leaving it alone"
     fi
 fi
 
