@@ -2,11 +2,15 @@
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8766;
+const DEFAULT_LIVE_DELAY = 5;
+const DEFAULT_LIVE_MIN_CHARS = 10;
 
 const enabledToggle = document.getElementById('enabled');
 const languageSelect = document.getElementById('language');
 const hostInput = document.getElementById('host');
 const portInput = document.getElementById('port');
+const liveDelayInput = document.getElementById('live-delay');
+const liveMinCharsInput = document.getElementById('live-min-chars');
 const statusEl = document.getElementById('status');
 const testBtn = document.getElementById('test-page');
 const backendStatus = document.getElementById('backend-status');
@@ -22,18 +26,23 @@ async function init() {
     languageSelect.value = settings.grammarLanguage || 'auto';
     hostInput.value = settings.grammarHost || DEFAULT_HOST;
     portInput.value = settings.grammarPort || DEFAULT_PORT;
+    liveDelayInput.value = settings.grammarLiveDelay || DEFAULT_LIVE_DELAY;
+    liveMinCharsInput.value = settings.grammarLiveMinChars || DEFAULT_LIVE_MIN_CHARS;
   } catch {
-    // Background may not be ready; use defaults
     const stored = await chrome.storage.sync.get({
       grammarEnabled: true,
       grammarLanguage: 'auto',
       grammarHost: DEFAULT_HOST,
       grammarPort: DEFAULT_PORT,
+      grammarLiveDelay: DEFAULT_LIVE_DELAY,
+      grammarLiveMinChars: DEFAULT_LIVE_MIN_CHARS,
     });
     enabledToggle.checked = stored.grammarEnabled;
     languageSelect.value = stored.grammarLanguage;
     hostInput.value = stored.grammarHost;
     portInput.value = stored.grammarPort;
+    liveDelayInput.value = stored.grammarLiveDelay;
+    liveMinCharsInput.value = stored.grammarLiveMinChars;
   }
 
   checkBackend();
@@ -100,6 +109,20 @@ async function saveHostPort() {
   showStatus('Host/port saved ✓');
   checkBackend();
 }
+
+liveDelayInput.addEventListener('change', async () => {
+  const val = Math.max(1, Math.min(30, parseInt(liveDelayInput.value, 10) || DEFAULT_LIVE_DELAY));
+  liveDelayInput.value = val;
+  await chrome.storage.sync.set({ grammarLiveDelay: val });
+  showStatus('Live delay saved ✓');
+});
+
+liveMinCharsInput.addEventListener('change', async () => {
+  const val = Math.max(5, Math.min(100, parseInt(liveMinCharsInput.value, 10) || DEFAULT_LIVE_MIN_CHARS));
+  liveMinCharsInput.value = val;
+  await chrome.storage.sync.set({ grammarLiveMinChars: val });
+  showStatus('Min chars saved ✓');
+});
 
 // ---------------------------------------------------------------------------
 // Init

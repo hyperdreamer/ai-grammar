@@ -13,7 +13,6 @@
   // -----------------------------------------------------------------------
 
   const MIN_TEXT_LENGTH = 30;
-  const LIVE_MIN_TEXT_LENGTH = 10;  // lower threshold for live draft checks
   const DEBOUNCE_MS = 2000;
   const IGNORE_TAGS = new Set([
     'SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA', 'INPUT',
@@ -674,25 +673,44 @@
   // Live draft checking (checks text as you type after 5s pause)
   // -----------------------------------------------------------------------
 
-  const LIVE_CHECK_DELAY_MS = 5000;
-
   function setupLiveDraftCheck() {
     let lastInputTime = 0;
     let liveCheckTarget = null;
+    let liveDelay = 5000;       // ms, read from storage
+    let liveMinChars = 10;
 
-    // Poll every 500ms to check if 5s have elapsed since last input
+    // Load settings from storage
+    chrome.storage.sync.get({
+      grammarLiveDelay: 5,
+      grammarLiveMinChars: 10,
+    }).then(s => {
+      liveDelay = (s.grammarLiveDelay || 5) * 1000;
+      liveMinChars = s.grammarLiveMinChars || 10;
+    });
+
+    // Also listen for storage changes to update live
+    chrome.storage.onChanged.addListener((changes) => {
+      if (changes.grammarLiveDelay) {
+        liveDelay = (changes.grammarLiveDelay.newValue || 5) * 1000;
+      }
+      if (changes.grammarLiveMinChars) {
+        liveMinChars = changes.grammarLiveMinChars.newValue || 10;
+      }
+    });
+
+    // Poll every 500ms to check if delay has elapsed since last input
     setInterval(() => {
       if (!liveCheckTarget || !document.contains(liveCheckTarget)) return;
 
       const elapsed = Date.now() - lastInputTime;
-      if (elapsed < LIVE_CHECK_DELAY_MS) return;
+      if (elapsed < liveDelay) return;
 
-      // 5s elapsed since last input — trigger the check
+      // Delay elapsed since last input — trigger the check
       const ta = liveCheckTarget;
       liveCheckTarget = null;
 
       const text = (ta.value || ta.textContent || '').trim();
-      if (text.length < LIVE_MIN_TEXT_LENGTH) return;
+      if (text.length < liveMinChars) return;
 
       checkLiveDraft(ta, text);
     }, 500);
@@ -723,7 +741,7 @@
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
 
       const text = (ta.value || ta.textContent || '').trim();
-      if (text.length < LIVE_MIN_TEXT_LENGTH) return;
+      if (text.length < liveMinChars) return;
 
       removeErrorFloat();
       liveCheckTarget = ta;

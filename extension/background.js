@@ -126,6 +126,8 @@ async function getSettings() {
     grammarPort: DEFAULT_PORT,
     grammarEnabled: true,
     grammarLanguage: 'auto',
+    grammarLiveDelay: 5,
+    grammarLiveMinChars: 10,
   });
   return items;
 }
