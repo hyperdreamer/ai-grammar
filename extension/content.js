@@ -932,6 +932,10 @@
         });
         const data = await resp.json();
         removeBadge();
+        if (!resp.ok) {
+          showBadge('Grammar check failed: ' + (data?.detail || resp.status), false, 5000);
+          return;
+        }
         if (data?.errors?.length > 0) {
           highlightLiveDraft(ta, data.errors);
         }
@@ -997,6 +1001,11 @@
       const data = await resp.json();
 
       removeBadge();
+
+      if (!resp.ok) {
+        showBadge('Grammar check failed: ' + (data?.detail || resp.status), false, 5000);
+        return;
+      }
 
       if (!data?.errors) return;
       const errors = data.errors;
