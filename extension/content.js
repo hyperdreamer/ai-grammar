@@ -563,6 +563,25 @@
   }
 
   // -----------------------------------------------------------------------
+  // Clear all inline highlights from the page
+  // -----------------------------------------------------------------------
+
+  function clearPostSubmitHighlights() {
+    // Unwrap all grammar spans, restoring plain text
+    for (const cls of ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom']) {
+      document.querySelectorAll(`.${cls}`).forEach(span => {
+        const parent = span.parentNode;
+        if (parent) {
+          while (span.firstChild) {
+            parent.insertBefore(span.firstChild, span);
+          }
+          parent.removeChild(span);
+        }
+      });
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // Event delegation for tooltips and corrections
   // -----------------------------------------------------------------------
 
@@ -959,7 +978,13 @@
       const ta = e.target;
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
 
-      const text = (ta.value || ta.textContent || '').trim();
+      // Clear old highlights when user starts typing fresh
+      clearPostSubmitHighlights();
+
+      // Skip placeholder-only text
+      const raw = ta.value || ta.textContent || '';
+      if (raw === ta.placeholder) return;
+      const text = raw.trim();
       if (text.length < minChars) return;
 
       clearLiveDraftHighlights();
@@ -974,11 +999,13 @@
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
       liveCheckTarget = null;
       clearLiveDraftHighlights();
+      clearPostSubmitHighlights();
     }, true);
 
     document.addEventListener('submit', () => {
       liveCheckTarget = null;
       clearLiveDraftHighlights();
+      clearPostSubmitHighlights();
     }, true);
   }
 
