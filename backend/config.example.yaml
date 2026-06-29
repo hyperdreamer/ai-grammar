@@ -8,6 +8,11 @@ server:
   host: 127.0.0.1
   port: 8766
 
+# Enable detailed debug logging to stderr (request/response timing, provider calls).
+# Shows: incoming requests, AI provider calls, response sizes, error counts.
+# Set to false for production.
+debug: false
+
 ai:
   # Provider type: "openai" for OpenAI-compatible APIs (includes most proxies)
   provider: openai
