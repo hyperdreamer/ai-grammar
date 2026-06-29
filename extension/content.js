@@ -12,7 +12,7 @@
   // Constants
   // -----------------------------------------------------------------------
 
-  const MIN_TEXT_LENGTH = 30;
+  const MIN_TEXT_LENGTH = 10;
   const DEBOUNCE_MS = 2000;
   const IGNORE_TAGS = new Set([
     'SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA', 'INPUT',
@@ -37,6 +37,8 @@
   let liveHighlightTarget = null;
   let liveHighlightRestore = null;
   let liveHighlightScrollHandler = null;
+  let liveHighlightMouseMoveHandler = null;
+  let liveHighlightMouseLeaveHandler = null;
 
   // Track the last text the user submitted so we only check their content,
   // not AI replies or other page text that happens to appear in the DOM.
@@ -55,7 +57,10 @@
     style.id = 'ai-grammar-styles';
     style.textContent = `
       .ai-grammar-error {
-        text-decoration: underline wavy #dc2626;
+        text-decoration-line: underline !important;
+        text-decoration-style: wavy !important;
+        text-decoration-color: #dc2626 !important;
+        text-decoration-thickness: 1.5px !important;
         text-underline-offset: 3px;
         cursor: pointer;
         border-radius: 2px;
@@ -64,7 +69,10 @@
         background-color: rgba(220, 38, 38, 0.08);
       }
       .ai-grammar-improvement {
-        text-decoration: underline wavy #4ade80;
+        text-decoration-line: underline !important;
+        text-decoration-style: wavy !important;
+        text-decoration-color: #4ade80 !important;
+        text-decoration-thickness: 1.5px !important;
         text-underline-offset: 3px;
         cursor: pointer;
         border-radius: 2px;
@@ -73,7 +81,10 @@
         background-color: rgba(74, 222, 128, 0.08);
       }
       .ai-grammar-idiom {
-        text-decoration: underline wavy #60a5fa;
+        text-decoration-line: underline !important;
+        text-decoration-style: wavy !important;
+        text-decoration-color: #60a5fa !important;
+        text-decoration-thickness: 1.5px !important;
         text-underline-offset: 3px;
         cursor: pointer;
         border-radius: 2px;
@@ -85,6 +96,23 @@
         outline: 2px solid #dc2626;
         outline-offset: 1px;
         border-radius: 2px;
+      }
+      .ag-live-highlight {
+        isolation: isolate;
+      }
+      .ag-live-highlight-backdrop {
+        color: transparent !important;
+        -webkit-text-fill-color: transparent !important;
+        scrollbar-width: none;
+      }
+      .ag-live-highlight-backdrop::-webkit-scrollbar {
+        display: none;
+      }
+      .ag-live-highlight-backdrop .ai-grammar-error,
+      .ag-live-highlight-backdrop .ai-grammar-improvement,
+      .ag-live-highlight-backdrop .ai-grammar-idiom {
+        color: transparent !important;
+        -webkit-text-fill-color: transparent !important;
       }
       .ai-grammar-tooltip {
         position: fixed;
@@ -212,6 +240,22 @@
     return text.trim();
   }
 
+  function getRawTextContent(el) {
+    if (isIgnored(el)) return '';
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (isIgnored(node.parentElement)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let text = '';
+    let node;
+    while ((node = walker.nextNode())) {
+      text += node.textContent;
+    }
+    return text;
+  }
+
   function isTextBlock(el) {
     if (isIgnored(el)) return false;
     if (checkedElements.has(el)) return false;
@@ -253,6 +297,11 @@
     return normBlock.includes(normUser) ||
            (normUser.length > 0 && normBlock.length > 0 &&
             longestCommonSubstring(normUser, normBlock) >= normUser.length * USER_TEXT_MIN_MATCH);
+  }
+
+  function isLikelySubmittedUserBlock(el) {
+    return el?.classList?.contains('user-msg') ||
+           el?.matches?.('[data-author="user"], [data-sender="user"], [data-testid*="user"]');
   }
 
   function longestCommonSubstring(a, b) {
@@ -301,9 +350,13 @@
    * Walk text nodes inside `container` and build a flat list of
    * { textNode, start: global_offset, end: global_offset }.
    */
-  function buildTextNodeMap(container) {
+  function buildTextNodeMap(container, checkedText = '') {
     const map = [];
-    let offset = 0;
+    const fullText = getRawTextContent(container);
+    const trimLeft = fullText.length - fullText.trimStart().length;
+    const checkedStart = checkedText ? fullText.indexOf(checkedText) : -1;
+    const baseOffset = checkedStart >= 0 ? checkedStart : trimLeft;
+    let offset = -baseOffset;
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         if (isIgnored(node.parentElement)) return NodeFilter.FILTER_REJECT;
@@ -361,11 +414,11 @@
    * Wrap each error in a <span class="ai-grammar-error"> with data attributes.
    * Uses Range.surroundContents or manual extraction when surroundContents fails.
    */
-  function highlightErrors(container, errors) {
+  function highlightErrors(container, errors, checkedText = '') {
     if (!errors || errors.length === 0) return 0;
 
     // Build text node map for the container
-    const map = buildTextNodeMap(container);
+    const map = buildTextNodeMap(container, checkedText || getTextContent(container));
     if (map.length === 0) return 0;
 
     // Sort errors by start position (descending — insert from end to start
@@ -703,14 +756,16 @@
     wrapper.style.height = `${textarea.offsetHeight}px`;
     wrapper.style.margin = styles.margin;
     wrapper.style.verticalAlign = styles.verticalAlign;
+    if (styles.flexGrow !== '0') wrapper.style.flex = styles.flex;
 
     // Create the highlight backdrop (mirrors textarea rendering)
     const backdrop = document.createElement('div');
+    backdrop.className = 'ag-live-highlight-backdrop';
     backdrop.setAttribute('aria-hidden', 'true');
     backdrop.style.position = 'absolute';
     backdrop.style.inset = '0';
     backdrop.style.pointerEvents = 'none';
-    backdrop.style.zIndex = '2147483645';
+    backdrop.style.zIndex = '2';
     backdrop.style.fontFamily = styles.fontFamily;
     backdrop.style.fontSize = styles.fontSize;
     backdrop.style.fontWeight = styles.fontWeight;
@@ -730,7 +785,7 @@
     backdrop.style.borderColor = 'transparent';
     backdrop.style.borderRadius = styles.borderRadius;
     backdrop.style.boxSizing = 'border-box';
-    backdrop.style.color = textColor;
+    backdrop.style.color = 'transparent';
     backdrop.style.background = 'transparent';
 
     // Build highlighted HTML
@@ -744,7 +799,7 @@
       html += escapeHtml(text.slice(pos, start));
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
       const type = err.type || 'error';
-      html += `<span class="${cls}" style="color:${escapeHtml(textColor)};pointer-events:auto;cursor:pointer;" data-live-draft="true" data-start="${start}" data-end="${end}" data-correction="${escapeHtml(err.correction || '')}" data-explanation="${escapeHtml(err.explanation || '')}" data-error="${escapeHtml(err.error || text.slice(start, end))}" data-type="${escapeHtml(type)}" tabindex="0">${escapeHtml(text.slice(start, end))}</span>`;
+      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer;" data-live-draft="true" data-start="${start}" data-end="${end}" data-correction="${escapeHtml(err.correction || '')}" data-explanation="${escapeHtml(err.explanation || '')}" data-error="${escapeHtml(err.error || text.slice(start, end))}" data-type="${escapeHtml(type)}" tabindex="0">${escapeHtml(text.slice(start, end))}</span>`;
       pos = end;
     }
     html += escapeHtml(text.slice(pos));
@@ -762,6 +817,25 @@
     liveHighlightScrollHandler();
     textarea.addEventListener('scroll', liveHighlightScrollHandler);
 
+    liveHighlightMouseMoveHandler = (event) => {
+      backdrop.style.pointerEvents = 'auto';
+      const hit = document.elementFromPoint(event.clientX, event.clientY);
+      backdrop.style.pointerEvents = 'none';
+      const errorEl = hit?.closest?.(GRAMMAR_CLASSES);
+      if (errorEl && backdrop.contains(errorEl)) {
+        showTooltip(errorEl);
+      } else if (!event.target.closest?.('.ai-grammar-tooltip')) {
+        hideTooltip();
+      }
+    };
+    liveHighlightMouseLeaveHandler = (event) => {
+      if (!event.relatedTarget?.closest?.('.ai-grammar-tooltip')) {
+        hideTooltip();
+      }
+    };
+    wrapper.addEventListener('mousemove', liveHighlightMouseMoveHandler);
+    wrapper.addEventListener('mouseleave', liveHighlightMouseLeaveHandler);
+
     liveHighlightRestore = {
       color: textarea.style.color,
       caretColor: textarea.style.caretColor,
@@ -773,8 +847,8 @@
       boxSizing: textarea.style.boxSizing,
     };
 
-    // Make textarea text transparent while keeping the caret and input behavior.
-    textarea.style.color = 'transparent';
+    // Keep textarea text readable; the overlay contributes only underlines.
+    textarea.style.color = textColor;
     textarea.style.caretColor = textColor;
     textarea.style.margin = '0';
     textarea.style.position = 'relative';
@@ -800,6 +874,12 @@
       if (liveHighlightScrollHandler) {
         liveHighlightTarget.removeEventListener('scroll', liveHighlightScrollHandler);
       }
+      if (liveHighlightMouseMoveHandler) {
+        liveHighlightEl.removeEventListener('mousemove', liveHighlightMouseMoveHandler);
+      }
+      if (liveHighlightMouseLeaveHandler) {
+        liveHighlightEl.removeEventListener('mouseleave', liveHighlightMouseLeaveHandler);
+      }
       if (liveHighlightRestore) {
         liveHighlightTarget.style.color = liveHighlightRestore.color;
         liveHighlightTarget.style.caretColor = liveHighlightRestore.caretColor;
@@ -815,6 +895,8 @@
     liveHighlightTarget = null;
     liveHighlightRestore = null;
     liveHighlightScrollHandler = null;
+    liveHighlightMouseMoveHandler = null;
+    liveHighlightMouseLeaveHandler = null;
   }
 
   // -----------------------------------------------------------------------
@@ -941,7 +1023,7 @@
 
       // Highlight errors inline with colored underlines
       isHighlighting = true;
-      const count = highlightErrors(container, errors);
+      const count = highlightErrors(container, errors, text);
       isHighlighting = false;
 
       if (count > 0) {
@@ -972,7 +1054,7 @@
     // Add to pending and debounce — only user-authored content
     for (const block of newBlocks) {
       const text = getTextContent(block);
-      if (text.length >= MIN_TEXT_LENGTH && isUserText(text)) {
+      if (text.length >= MIN_TEXT_LENGTH && (isUserText(text) || isLikelySubmittedUserBlock(block))) {
         pendingChecks.set(block, text);
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
@@ -1402,6 +1484,21 @@
       lastUserTextTime = Date.now();
     }
 
+    function getTextFromControls(scope) {
+      if (!scope?.querySelectorAll) return '';
+      const textareas = scope.querySelectorAll('textarea');
+      const inputs = scope.querySelectorAll('input[type="text"], input:not([type])');
+      for (const ta of textareas) {
+        const captured = ta.value.trim();
+        if (captured) return captured;
+      }
+      for (const inp of inputs) {
+        const captured = inp.value.trim();
+        if (captured) return captured;
+      }
+      return '';
+    }
+
     // Capture text when the user submits a form (e.g., chat send)
     document.addEventListener('submit', (e) => {
       const form = e.target;
@@ -1416,6 +1513,28 @@
         for (const inp of inputs) {
           captured = inp.value.trim();
           if (captured) break;
+        }
+      }
+      processCapturedText(captured);
+    }, true);
+
+    document.addEventListener('click', (e) => {
+      const control = e.target.closest?.('button, input[type="button"], input[type="submit"]');
+      if (!control) return;
+
+      const label = (control.innerText || control.value || control.getAttribute('aria-label') || '').trim().toLowerCase();
+      const looksLikeSend = /^(send|submit|post|reply|comment)$/.test(label) ||
+                            control.type === 'submit' ||
+                            control.getAttribute('data-testid')?.toLowerCase().includes('send');
+      if (!looksLikeSend) return;
+
+      const form = control.closest('form');
+      const scope = form || control.closest('.input-row, [role="form"], [contenteditable="true"]') || control.parentElement;
+      let captured = getTextFromControls(scope);
+      if (!captured) {
+        const active = document.activeElement;
+        if (active?.tagName === 'TEXTAREA' || active?.isContentEditable) {
+          captured = (active.value || active.textContent || '').trim();
         }
       }
       processCapturedText(captured);
