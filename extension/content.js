@@ -1043,7 +1043,7 @@
     // Helper: process captured text — handle commands, otherwise store for matching
     async function processCapturedText(captured) {
       if (!captured || captured.length < MIN_TEXT_LENGTH) return;
-      // Check for ?/ postfix commands first
+      // Check for ?/ prefix commands first
       if (captured.startsWith(COMMAND_PREFIX)) {
         await handleCommand(captured);
         return;
@@ -1112,7 +1112,7 @@
         return;
       }
 
-      // Full command typed (e.g., "off?/", "lang en?/") → hide palette, execute
+      // Full command typed (e.g., "?/off", "?/lang en") → hide palette, execute
       const match = value.match(/^\s*\?\/\w+(\s+\S+)?/);
       if (match) {
         hideCommandPalette();
