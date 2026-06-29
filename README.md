@@ -79,6 +79,10 @@ Click the extension icon to configure:
 
 Changes save automatically as you type.
 
+### Theme
+
+The extension automatically matches your browser/OS theme — no manual toggle needed. Every UI surface (popup, test page, tooltips, error panels, command palette, status badge) uses `prefers-color-scheme` to render in light or dark mode. Switch your system to light mode and all extension UI follows.
+
 ### Inline commands (`?/` prefix)
 
 Type `?/` in any text input to open the **command palette** — a popup menu listing all available commands. Use arrow keys to navigate, Enter to select, or click a command. You can also type the full command directly (e.g., `?/off`).
