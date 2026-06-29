@@ -200,7 +200,9 @@ app.add_middleware(
 )
 
 # Mount static files for testing
-app.mount("/static", StaticFiles(directory="/tmp"), name="static")
+STATIC_DIR = Path(__file__).parents[1] / "static"
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.exception_handler(RequestValidationError)

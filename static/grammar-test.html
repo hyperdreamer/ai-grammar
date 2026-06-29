@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Grammar Checker — Test Page</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f172a; color: #e2e8f0; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 40px 20px;
+  }
+  h1 { font-size: 22px; margin-bottom: 8px; }
+  .subtitle { color: #64748b; font-size: 13px; margin-bottom: 24px; }
+  .test-grid { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin-bottom: 24px; }
+  .test-btn {
+    background: #1e293b; border: 1px solid #334155; color: #e2e8f0;
+    padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px;
+    font-family: inherit; transition: background 0.15s;
+  }
+  .test-btn:hover { background: #334155; }
+  .chatbox {
+    width: 100%; max-width: 640px; background: #1e293b;
+    border-radius: 12px; border: 1px solid #334155; overflow: hidden;
+  }
+  .messages {
+    min-height: 200px; max-height: 400px; overflow-y: auto;
+    padding: 16px;
+  }
+  .message {
+    padding: 10px 14px; border-radius: 10px; margin-bottom: 10px;
+    max-width: 85%; line-height: 1.6; font-size: 14px;
+  }
+  .user-msg { background: #334155; margin-left: auto; }
+  .system-msg { color: #94a3b8; font-size: 12px; text-align: center; }
+  .input-row { display: flex; padding: 12px 16px; gap: 8px; border-top: 1px solid #334155; }
+  .input-row textarea {
+    flex: 1; background: #0f172a; border: 1px solid #334155; border-radius: 8px;
+    color: #e2e8f0; font-family: inherit; font-size: 14px; padding: 10px 12px;
+    resize: none; outline: none; min-height: 44px; max-height: 120px;
+  }
+  .input-row textarea:focus { border-color: #4ade80; }
+  .input-row button {
+    background: #4ade80; color: #0f172a; border: none; border-radius: 8px;
+    padding: 0 20px; font-weight: 600; font-size: 14px; cursor: pointer;
+    font-family: inherit; transition: background 0.15s;
+  }
+  .input-row button:hover { background: #22c55e; }
+  .status-bar {
+    width: 100%; max-width: 640px; margin-top: 12px;
+    font-size: 12px; color: #64748b; display: flex; justify-content: space-between;
+  }
+  .status-bar .ok { color: #4ade80; }
+  kbd {
+    background: #334155; border: 1px solid #475569; border-radius: 3px;
+    padding: 1px 6px; font-family: monospace; font-size: 11px;
+  }
+</style>
+</head>
+<body>
+  <h1>🔍 AI Grammar Checker</h1>
+  <p class="subtitle">Test page — type text with errors and submit, or use <kbd>?/</kbd> commands</p>
+
+  <div class="test-grid">
+    <button class="test-btn" onclick="fillAndSend('I has a apple and she go to store')">Grammar errors</button>
+    <button class="test-btn" onclick="fillAndSend('Their going to the party tomorow')">Spelling errors</button>
+    <button class="test-btn" onclick="fillAndSend('Due to the fact that we are in receipt of your letter')">Wordiness</button>
+    <button class="test-btn" onclick="fillText('?/help')">?/help</button>
+    <button class="test-btn" onclick="fillText('?/')">Open palette</button>
+  </div>
+
+  <div class="chatbox">
+    <div class="messages" id="messages">
+      <div class="system-msg">Submit text to check for grammar errors. Try the quick-test buttons above.</div>
+    </div>
+    <div class="input-row">
+      <textarea id="msg" rows="1" placeholder="Type a message... (use ?/ for commands)"></textarea>
+      <button type="button" onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span id="backend-status">Checking backend...</span>
+    <span>v<span id="ext-version">...</span></span>
+  </div>
+
+<script>
+  // --- PostMessage bridge for extension fetch ---
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'ag-fetch') {
+      var req = e.data;
+      fetch(req.url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: req.body })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          window.postMessage({ type: 'ag-result', id: req.id, data: data }, '*');
+        })
+        .catch(function(err) {
+          window.postMessage({ type: 'ag-error', id: req.id, error: err.message }, '*');
+        });
+    }
+  });
+
+  // --- Chat UI ---
+  var textarea = document.getElementById('msg');
+  textarea.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+  textarea.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+  });
+
+  function addMessage(cls, text) {
+    var div = document.createElement('div');
+    div.className = 'message ' + cls;
+    div.textContent = text;
+    document.getElementById('messages').appendChild(div);
+    document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
+  }
+
+  function sendMessage() {
+    var text = textarea.value.trim();
+    if (!text) return;
+    addMessage('user-msg', text);
+    textarea.value = '';
+    textarea.style.height = 'auto';
+
+    // Call backend for grammar checking
+    addMessage('system-msg', 'Checking...');
+    fetch('/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text, language: 'auto' })
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        // Remove "Checking..." message
+        var msgs = document.getElementById('messages');
+        msgs.removeChild(msgs.lastChild);
+        if (!data.errors || data.errors.length === 0) {
+          addMessage('system-msg', '✓ No errors found');
+        } else {
+          data.errors.forEach(function(e) {
+            addMessage('system-msg',
+              e.type.toUpperCase() + ': "' + e.error + '" → "' + e.correction + '" — ' + e.explanation);
+          });
+        }
+      })
+      .catch(function(err) {
+        var msgs = document.getElementById('messages');
+        if (msgs.lastChild && msgs.lastChild.textContent === 'Checking...') {
+          msgs.removeChild(msgs.lastChild);
+        }
+        addMessage('system-msg', '✗ Error: ' + err.message);
+      });
+  }
+
+  function fillAndSend(text) {
+    textarea.value = text;
+    sendMessage();
+  }
+
+  function fillText(text) {
+    textarea.value = text;
+    textarea.focus();
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+  }
+
+  // --- Backend health check (same-origin, use relative URL) ---
+  fetch('/health')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      document.getElementById('backend-status').innerHTML = 'Backend: <span class="ok">● connected</span>';
+    })
+    .catch(function() {
+      document.getElementById('backend-status').innerHTML = 'Backend: <span style="color:#f87171">● offline</span>';
+    });
+
+  // --- Fetch extension version ---
+  fetch('/version')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      document.getElementById('ext-version').textContent = d.version || '?';
+    })
+    .catch(function() {
+      document.getElementById('ext-version').textContent = '?';
+    });
+</script>
+</body>
+</html>

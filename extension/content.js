@@ -670,7 +670,117 @@
   }
 
   // -----------------------------------------------------------------------
-  // Live draft checking (checks text as you type after 5s pause)
+  // Live draft highlighting (overlay for textarea, inline for contenteditable)
+  // -----------------------------------------------------------------------
+
+  const LIVE_HIGHLIGHT_CLASS = 'ag-live-highlight';
+  let liveHighlightEl = null;
+  let liveHighlightTarget = null;
+
+  function highlightLiveDraft(ta, errors) {
+    clearLiveDraftHighlights();
+    if (!errors?.length) return;
+
+    if (ta.tagName === 'TEXTAREA') {
+      highlightLiveDraftTextarea(ta, errors);
+    } else if (ta.isContentEditable) {
+      highlightErrors(ta, errors);
+      liveHighlightTarget = ta;
+    }
+  }
+
+  function highlightLiveDraftTextarea(textarea, errors) {
+    const styles = window.getComputedStyle(textarea);
+    const rect = textarea.getBoundingClientRect();
+
+    // Create backdrop div that mirrors textarea rendering
+    const backdrop = document.createElement('div');
+    backdrop.className = LIVE_HIGHLIGHT_CLASS;
+    backdrop.style.cssText = `
+      position: fixed;
+      top: ${rect.top}px; left: ${rect.left}px;
+      width: ${rect.width}px; height: ${rect.height}px;
+      pointer-events: none; z-index: 2147483645;
+      font-family: ${styles.fontFamily}; font-size: ${styles.fontSize};
+      line-height: ${styles.lineHeight}; letter-spacing: ${styles.letterSpacing};
+      word-spacing: ${styles.wordSpacing}; white-space: ${styles.whiteSpace || 'pre-wrap'};
+      overflow: hidden; overflow-wrap: ${styles.overflowWrap || 'break-word'};
+      padding: ${styles.paddingTop} ${styles.paddingRight} ${styles.paddingBottom} ${styles.paddingLeft};
+      border: ${styles.borderWidth} solid transparent;
+      color: transparent; background: transparent;
+      text-align: ${styles.textAlign || 'start'};
+    `;
+
+    // Build highlighted HTML from errors
+    const text = textarea.value;
+    let html = '';
+    let pos = 0;
+    const sorted = [...errors].sort((a, b) => a.start - b.start);
+    for (const err of sorted) {
+      if (err.start < pos) continue;
+      // Text before this error
+      html += escapeHtml(text.slice(pos, err.start));
+      // Error span with colored underline
+      const colors = { error: '#dc2626', improvement: '#4ade80', idiom: '#60a5fa' };
+      const color = colors[err.type] || '#dc2626';
+      html += `<span style="text-decoration:underline wavy ${color}; text-underline-offset:3px;">${escapeHtml(text.slice(err.start, err.end))}</span>`;
+      pos = err.end;
+    }
+    html += escapeHtml(text.slice(pos));
+
+    backdrop.innerHTML = html;
+    document.body.appendChild(backdrop);
+    liveHighlightEl = backdrop;
+    liveHighlightTarget = textarea;
+
+    // Make textarea text transparent so backdrop underlines show through
+    const origColor = textarea.style.color;
+    textarea.style.color = 'transparent';
+    textarea.style.caretColor = origColor || styles.color;
+    textarea.dataset.agOrigColor = origColor || styles.color;
+
+    // Sync scroll
+    const syncScroll = () => { backdrop.scrollTop = textarea.scrollTop; backdrop.scrollLeft = textarea.scrollLeft; };
+    textarea.addEventListener('scroll', syncScroll);
+    backdrop._agScrollHandler = syncScroll;
+
+    // Reposition on resize
+    const reposition = () => {
+      if (!liveHighlightEl) return;
+      const r = textarea.getBoundingClientRect();
+      liveHighlightEl.style.top = r.top + 'px';
+      liveHighlightEl.style.left = r.left + 'px';
+      liveHighlightEl.style.width = r.width + 'px';
+      liveHighlightEl.style.height = r.height + 'px';
+    };
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+    backdrop._agReposition = reposition;
+  }
+
+  function clearLiveDraftHighlights() {
+    if (liveHighlightEl) {
+      if (liveHighlightEl._agScrollHandler) {
+        liveHighlightTarget?.removeEventListener('scroll', liveHighlightEl._agScrollHandler);
+      }
+      if (liveHighlightEl._agReposition) {
+        window.removeEventListener('resize', liveHighlightEl._agReposition);
+        window.removeEventListener('scroll', liveHighlightEl._agReposition, true);
+      }
+      liveHighlightEl.remove();
+      liveHighlightEl = null;
+    }
+    if (liveHighlightTarget) {
+      if (liveHighlightTarget.dataset?.agOrigColor) {
+        liveHighlightTarget.style.color = liveHighlightTarget.dataset.agOrigColor;
+        delete liveHighlightTarget.dataset.agOrigColor;
+      }
+      liveHighlightTarget = null;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Live draft checking (checks text as you type after configurable pause)
   // -----------------------------------------------------------------------
 
   function setupLiveDraftCheck() {
@@ -729,7 +839,7 @@
         });
         removeBadge();
         if (data?.errors?.length > 0) {
-          showErrorFloat(data.errors, ta);
+          highlightLiveDraft(ta, data.errors);
         }
       } catch (err) {
         console.debug('[AI Grammar] Live check error:', err);
@@ -743,7 +853,7 @@
       const text = (ta.value || ta.textContent || '').trim();
       if (text.length < liveMinChars) return;
 
-      removeErrorFloat();
+      clearLiveDraftHighlights();
       liveCheckTarget = ta;
       lastInputTime = Date.now();
     }, true);
@@ -754,12 +864,12 @@
       const ta = e.target;
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
       liveCheckTarget = null;
-      removeErrorFloat();
+      clearLiveDraftHighlights();
     }, true);
 
     document.addEventListener('submit', () => {
       liveCheckTarget = null;
-      removeErrorFloat();
+      clearLiveDraftHighlights();
     }, true);
   }
 
