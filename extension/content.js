@@ -846,7 +846,7 @@
   };
 
   /**
-   * Check if text ends with a ?/ command and execute it. Returns true if handled.
+   * Check if text starts with a ?/ command and execute it. Returns true if handled.
    */
   async function handleCommand(text) {
     if (!text.startsWith(COMMAND_PREFIX)) return false;
