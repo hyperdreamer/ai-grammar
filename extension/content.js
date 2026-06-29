@@ -930,6 +930,15 @@
 
     // Poll every 500ms to check if delay has elapsed since last input
     setInterval(() => {
+      // Clear highlights if textarea was cleared externally (no input event)
+      if (liveCheckTarget && document.contains(liveCheckTarget)) {
+        const val = (liveCheckTarget.value || liveCheckTarget.textContent || '').trim();
+        if (!val) {
+          clearLiveDraftHighlights();
+          liveCheckTarget = null;
+        }
+      }
+
       if (!liveCheckTarget || !document.contains(liveCheckTarget)) return;
 
       const elapsed = Date.now() - lastInputTime;
@@ -989,9 +998,12 @@
       activeCheckController?.abort();
       removeBadge();
 
-      // Skip placeholder-only text or empty value
+      // Skip placeholder-only text or empty value — and clear highlights
       const raw = ta.value || ta.textContent || '';
-      if (!raw || raw === ta.placeholder) return;
+      if (!raw || raw === ta.placeholder) {
+        liveCheckTarget = null;
+        return;
+      }
       const text = raw.trim();
       if (text.length < minChars) return;
 
