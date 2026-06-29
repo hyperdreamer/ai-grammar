@@ -22,6 +22,10 @@ fi
 HOST=$(python -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c.get('server',{}).get('host','127.0.0.1'))" 2>/dev/null || echo "127.0.0.1")
 PORT=$(python -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c.get('server',{}).get('port',8766))" 2>/dev/null || echo "8766")
 
+# Kill any process already on this port
+fuser -k "${PORT}/tcp" 2>/dev/null || true
+sleep 0.5
+
 echo "Installing dependencies..."
 pip install -q -r requirements.txt
 
