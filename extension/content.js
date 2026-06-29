@@ -18,7 +18,7 @@
     'SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA', 'INPUT',
     'SVG', 'MATH', 'NOSCRIPT', 'IFRAME', 'CANVAS',
   ]);
-  const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge'];
+  const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge', 'ai-grammar-ok'];
   const CHECKED_ATTR = 'data-ai-grammar-checked';
 
   // -----------------------------------------------------------------------
@@ -280,6 +280,52 @@
         .ai-grammar-badge .ag-spinner {
           border-color: #e2e8f0;
           border-top-color: #16a34a;
+        }
+        .ai-grammar-ok {
+          background: #166534;
+        }
+      }
+      .ai-grammar-ok {
+        display: inline-block;
+        color: #4ade80;
+        font-size: 0.75em;
+        font-weight: 700;
+        margin-left: 4px;
+        vertical-align: super;
+        line-height: 1;
+        animation: ai-gfadein 0.3s ease;
+        opacity: 1;
+        transition: opacity 0.5s ease 4s;
+      }
+      .ai-grammar-ok.fading {
+        opacity: 0;
+      }
+      .ai-grammar-ok-ta {
+        position: fixed;
+        z-index: 2147483645;
+        color: #4ade80;
+        font-size: 14px;
+        font-weight: 700;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        pointer-events: none;
+        animation: ai-gfadein 0.3s ease;
+        opacity: 1;
+        transition: opacity 0.5s ease 4s;
+        background: rgba(22, 101, 52, 0.85);
+        border-radius: 4px;
+        padding: 2px 6px;
+        line-height: 1.3;
+      }
+      .ai-grammar-ok-ta.fading {
+        opacity: 0;
+      }
+      @media (prefers-color-scheme: light) {
+        .ai-grammar-ok {
+          color: #16a34a;
+        }
+        .ai-grammar-ok-ta {
+          color: #16a34a;
+          background: rgba(220, 252, 231, 0.9);
         }
       }
     `;
@@ -721,6 +767,86 @@
   }
 
   // -----------------------------------------------------------------------
+  // Green checkmark — shown at end of checked text when no errors found
+  // -----------------------------------------------------------------------
+
+  let greenCheckTimers = new Map();  // container → timer (for cleanup)
+
+  function showGreenCheck(container) {
+    if (!container || !document.contains(container)) return;
+    removeGreenCheck(container);
+
+    const tag = container.tagName;
+    if (tag === 'TEXTAREA' || container.isContentEditable) {
+      // Position a fixed check near the top-right of the textarea
+      const check = document.createElement('div');
+      check.className = 'ai-grammar-ok-ta';
+      check.textContent = '✓';
+      check.setAttribute('data-ag-ok-for', '');
+      const rect = container.getBoundingClientRect();
+      check.style.top = (rect.top + 4) + 'px';
+      check.style.left = (rect.right - 28) + 'px';
+      document.body.appendChild(check);
+
+      // Reposition on scroll/resize
+      const reposition = () => {
+        if (!document.contains(check)) return;
+        const r = container.getBoundingClientRect();
+        check.style.top = (r.top + 4) + 'px';
+        check.style.left = (r.right - 28) + 'px';
+      };
+      window.addEventListener('resize', reposition);
+      window.addEventListener('scroll', reposition, true);
+      check._agReposition = reposition;
+
+      // Auto-fade + remove after 5s
+      const fadeTimer = setTimeout(() => {
+        if (document.contains(check)) check.classList.add('fading');
+      }, 4500);
+      const removeTimer = setTimeout(() => {
+        removeGreenCheck(container);
+      }, 5500);
+      check._agTimers = { fade: fadeTimer, remove: removeTimer };
+      greenCheckTimers.set(container, { el: check, timers: [fadeTimer, removeTimer], cleanup: () => {
+        window.removeEventListener('resize', reposition);
+        window.removeEventListener('scroll', reposition, true);
+      }});
+    } else {
+      // Inline checkmark at end of text for block-level containers
+      const check = document.createElement('span');
+      check.className = 'ai-grammar-ok';
+      check.textContent = '✓';
+      container.appendChild(check);
+
+      // Auto-fade + remove after 5s
+      const fadeTimer = setTimeout(() => {
+        if (document.contains(check)) check.classList.add('fading');
+      }, 4500);
+      const removeTimer = setTimeout(() => {
+        if (document.contains(check)) check.remove();
+        greenCheckTimers.delete(container);
+      }, 5500);
+      greenCheckTimers.set(container, { el: check, timers: [fadeTimer, removeTimer] });
+    }
+  }
+
+  function removeGreenCheck(container) {
+    if (container && greenCheckTimers.has(container)) {
+      const entry = greenCheckTimers.get(container);
+      entry.timers.forEach(clearTimeout);
+      if (entry.cleanup) entry.cleanup();
+      if (entry.el && document.contains(entry.el)) entry.el.remove();
+      greenCheckTimers.delete(container);
+    }
+  }
+
+  function removeAllGreenChecks() {
+    for (const [container] of greenCheckTimers) {
+      removeGreenCheck(container);
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // Floating error notification (replaces inline underlines)
   // -----------------------------------------------------------------------
 
@@ -1001,6 +1127,8 @@
         }
         if (data?.errors?.length > 0) {
           highlightLiveDraft(ta, data.errors);
+        } else {
+          showGreenCheck(ta);
         }
       } catch (err) {
         console.debug('[AI Grammar] Live check error:', err);
@@ -1014,6 +1142,7 @@
       // Clear live draft highlights and abort in-flight checks
       clearLiveDraftHighlights();
       removeErrorFloat();
+      removeAllGreenChecks();
       activeCheckController?.abort();
       if (!commandInFlight) removeBadge();
 
@@ -1039,12 +1168,14 @@
       liveCheckTarget = null;
       clearLiveDraftHighlights();
       removeErrorFloat();
+      removeAllGreenChecks();
     }, true);
 
     document.addEventListener('submit', () => {
       liveCheckTarget = null;
       clearLiveDraftHighlights();
       removeErrorFloat();
+      removeAllGreenChecks();
     }, true);
   }
 
@@ -1054,6 +1185,7 @@
 
   async function checkText(text, container) {
     const id = ++checkIdCounter;
+    removeGreenCheck(container);
     showBadge('Checking grammar...', true);
 
     // Create fresh controller, abort any previous in-flight check
@@ -1086,7 +1218,10 @@
 
       if (!data?.errors) return;
       const errors = data.errors;
-      if (errors.length === 0) return;
+      if (errors.length === 0) {
+        showGreenCheck(container);
+        return;
+      }
 
       // Highlight errors inline with colored underlines
       isHighlighting = true;
