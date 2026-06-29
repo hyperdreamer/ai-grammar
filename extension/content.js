@@ -846,6 +846,16 @@
     }
   }
 
+  /** Only clear green checks on editable elements (textareas, contentEditable).
+   *  Leaves post-submit paragraph checks untouched — those auto-dismiss. */
+  function removeEditableGreenChecks() {
+    for (const [container] of greenCheckTimers) {
+      if (container.tagName === 'TEXTAREA' || container.isContentEditable) {
+        removeGreenCheck(container);
+      }
+    }
+  }
+
   // -----------------------------------------------------------------------
   // Floating error notification (replaces inline underlines)
   // -----------------------------------------------------------------------
@@ -1142,7 +1152,7 @@
       // Clear live draft highlights and abort in-flight checks
       clearLiveDraftHighlights();
       removeErrorFloat();
-      removeAllGreenChecks();
+      removeEditableGreenChecks();
       activeCheckController?.abort();
       if (!commandInFlight) removeBadge();
 
@@ -1168,14 +1178,14 @@
       liveCheckTarget = null;
       clearLiveDraftHighlights();
       removeErrorFloat();
-      removeAllGreenChecks();
+      removeEditableGreenChecks();
     }, true);
 
     document.addEventListener('submit', () => {
       liveCheckTarget = null;
       clearLiveDraftHighlights();
       removeErrorFloat();
-      removeAllGreenChecks();
+      removeEditableGreenChecks();
     }, true);
   }
 
