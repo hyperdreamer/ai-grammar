@@ -331,11 +331,8 @@
    */
   function buildTextNodeMap(container, checkedText = '') {
     const map = [];
-    const fullText = getTextContent(container);
-    const trimLeft = fullText.length - fullText.trimStart().length;
-    const checkedStart = checkedText ? fullText.indexOf(checkedText) : -1;
-    const baseOffset = checkedStart >= 0 ? checkedStart : trimLeft;
-    let offset = -baseOffset;
+    // Walk ALL text nodes and compute absolute offsets from the raw DOM text
+    let offset = 0;
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         if (isIgnored(node.parentElement)) return NodeFilter.FILTER_REJECT;
@@ -343,10 +340,23 @@
       },
     });
     let node;
+    // First pass: collect raw full text to find where checkedText starts
+    const allNodes = [];
+    let fullRawText = '';
     while ((node = walker.nextNode())) {
-      const len = node.textContent.length;
+      allNodes.push(node);
+      fullRawText += node.textContent;
+    }
+    // Find where the checked text starts in the raw DOM text
+    const rawStart = checkedText ? fullRawText.indexOf(checkedText) : 0;
+    const baseOffset = rawStart >= 0 ? rawStart : 0;
+
+    // Second pass: build the map with corrected offsets
+    for (const n of allNodes) {
+      const len = n.textContent.length;
       if (len > 0) {
-        map.push({ textNode: node, start: offset, end: offset + len });
+        const nodeStart = offset - baseOffset;
+        map.push({ textNode: n, start: nodeStart, end: nodeStart + len });
         offset += len;
       }
     }
