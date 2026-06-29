@@ -1310,12 +1310,16 @@
     }));
   }
 
-  function showCommandPalette(ta) {
+  function showCommandPalette(ta, filter = '') {
     hideCommandPalette();
     paletteTarget = ta;
     paletteSelectedIdx = 0;
 
-    const items = buildPaletteCommands();
+    let items = buildPaletteCommands();
+    if (filter) {
+      items = items.filter(item => item.name.startsWith(filter));
+      if (items.length === 0) return;  // no match, don't show
+    }
     const rect = ta.getBoundingClientRect();
 
     paletteEl = document.createElement('div');
@@ -1586,7 +1590,11 @@
         const cmdName = parts[0].toLowerCase();
         const cmdArgs = parts.slice(1).join(' ');
 
-        if (!COMMANDS[cmdName]) return;
+        if (!COMMANDS[cmdName]) {
+          // Partial command — show filtered palette (e.g., "?/o" → only ?/off, ?/on)
+          showCommandPalette(ta, cmdName);
+          return;
+        }
 
         commandDebounce = setTimeout(async () => {
           const currentValue = ta.value || ta.textContent || '';
