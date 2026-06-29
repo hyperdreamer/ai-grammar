@@ -51,6 +51,11 @@ GRAMMAR_SYSTEM_PROMPT = """You are a grammar checker. Find issues in the text. R
 Types: error=spelling/grammar, improvement=clarity/conciseness, idiom=natural phrasing.
 Offsets must be exact. Include spaces/newlines in count. Return [] if no issues. No markdown."""
 
+POLISH_SYSTEM_PROMPT = """You are a text polisher. Improve the given text to be more natural, eloquent, and clear while preserving the exact meaning. Fix grammar, spelling, wordiness, and awkward phrasing. Return ONLY a JSON object with a single field:
+- "polished": string, the improved version
+
+Keep the tone and intent identical — only improve the quality of expression. No markdown, no extra text."""
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -79,6 +84,15 @@ class CheckResponse(BaseModel):
     """Response body returned by the /check endpoint."""
 
     errors: list[ErrorItem]
+    model: str
+    tokens_used: int
+    error: str | None = None
+
+
+class PolishResponse(BaseModel):
+    """Response body returned by the /polish endpoint."""
+
+    polished: str
     model: str
     tokens_used: int
     error: str | None = None
@@ -247,6 +261,49 @@ def _load_debug() -> bool:
 # AI provider call
 # ---------------------------------------------------------------------------
 
+async def _do_ai_call(body: dict, headers: dict, timeout: httpx.Timeout, config: AIConfig, deadline: float) -> dict[str, Any]:
+    """Shared AI provider call with retry logic."""
+    debug = _load_debug()
+    _debug("ai", f"calling provider={config.provider} model={config.model} base={config.api_base}", enabled=debug)
+
+    async def make_request():
+        async with httpx.AsyncClient(timeout=timeout, limits=httpx.Limits(max_keepalive_connections=5)) as client:
+            resp = await client.post(
+                f"{config.api_base}/chat/completions",
+                headers=headers,
+                json=body,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    last_exc: Exception | None = None
+    for attempt in (1, 2):
+        try:
+            data = await asyncio.wait_for(make_request(), timeout=deadline)
+            content = data["choices"][0]["message"]["content"]
+            tokens = data.get("usage", {}).get("total_tokens", 0)
+            _debug("ai", f"response: {len(content)} chars tokens={tokens} model={data.get('model', config.model)}", enabled=debug)
+            return {"content": content, "tokens": tokens, "model": data.get("model", config.model)}
+        except asyncio.TimeoutError:
+            last_exc = HTTPException(status_code=504, detail="AI provider timed out")
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:500]
+            last_exc = HTTPException(
+                status_code=502, detail=f"AI provider error: {exc.response.status_code} — {detail}"
+            )
+        except (httpx.RequestError, httpx.TimeoutException, ValueError, KeyError, IndexError) as exc:
+            last_exc = HTTPException(status_code=502, detail=f"AI provider error: {exc}")
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            last_exc = HTTPException(status_code=502, detail=f"Unexpected AI error: {type(exc).__name__}: {exc}")
+
+        if attempt == 1:
+            await asyncio.sleep(1)
+
+    raise last_exc  # type: ignore[misc]
+
+
 async def _call_ai(text: str, language: str, config: AIConfig, max_tokens: int | None = None) -> dict[str, Any]:
     """Send text to AI provider for grammar checking and parse the response."""
     system_prompt = GRAMMAR_SYSTEM_PROMPT
@@ -279,47 +336,7 @@ async def _call_ai(text: str, language: str, config: AIConfig, max_tokens: int |
     if max_tokens and max_tokens > 0:
         body["max_tokens"] = max_tokens
 
-    debug = _load_debug()
-    _debug("ai", f"calling provider={config.provider} model={config.model} base={config.api_base} text={len(text)}chars lang={language}", enabled=debug)
-
-    # Reuse a single client for connection keep-alive
-    async def make_request():
-        async with httpx.AsyncClient(timeout=timeout, limits=httpx.Limits(max_keepalive_connections=5)) as client:
-            resp = await client.post(
-                f"{config.api_base}/chat/completions",
-                headers=headers,
-                json=body,
-            )
-            resp.raise_for_status()
-            return resp.json()
-
-    last_exc: Exception | None = None
-    for attempt in (1, 2):
-        try:
-            data = await asyncio.wait_for(make_request(), timeout=deadline)
-            content = data["choices"][0]["message"]["content"]
-            tokens = data.get("usage", {}).get("total_tokens", 0)
-            _debug("ai", f"response: {len(content)} chars tokens={tokens} model={data.get('model', config.model)}", enabled=debug)
-            return {"content": content, "tokens": tokens, "model": data.get("model", config.model)}
-        except asyncio.TimeoutError:
-            last_exc = HTTPException(status_code=504, detail="AI provider timed out")
-        except httpx.HTTPStatusError as exc:
-            detail = exc.response.text[:500]
-            last_exc = HTTPException(
-                status_code=502, detail=f"AI provider error: {exc.response.status_code} — {detail}"
-            )
-        except (httpx.RequestError, httpx.TimeoutException, ValueError, KeyError, IndexError) as exc:
-            last_exc = HTTPException(status_code=502, detail=f"AI provider error: {exc}")
-        except Exception as exc:
-            # Any other unexpected error — log and return 502 instead of 500
-            import traceback
-            traceback.print_exc()
-            last_exc = HTTPException(status_code=502, detail=f"Unexpected AI error: {type(exc).__name__}: {exc}")
-
-        if attempt == 1:
-            await asyncio.sleep(1)
-
-    raise last_exc  # type: ignore[misc]
+    return await _do_ai_call(body, headers, timeout, config, deadline)
 
 
 def _parse_errors(content: str) -> list[ErrorItem]:
@@ -459,6 +476,106 @@ async def check_grammar(request: CheckRequest) -> Response:
     )
 
     _debug("check", f"response: {len(errors)} errors model={result['model']} tokens={result['tokens']}", enabled=debug)
+
+    return Response(
+        content=body.encode("utf-8"),
+        media_type="application/json",
+        headers={"Connection": "close"},
+    )
+
+
+def _parse_polished(content: str) -> str:
+    """Parse AI polish response — extract the 'polished' field from JSON."""
+    if not isinstance(content, str):
+        raise HTTPException(status_code=502, detail="AI response had no text content")
+
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+    content = content.strip()
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=502, detail=f"Failed to parse AI response: {content[:300]}")
+        else:
+            raise HTTPException(status_code=502, detail=f"AI response is not valid JSON: {content[:300]}")
+
+    polished = data.get("polished", "")
+    if not polished or not isinstance(polished, str):
+        raise HTTPException(status_code=502, detail=f"AI response missing 'polished' field: {content[:300]}")
+
+    return polished
+
+
+@app.post("/polish", response_model=None)
+async def polish_text(request: CheckRequest) -> Response:
+    """Polish/improve text for clarity and naturalness."""
+    text = request.text.strip()
+    debug = _load_debug()
+    _debug("polish", f"request: {len(text)} chars", enabled=debug)
+
+    if not text:
+        body = json.dumps({"polished": "", "model": "", "tokens_used": 0}, ensure_ascii=False)
+        return Response(content=body.encode("utf-8"), media_type="application/json")
+
+    if len(text) > DEFAULT_MAX_TEXT_CHARS:
+        text = text[:DEFAULT_MAX_TEXT_CHARS]
+
+    try:
+        config = load_config()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Configuration error: {type(exc).__name__}: {exc}")
+
+    timeout = httpx.Timeout(
+        connect=config.timeout.connect,
+        read=config.timeout.read,
+        write=config.timeout.write,
+        pool=config.timeout.pool,
+    )
+    headers = {
+        "Authorization": f"Bearer {config.api_key}",
+        "Content-Type": "application/json",
+    }
+    body_data = {
+        "model": config.model,
+        "messages": [
+            {"role": "system", "content": POLISH_SYSTEM_PROMPT},
+            {"role": "user", "content": text},
+        ],
+        "temperature": 0.3,
+    }
+    if request.max_tokens and request.max_tokens > 0:
+        body_data["max_tokens"] = request.max_tokens
+
+    try:
+        result = await _do_ai_call(body_data, headers, timeout, config, deadline=45)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI call failed: {exc}")
+
+    try:
+        polished = _parse_polished(result["content"])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to parse AI response: {type(exc).__name__}: {exc}")
+
+    body = json.dumps(
+        {"polished": polished, "model": result["model"], "tokens_used": result["tokens"]},
+        ensure_ascii=False,
+    )
+    _debug("polish", f"response: {len(polished)} chars model={result['model']} tokens={result['tokens']}", enabled=debug)
 
     return Response(
         content=body.encode("utf-8"),

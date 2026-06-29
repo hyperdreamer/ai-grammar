@@ -1033,17 +1033,20 @@
     if (newBlocks.length === 0) return;
 
     // Add to pending and debounce — only user-authored content
+    let matchedByText = false;
     for (const block of newBlocks) {
       const text = getTextContent(block);
       if (text.length >= minChars && (isLikelyUserMessage(block) || isUserText(text))) {
         pendingChecks.set(block, text);
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
+        if (isUserText(text)) matchedByText = true;
       }
     }
 
-    // Clear stored user text once consumed so it isn't reused
-    if (pendingChecks.size > 0) {
+    // Clear stored user text only when we actually matched by content
+    // (isLikelyUserMessage matches on CSS only, which can fire on quick replies)
+    if (pendingChecks.size > 0 && matchedByText) {
       lastUserText = '';
     }
 
@@ -1217,6 +1220,61 @@
         }
       },
     },
+    polish: {
+      help: 'Polish the text you typed (everything before ?/polish)',
+      async run(_args, ta) {
+        const value = ta.value || ta.textContent || '';
+        const cmdIdx = value.lastIndexOf('?/polish');
+        const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
+        if (!draft || draft.length < minChars) {
+          showBadge('No text to polish (need at least ' + minChars + ' characters)');
+          return;
+        }
+        showBadge('Polishing...', true);
+        try {
+          const settings = await chrome.storage.sync.get({
+            grammarHost: '127.0.0.1',
+            grammarPort: 8766,
+          });
+          const polishController = new AbortController();
+          const timeoutId = setTimeout(() => polishController.abort(), 60000);
+          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/polish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: draft, language: 'auto' }),
+            signal: polishController.signal,
+          });
+          clearTimeout(timeoutId);
+          const data = await resp.json();
+          removeBadge();
+          if (!resp.ok) {
+            showBadge(`Polish failed: ${data?.detail || resp.status}`, false, 5000);
+            return;
+          }
+          const polished = data.polished;
+          if (!polished || polished === draft) {
+            showBadge('✓ Text already polished');
+            return;
+          }
+          // Replace textarea content with polished text
+          if (ta.tagName === 'TEXTAREA') {
+            ta.value = polished;
+            ta.dispatchEvent(new Event('input', { bubbles: true }));
+          } else {
+            ta.textContent = polished;
+            ta.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          // Cancel pending live draft check — text is already polished
+          cancelLiveDraft?.();
+          activeCheckController?.abort();
+          ta.focus();
+          showBadge('✓ Polished');
+        } catch (e) {
+          removeBadge();
+          showBadge(`Polish failed: ${e.message}`);
+        }
+      },
+    },
   };
 
   /**
@@ -1239,7 +1297,7 @@
     }
 
     try {
-      if (cmdName === 'fix' && ta) {
+      if ((cmdName === 'fix' || cmdName === 'polish') && ta) {
         await cmd.run(args, ta);
       } else if (cmdName === 'fix') {
         // Called from submit handler — extract text before ?/fix and apply
@@ -1280,6 +1338,45 @@
         } catch (e) {
           removeBadge();
           showBadge(`Fix failed: ${e.message}`);
+        }
+      } else if (cmdName === 'polish') {
+        // Called from submit handler — extract text before ?/polish and polish
+        const cmdIdx = text.lastIndexOf('?/polish');
+        const draft = (cmdIdx >= 0 ? text.slice(0, cmdIdx) : text).trim();
+        if (!draft || draft.length < minChars) {
+          showBadge('No text to polish (need at least ' + minChars + ' characters)');
+          return true;
+        }
+        showBadge('Polishing...', true);
+        try {
+          const settings = await chrome.storage.sync.get({
+            grammarHost: '127.0.0.1',
+            grammarPort: 8766,
+          });
+          const polishController = new AbortController();
+          const timeoutId = setTimeout(() => polishController.abort(), 60000);
+          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/polish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: draft, language: 'auto' }),
+            signal: polishController.signal,
+          });
+          clearTimeout(timeoutId);
+          const data = await resp.json();
+          removeBadge();
+          if (!resp.ok) {
+            showBadge(`Polish failed: ${data?.detail || resp.status}`, false, 5000);
+            return true;
+          }
+          const polished = data.polished;
+          if (!polished || polished === draft) {
+            showBadge('✓ Text already polished');
+            return true;
+          }
+          showBadge(`Polished: "${polished.slice(0, 80)}${polished.length > 80 ? '...' : ''}"`, false, 10000);
+        } catch (e) {
+          removeBadge();
+          showBadge(`Polish failed: ${e.message}`);
         }
       } else {
         await cmd.run(args);
@@ -1588,7 +1685,42 @@
         const cmdArgs = parts.slice(1).join(' ');
 
         if (!COMMANDS[cmdName]) {
-          // Partial command — show filtered palette (e.g., "?/o" → only ?/off, ?/on)
+          // Partial prefix — check if it uniquely matches one command
+          const matches = buildPaletteCommands().filter(item => item.name.startsWith(cmdName));
+          if (matches.length === 1) {
+            // Single match — auto-execute (e.g., ?/pol → ?/polish)
+            hideCommandPalette();
+            const matched = matches[0];
+            commandDebounce = setTimeout(async () => {
+              const currentValue = ta.value || ta.textContent || '';
+              const fullCmd = matched.full;  // e.g., "?/polish"
+              if (!currentValue.includes(cmdText)) return;
+              try {
+                if (matched.name === 'fix' || matched.name === 'polish') {
+                  await COMMANDS[matched.name].run('', ta);
+                } else {
+                  await COMMANDS[matched.name].run('');
+                }
+              } catch (err) {
+                showBadge(`Command failed: ${err.message}`);
+              }
+              // Replace the partial prefix with the full command in text (so user sees it resolved)
+              // and strip command afterward (skip for fix/polish — they replace content)
+              if (matched.name !== 'fix' && matched.name !== 'polish') {
+                const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
+                const val = ta.value || ta.textContent || '';
+                const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
+                if (ta.tagName === 'TEXTAREA') {
+                  ta.value = cleaned;
+                  ta.dispatchEvent(new Event('input', { bubbles: true }));
+                } else {
+                  ta.textContent = cleaned;
+                }
+              }
+            }, 600);
+            return;
+          }
+          // Multiple matches — show filtered palette (e.g., "?/o" → only ?/off, ?/on)
           showCommandPalette(ta, cmdName);
           return;
         }
@@ -1598,8 +1730,8 @@
           if (!currentValue.includes(cmdText)) return;
 
           try {
-            if (cmdName === 'fix') {
-              await COMMANDS.fix.run(cmdArgs, ta);
+            if (cmdName === 'fix' || cmdName === 'polish') {
+              await COMMANDS[cmdName].run(cmdArgs, ta);
             } else {
               await COMMANDS[cmdName].run(cmdArgs);
             }
@@ -1608,8 +1740,8 @@
           }
 
           // Strip the command portion, keep text before it
-          // Skip for 'fix' — it already replaced the textarea content
-          if (cmdName !== 'fix') {
+          // Skip for 'fix' and 'polish' — they already replaced the textarea content
+          if (cmdName !== 'fix' && cmdName !== 'polish') {
             const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
             const val = ta.value || ta.textContent || '';
             const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
