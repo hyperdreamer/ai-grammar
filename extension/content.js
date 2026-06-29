@@ -49,6 +49,14 @@
   let lastUserTextTime = 0;
   const USER_TEXT_TTL_MS = 8000;       // how long we remember user text
   const USER_TEXT_MIN_MATCH = 0.6;     // fraction of user text that must appear in rendered block
+  const USER_MESSAGE_SELECTOR = [
+    '.user-msg',
+    '.user-message',
+    '.message.user',
+    '[data-testid*="user"]',
+    '[class*="user"][class*="msg"]',
+    '[class*="user"][class*="message"]',
+  ].join(', ');
 
   // -----------------------------------------------------------------------
   // CSS injection
@@ -260,6 +268,10 @@
     return true;
   }
 
+  function isLikelyUserMessage(el) {
+    return !!el?.matches?.(USER_MESSAGE_SELECTOR);
+  }
+
   /**
    * Check whether a DOM text block matches the user's last submitted text.
    * Only blocks that plausibly contain the user's own content pass this filter
@@ -325,27 +337,6 @@
   }
 
   // -----------------------------------------------------------------------
-  // Text node position mapping
-  // -----------------------------------------------------------------------
-
-  function isTextBlock(el) {
-    if (isIgnored(el)) return false;
-    if (checkedElements.has(el)) return false;
-    if (el.hasAttribute(CHECKED_ATTR)) return false;
-
-    // Skip inline elements that are just small formatting
-    const text = getTextContent(el);
-    if (text.length < minChars) return false;
-
-    // Skip elements that are mostly links/navigation
-    const links = el.querySelectorAll('a');
-    const linkText = Array.from(links).map(a => a.textContent).join('').length;
-    if (linkText > text.length * 0.5) return false;
-
-    return true;
-  }
-
-  // -----------------------------------------------------------------------
   // Highlighting
   // -----------------------------------------------------------------------
 
@@ -371,53 +362,78 @@
     }
     if (!textNodes.length) return 0;
 
+    const fullText = textNodes.map(tn => tn.node.textContent).join('');
+
+    function findRangeByOffsets(start, end) {
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > fullText.length) {
+        return null;
+      }
+
+      const startNode = textNodes.find(tn => start >= tn.start && start <= tn.end);
+      const endNode = textNodes.find(tn => end >= tn.start && end <= tn.end);
+      if (!startNode || !endNode) return null;
+
+      const range = document.createRange();
+      range.setStart(startNode.node, start - startNode.start);
+      range.setEnd(endNode.node, end - endNode.start);
+      return range;
+    }
+
+    function findRangeByText(errText, fromIndex = 0) {
+      if (!errText) return null;
+      const idx = fullText.indexOf(errText, Math.max(0, fromIndex));
+      if (idx === -1) return null;
+      return findRangeByOffsets(idx, idx + errText.length);
+    }
+
     let highlighted = 0;
-    for (const err of errors) {
-      // Find the error text in the text nodes by string matching
+    const sortedErrors = [...errors].sort((a, b) => {
+      const aStart = Number.isFinite(Number(a.start)) ? Number(a.start) : -1;
+      const bStart = Number.isFinite(Number(b.start)) ? Number(b.start) : -1;
+      return bStart - aStart;
+    });
+
+    for (const err of sortedErrors) {
       const errText = err.error;
       if (!errText) continue;
 
-      let found = false;
-      for (const tn of textNodes) {
-        const idx = tn.node.textContent.indexOf(errText);
-        if (idx === -1) continue;
+      const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
+      const start = Number(err.start);
+      const end = Number(err.end);
+      let range = null;
 
-        const range = document.createRange();
-        range.setStart(tn.node, idx);
-        range.setEnd(tn.node, idx + errText.length);
+      if (Number.isFinite(start) && Number.isFinite(end)) {
+        const candidate = fullText.slice(start, end);
+        if (!errText || candidate === errText || candidate.trim() === errText.trim()) {
+          range = findRangeByOffsets(start, end);
+        }
+      }
+      if (!range) {
+        const preferredStart = checkedText && checkedText === fullText && Number.isFinite(start) ? start : 0;
+        range = findRangeByText(errText, preferredStart) || findRangeByText(errText, 0);
+      }
+      if (!range) continue;
 
+      const span = document.createElement('span');
+      span.className = cls;
+      span.setAttribute('data-correction', err.correction || '');
+      span.setAttribute('data-explanation', err.explanation || '');
+      span.setAttribute('data-error', err.error || '');
+      span.setAttribute('data-type', err.type || 'error');
+      span.setAttribute('tabindex', '0');
+
+      try {
+        range.surroundContents(span);
+        highlighted++;
+      } catch {
         try {
-          const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
-          const span = document.createElement('span');
-          span.className = cls;
-          span.setAttribute('data-correction', err.correction || '');
-          span.setAttribute('data-explanation', err.explanation || '');
-          span.setAttribute('data-error', err.error || '');
-          span.setAttribute('data-type', err.type || 'error');
-          span.setAttribute('tabindex', '0');
-          range.surroundContents(span);
-          found = true;
+          const frag = range.extractContents();
+          span.appendChild(frag);
+          range.insertNode(span);
           highlighted++;
         } catch {
-          // Fallback: extract + reinsert
-          try {
-            const frag = range.extractContents();
-            const span = document.createElement('span');
-            span.className = cls || 'ai-grammar-error';
-            span.setAttribute('data-correction', err.correction || '');
-            span.setAttribute('data-explanation', err.explanation || '');
-            span.setAttribute('data-error', err.error || '');
-            span.setAttribute('data-type', err.type || 'error');
-            span.setAttribute('tabindex', '0');
-            span.appendChild(frag);
-            range.insertNode(span);
-            found = true;
-            highlighted++;
-          } catch {
-            // Skip
-          }
+          // Skip ranges that cannot be wrapped safely.
         }
-        break; // Found it in this text node, move to next error
       }
     }
 
@@ -538,7 +554,7 @@
   function clearPostSubmitHighlights() {
     // Unwrap all grammar spans, restoring plain text
     for (const cls of ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom']) {
-      document.querySelectorAll(`.${cls}`).forEach(span => {
+      document.querySelectorAll(`.${cls}:not([data-live-draft])`).forEach(span => {
         const parent = span.parentNode;
         if (parent) {
           while (span.firstChild) {
@@ -563,6 +579,14 @@
     } else if (!e.target.closest('.ai-grammar-tooltip')) {
       hideTooltip();
     }
+  });
+
+  document.addEventListener('mouseout', (e) => {
+    const fromError = e.target.closest?.(GRAMMAR_CLASSES);
+    if (!fromError) return;
+    const to = e.relatedTarget;
+    if (to?.closest?.('.ai-grammar-tooltip') || to?.closest?.(GRAMMAR_CLASSES)) return;
+    hideTooltip();
   });
 
   document.addEventListener('focusin', (e) => {
@@ -1063,7 +1087,7 @@
     // Add to pending and debounce — only user-authored content
     for (const block of newBlocks) {
       const text = getTextContent(block);
-      if (text.length >= minChars && isUserText(text)) {
+      if (text.length >= minChars && (isLikelyUserMessage(block) || isUserText(text))) {
         pendingChecks.set(block, text);
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
@@ -1085,6 +1109,7 @@
     pendingChecks.clear();
 
     for (const [container, text] of entries) {
+      if (!document.contains(container)) continue;
       checkText(text, container);
     }
   }
