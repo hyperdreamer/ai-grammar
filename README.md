@@ -66,10 +66,18 @@ Type and submit text in any message box, comment field, or post form. After subm
 
 ### Popup settings
 
-Click the extension icon to:
-- Enable/disable the checker
-- Select language (helps AI focus on language-specific errors)
-- Configure backend host and port
+Click the extension icon to configure:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Enabled** | ON | Toggle grammar checking |
+| **Language** | Auto-detect | Focus on language-specific errors |
+| **Backend host** | 127.0.0.1:8766 | Where the backend is running |
+| **Live check delay** | 5s | How long after you stop typing before checking |
+| **Min characters** | 30 | Minimum text length to trigger checking |
+| **Max tokens** | 2048 | AI output limit (0 = unbounded) |
+
+Changes save automatically as you type.
 
 ### Inline commands (`?/` prefix)
 

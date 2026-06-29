@@ -924,7 +924,7 @@
         const settings = await chrome.storage.sync.get({
           grammarHost: '127.0.0.1',
           grammarPort: 8766,
-          grammarMaxTokens: 0,
+          grammarMaxTokens: 2048,
         });
         const body = { text, language: 'auto' };
         if (settings.grammarMaxTokens > 0) body.max_tokens = settings.grammarMaxTokens;
@@ -995,7 +995,7 @@
       const settings = await chrome.storage.sync.get({
         grammarHost: '127.0.0.1',
         grammarPort: 8766,
-        grammarMaxTokens: 0,
+        grammarMaxTokens: 2048,
       });
       const body = { text, language: 'auto' };
       if (settings.grammarMaxTokens > 0) body.max_tokens = settings.grammarMaxTokens;
