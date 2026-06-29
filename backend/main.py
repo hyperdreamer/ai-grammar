@@ -356,6 +356,17 @@ async def health():
     """Health check endpoint."""
     return {"status": "ok"}
 
+@app.get("/version")
+async def version():
+    """Return extension version from manifest."""
+    manifest_path = Path(__file__).parents[1] / "extension" / "manifest.json"
+    try:
+        with open(manifest_path) as f:
+            data = json.load(f)
+        return {"version": data.get("version", "unknown")}
+    except Exception:
+        return {"version": "unknown"}
+
 
 @app.post("/check", response_model=None)
 async def check_grammar(request: CheckRequest) -> Response:
