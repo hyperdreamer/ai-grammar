@@ -75,7 +75,7 @@ Click the extension icon to configure:
 | **Backend host** | 127.0.0.1:8766 | Where the backend is running |
 | **Live check delay** | 5s | How long after you stop typing before checking |
 | **Min characters** | 30 | Minimum text length to trigger checking |
-| **Max tokens** | 2048 | AI output limit (0 = unbounded) |
+| **Max tokens** | 4096 | AI output limit (0 = unbounded) |
 
 Changes save automatically as you type.
 

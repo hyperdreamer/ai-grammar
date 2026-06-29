@@ -931,7 +931,7 @@
         const settings = await chrome.storage.sync.get({
           grammarHost: '127.0.0.1',
           grammarPort: 8766,
-          grammarMaxTokens: 2048,
+          grammarMaxTokens: 4096,
         });
         const body = { text, language: 'auto' };
         if (settings.grammarMaxTokens > 0) body.max_tokens = settings.grammarMaxTokens;
@@ -965,9 +965,9 @@
       activeCheckController?.abort();
       removeBadge();
 
-      // Skip placeholder-only text
+      // Skip placeholder-only text or empty value
       const raw = ta.value || ta.textContent || '';
-      if (raw === ta.placeholder) return;
+      if (!raw || raw === ta.placeholder) return;
       const text = raw.trim();
       if (text.length < minChars) return;
 
@@ -1007,7 +1007,7 @@
       const settings = await chrome.storage.sync.get({
         grammarHost: '127.0.0.1',
         grammarPort: 8766,
-        grammarMaxTokens: 2048,
+        grammarMaxTokens: 4096,
       });
       const body = { text, language: 'auto' };
       if (settings.grammarMaxTokens > 0) body.max_tokens = settings.grammarMaxTokens;

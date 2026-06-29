@@ -4,7 +4,7 @@ const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8766;
 const DEFAULT_LIVE_DELAY = 5;
 const DEFAULT_LIVE_MIN_CHARS = 30;
-const DEFAULT_MAX_TOKENS = 2048;
+const DEFAULT_MAX_TOKENS = 4096;
 
 const enabledToggle = document.getElementById('enabled');
 const languageSelect = document.getElementById('language');
