@@ -581,11 +581,11 @@
 
     const panel = document.createElement('div');
     panel.id = 'ai-grammar-float';
-    // Position near anchor if provided, otherwise bottom-right
+    // Position below anchor if provided, otherwise bottom-right
     let posStyle = '';
     if (anchorEl && document.contains(anchorEl)) {
       const rect = anchorEl.getBoundingClientRect();
-      posStyle = `top: ${Math.max(8, rect.top - 8)}px; left: ${Math.max(8, rect.right + 8)}px;`;
+      posStyle = `top: ${Math.min(window.innerHeight - 8, rect.bottom + 8)}px; left: ${Math.max(8, rect.left)}px;`;
     }
     panel.innerHTML = `
       <style>
@@ -698,6 +698,7 @@
 
     async function checkLiveDraft(ta, text) {
       try {
+        showBadge('Checking grammar...', true);
         const settings = await chrome.storage.sync.get({
           grammarHost: '127.0.0.1',
           grammarPort: 8766,
@@ -707,6 +708,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text, language: 'auto' }),
         });
+        removeBadge();
         if (data?.errors?.length > 0) {
           showErrorFloat(data.errors, ta);
         }
