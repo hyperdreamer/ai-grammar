@@ -325,74 +325,21 @@
   // Text node position mapping
   // -----------------------------------------------------------------------
 
-  /**
-   * Walk text nodes inside `container` and build a flat list of
-   * { textNode, start: global_offset, end: global_offset }.
-   */
-  function buildTextNodeMap(container, checkedText = '') {
-    const map = [];
-    // Walk ALL text nodes and compute absolute offsets from the raw DOM text
-    let offset = 0;
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        if (isIgnored(node.parentElement)) return NodeFilter.FILTER_REJECT;
-        return NodeFilter.FILTER_ACCEPT;
-      },
-    });
-    let node;
-    // First pass: collect raw full text to find where checkedText starts
-    const allNodes = [];
-    let fullRawText = '';
-    while ((node = walker.nextNode())) {
-      allNodes.push(node);
-      fullRawText += node.textContent;
-    }
-    // Find where the checked text starts in the raw DOM text
-    const rawStart = checkedText ? fullRawText.indexOf(checkedText) : 0;
-    const baseOffset = rawStart >= 0 ? rawStart : 0;
+  function isTextBlock(el) {
+    if (isIgnored(el)) return false;
+    if (checkedElements.has(el)) return false;
+    if (el.hasAttribute(CHECKED_ATTR)) return false;
 
-    // Second pass: build the map with corrected offsets
-    for (const n of allNodes) {
-      const len = n.textContent.length;
-      if (len > 0) {
-        const nodeStart = offset - baseOffset;
-        map.push({ textNode: n, start: nodeStart, end: nodeStart + len });
-        offset += len;
-      }
-    }
-    return map;
-  }
+    // Skip inline elements that are just small formatting
+    const text = getTextContent(el);
+    if (text.length < minChars) return false;
 
-  /**
-   * Given a text node map and character offsets [start, end), return a Range.
-   */
-  function createRange(map, start, end) {
-    // Find start node
-    let startNode = null, startOffset = 0;
-    let endNode = null, endOffset = 0;
+    // Skip elements that are mostly links/navigation
+    const links = el.querySelectorAll('a');
+    const linkText = Array.from(links).map(a => a.textContent).join('').length;
+    if (linkText > text.length * 0.5) return false;
 
-    for (const entry of map) {
-      if (!startNode && start >= entry.start && start < entry.end) {
-        startNode = entry.textNode;
-        startOffset = start - entry.start;
-      }
-      if (end > entry.start && end <= entry.end) {
-        endNode = entry.textNode;
-        endOffset = end - entry.start;
-        break;
-      }
-    }
-
-    if (!startNode || !endNode) return null;
-
-    const range = document.createRange();
-    try {
-      range.setStart(startNode, startOffset);
-      range.setEnd(endNode, endOffset);
-    } catch {
-      return null; // invalid offsets
-    }
-    return range;
+    return true;
   }
 
   // -----------------------------------------------------------------------
@@ -406,49 +353,68 @@
   function highlightErrors(container, errors, checkedText = '') {
     if (!errors || errors.length === 0) return 0;
 
-    // Build text node map for the container
-    const map = buildTextNodeMap(container, checkedText || getTextContent(container));
-    if (map.length === 0) return 0;
-
-    // Sort errors by start position (descending — insert from end to start
-    // to preserve offsets of earlier errors)
-    const sorted = [...errors].sort((a, b) => b.start - a.start);
+    // Build a flat list of text nodes with their global offsets
+    const textNodes = [];
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (isIgnored(node.parentElement)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let node, offset = 0;
+    while ((node = walker.nextNode())) {
+      textNodes.push({ node, start: offset, end: offset + node.textContent.length });
+      offset += node.textContent.length;
+    }
+    if (!textNodes.length) return 0;
 
     let highlighted = 0;
-    for (const err of sorted) {
-      const range = createRange(map, err.start, err.end);
-      if (!range) continue;
+    for (const err of errors) {
+      // Find the error text in the text nodes by string matching
+      const errText = err.error;
+      if (!errText) continue;
 
-      try {
-        // Map type to CSS class
-        const typeMap = {
-          error: 'ai-grammar-error',
-          improvement: 'ai-grammar-improvement',
-          idiom: 'ai-grammar-idiom',
-        };
-        const cls = typeMap[err.type] || 'ai-grammar-error';
+      let found = false;
+      for (const tn of textNodes) {
+        const idx = tn.node.textContent.indexOf(errText);
+        if (idx === -1) continue;
 
-        // Create wrapper span
-        const span = document.createElement('span');
-        span.className = cls;
-        span.setAttribute('data-correction', err.correction || '');
-        span.setAttribute('data-explanation', err.explanation || '');
-        span.setAttribute('data-error', err.error || '');
-        span.setAttribute('data-type', err.type || 'error');
-        span.setAttribute('tabindex', '0');
+        const range = document.createRange();
+        range.setStart(tn.node, idx);
+        range.setEnd(tn.node, idx + errText.length);
 
         try {
+          const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
+          const span = document.createElement('span');
+          span.className = cls;
+          span.setAttribute('data-correction', err.correction || '');
+          span.setAttribute('data-explanation', err.explanation || '');
+          span.setAttribute('data-error', err.error || '');
+          span.setAttribute('data-type', err.type || 'error');
+          span.setAttribute('tabindex', '0');
           range.surroundContents(span);
+          found = true;
+          highlighted++;
         } catch {
-          // surroundContents fails if range spans partial nodes
-          // Fallback: extract contents, wrap, reinsert
-          const frag = range.extractContents();
-          span.appendChild(frag);
-          range.insertNode(span);
+          // Fallback: extract + reinsert
+          try {
+            const frag = range.extractContents();
+            const span = document.createElement('span');
+            span.className = cls || 'ai-grammar-error';
+            span.setAttribute('data-correction', err.correction || '');
+            span.setAttribute('data-explanation', err.explanation || '');
+            span.setAttribute('data-error', err.error || '');
+            span.setAttribute('data-type', err.type || 'error');
+            span.setAttribute('tabindex', '0');
+            span.appendChild(frag);
+            range.insertNode(span);
+            found = true;
+            highlighted++;
+          } catch {
+            // Skip
+          }
         }
-        highlighted++;
-      } catch {
-        // Skip errors that can't be highlighted
+        break; // Found it in this text node, move to next error
       }
     }
 
