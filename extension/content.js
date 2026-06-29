@@ -12,7 +12,7 @@
   // Constants
   // -----------------------------------------------------------------------
 
-  const MIN_TEXT_LENGTH = 10;
+  const MIN_TEXT_LENGTH = 30;
   const DEBOUNCE_MS = 2000;
   const IGNORE_TAGS = new Set([
     'SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA', 'INPUT',
@@ -240,22 +240,6 @@
     return text.trim();
   }
 
-  function getRawTextContent(el) {
-    if (isIgnored(el)) return '';
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        if (isIgnored(node.parentElement)) return NodeFilter.FILTER_REJECT;
-        return NodeFilter.FILTER_ACCEPT;
-      },
-    });
-    let text = '';
-    let node;
-    while ((node = walker.nextNode())) {
-      text += node.textContent;
-    }
-    return text;
-  }
-
   function isTextBlock(el) {
     if (isIgnored(el)) return false;
     if (checkedElements.has(el)) return false;
@@ -297,11 +281,6 @@
     return normBlock.includes(normUser) ||
            (normUser.length > 0 && normBlock.length > 0 &&
             longestCommonSubstring(normUser, normBlock) >= normUser.length * USER_TEXT_MIN_MATCH);
-  }
-
-  function isLikelySubmittedUserBlock(el) {
-    return el?.classList?.contains('user-msg') ||
-           el?.matches?.('[data-author="user"], [data-sender="user"], [data-testid*="user"]');
   }
 
   function longestCommonSubstring(a, b) {
@@ -352,7 +331,7 @@
    */
   function buildTextNodeMap(container, checkedText = '') {
     const map = [];
-    const fullText = getRawTextContent(container);
+    const fullText = getTextContent(container);
     const trimLeft = fullText.length - fullText.trimStart().length;
     const checkedStart = checkedText ? fullText.indexOf(checkedText) : -1;
     const baseOffset = checkedStart >= 0 ? checkedStart : trimLeft;
@@ -765,7 +744,7 @@
     backdrop.style.position = 'absolute';
     backdrop.style.inset = '0';
     backdrop.style.pointerEvents = 'none';
-    backdrop.style.zIndex = '2';
+    backdrop.style.zIndex = '2147483645';
     backdrop.style.fontFamily = styles.fontFamily;
     backdrop.style.fontSize = styles.fontSize;
     backdrop.style.fontWeight = styles.fontWeight;
@@ -1054,7 +1033,7 @@
     // Add to pending and debounce — only user-authored content
     for (const block of newBlocks) {
       const text = getTextContent(block);
-      if (text.length >= MIN_TEXT_LENGTH && (isUserText(text) || isLikelySubmittedUserBlock(block))) {
+      if (text.length >= MIN_TEXT_LENGTH && isUserText(text)) {
         pendingChecks.set(block, text);
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
