@@ -39,6 +39,7 @@
   let liveHighlightScrollHandler = null;
   let liveHighlightMouseMoveHandler = null;
   let liveHighlightMouseLeaveHandler = null;
+  let liveHighlightReposition = null;
 
   // AbortController for in-flight grammar checks — aborted when user resumes typing
   let activeCheckController = null;
@@ -743,123 +744,85 @@
 
   function highlightLiveDraftTextarea(textarea, errors) {
     const text = textarea.value;
-    const styles = window.getComputedStyle(textarea);
-    const textColor = styles.color || '#e2e8f0';
-    const parent = textarea.parentNode;
-    if (!parent) return;
+    const textColor = window.getComputedStyle(textarea).color || '#e2e8f0';
+    const rect = textarea.getBoundingClientRect();
 
-    // Create a wrapper around the textarea
-    const wrapper = document.createElement('div');
-    wrapper.className = LIVE_HIGHLIGHT_CLASS;
-    wrapper.style.position = 'relative';
-    wrapper.style.display = styles.display === 'block' ? 'block' : 'inline-block';
-    wrapper.style.width = `${textarea.offsetWidth}px`;
-    wrapper.style.height = `${textarea.offsetHeight}px`;
-    wrapper.style.margin = styles.margin;
-    wrapper.style.verticalAlign = styles.verticalAlign;
-    if (styles.flexGrow !== '0') wrapper.style.flex = styles.flex;
+    // Create overlay — positioned exactly over the textarea
+    const overlay = document.createElement('div');
+    liveHighlightEl = overlay;
+    Object.assign(overlay.style, {
+      position: 'fixed', top: rect.top + 'px', left: rect.left + 'px',
+      width: rect.width + 'px', height: rect.height + 'px',
+      pointerEvents: 'none', zIndex: '2147483645',
+      font: window.getComputedStyle(textarea).font,
+      whiteSpace: 'pre-wrap', overflowWrap: 'break-word', overflow: 'hidden',
+      padding: window.getComputedStyle(textarea).padding,
+      color: textColor, background: 'transparent', boxSizing: 'border-box',
+      letterSpacing: window.getComputedStyle(textarea).letterSpacing,
+      textAlign: window.getComputedStyle(textarea).textAlign,
+    });
 
-    // Create the highlight backdrop (mirrors textarea rendering)
-    const backdrop = document.createElement('div');
-    backdrop.className = 'ag-live-highlight-backdrop';
-    backdrop.setAttribute('aria-hidden', 'true');
-    backdrop.style.position = 'absolute';
-    backdrop.style.inset = '0';
-    backdrop.style.pointerEvents = 'none';
-    backdrop.style.zIndex = '2147483645';
-    backdrop.style.fontFamily = styles.fontFamily;
-    backdrop.style.fontSize = styles.fontSize;
-    backdrop.style.fontWeight = styles.fontWeight;
-    backdrop.style.fontStyle = styles.fontStyle;
-    backdrop.style.letterSpacing = styles.letterSpacing;
-    backdrop.style.textTransform = styles.textTransform;
-    backdrop.style.textAlign = styles.textAlign;
-    backdrop.style.lineHeight = styles.lineHeight;
-    backdrop.style.whiteSpace = 'pre-wrap';
-    backdrop.style.overflowWrap = styles.overflowWrap || styles.wordWrap || 'break-word';
-    backdrop.style.wordBreak = styles.wordBreak;
-    backdrop.style.tabSize = styles.tabSize;
-    backdrop.style.overflow = 'hidden';
-    backdrop.style.padding = `${styles.paddingTop} ${styles.paddingRight} ${styles.paddingBottom} ${styles.paddingLeft}`;
-    backdrop.style.borderStyle = styles.borderStyle;
-    backdrop.style.borderWidth = `${styles.borderTopWidth} ${styles.borderRightWidth} ${styles.borderBottomWidth} ${styles.borderLeftWidth}`;
-    backdrop.style.borderColor = 'transparent';
-    backdrop.style.borderRadius = styles.borderRadius;
-    backdrop.style.boxSizing = 'border-box';
-    backdrop.style.color = 'transparent';
-    backdrop.style.background = 'transparent';
-
-    // Build highlighted HTML
-    let html = '';
-    let pos = 0;
+    // Build HTML with error spans
+    let html = '', pos = 0;
     const sorted = [...errors].sort((a, b) => a.start - b.start);
     for (const err of sorted) {
-      const start = Math.max(0, Math.min(text.length, Number(err.start)));
-      const end = Math.max(start, Math.min(text.length, Number(err.end)));
-      if (!Number.isFinite(start) || !Number.isFinite(end) || start < pos || start === end) continue;
-      html += escapeHtml(text.slice(pos, start));
+      const s = Math.max(0, Number(err.start)), e = Math.min(text.length, Number(err.end));
+      if (s < pos || s >= e) continue;
+      html += escapeHtml(text.slice(pos, s));
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
-      const type = err.type || 'error';
-      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer;" data-live-draft="true" data-start="${start}" data-end="${end}" data-correction="${escapeHtml(err.correction || '')}" data-explanation="${escapeHtml(err.explanation || '')}" data-error="${escapeHtml(err.error || text.slice(start, end))}" data-type="${escapeHtml(type)}" tabindex="0">${escapeHtml(text.slice(start, end))}</span>`;
-      pos = end;
+      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer" data-correction="${escapeHtml(err.correction||'')}" data-explanation="${escapeHtml(err.explanation||'')}" data-error="${escapeHtml(err.error||'')}" data-type="${err.type||'error'}" tabindex="0">${escapeHtml(text.slice(s, e))}</span>`;
+      pos = e;
     }
     html += escapeHtml(text.slice(pos));
-    backdrop.innerHTML = html;
+    overlay.innerHTML = html;
+    document.body.appendChild(overlay);
 
-    // Insert wrapper before textarea, move textarea inside
-    parent.insertBefore(wrapper, textarea);
-    wrapper.appendChild(textarea);
-    wrapper.appendChild(backdrop);
+    // Hide textarea text so overlay shows through
+    liveHighlightRestore = { color: textarea.style.color || '', caretColor: textarea.style.caretColor || '' };
+    textarea.style.color = 'transparent';
+    textarea.style.caretColor = textColor;
 
-    liveHighlightScrollHandler = () => {
-      backdrop.scrollTop = textarea.scrollTop;
-      backdrop.scrollLeft = textarea.scrollLeft;
-    };
-    liveHighlightScrollHandler();
+    // Sync scroll
+    liveHighlightScrollHandler = () => { overlay.scrollTop = textarea.scrollTop; overlay.scrollLeft = textarea.scrollLeft; };
+    overlay.scrollTop = textarea.scrollTop;
+    overlay.scrollLeft = textarea.scrollLeft;
     textarea.addEventListener('scroll', liveHighlightScrollHandler);
 
-    liveHighlightMouseMoveHandler = (event) => {
-      backdrop.style.pointerEvents = 'auto';
-      const hit = document.elementFromPoint(event.clientX, event.clientY);
-      backdrop.style.pointerEvents = 'none';
-      const errorEl = hit?.closest?.(GRAMMAR_CLASSES);
-      if (errorEl && backdrop.contains(errorEl)) {
-        showTooltip(errorEl);
-      } else if (!event.target.closest?.('.ai-grammar-tooltip')) {
-        hideTooltip();
-      }
+    // Reposition on resize/scroll
+    liveHighlightReposition = () => {
+      if (!liveHighlightEl || !document.contains(textarea)) return;
+      const r = textarea.getBoundingClientRect();
+      liveHighlightEl.style.top = r.top + 'px';
+      liveHighlightEl.style.left = r.left + 'px';
+      liveHighlightEl.style.width = r.width + 'px';
+      liveHighlightEl.style.height = r.height + 'px';
     };
-    liveHighlightMouseLeaveHandler = (event) => {
-      if (!event.relatedTarget?.closest?.('.ai-grammar-tooltip')) {
-        hideTooltip();
-      }
-    };
-    wrapper.addEventListener('mousemove', liveHighlightMouseMoveHandler);
-    wrapper.addEventListener('mouseleave', liveHighlightMouseLeaveHandler);
+    window.addEventListener('resize', liveHighlightReposition);
+    window.addEventListener('scroll', liveHighlightReposition, true);
 
-    liveHighlightRestore = {
-      color: textarea.style.color,
-      caretColor: textarea.style.caretColor,
-      margin: textarea.style.margin,
-      position: textarea.style.position,
-      zIndex: textarea.style.zIndex,
-      width: textarea.style.width,
-      height: textarea.style.height,
-      boxSizing: textarea.style.boxSizing,
-    };
-
-    // Keep textarea text readable; the overlay contributes only underlines.
-    textarea.style.color = textColor;
-    textarea.style.caretColor = textColor;
-    textarea.style.margin = '0';
-    textarea.style.position = 'relative';
-    textarea.style.zIndex = '1';
-    textarea.style.boxSizing = 'border-box';
-    textarea.style.width = '100%';
-    textarea.style.height = '100%';
-
-    liveHighlightEl = wrapper;
     liveHighlightTarget = textarea;
+  }
+
+  function clearLiveDraftHighlights() {
+    if (liveHighlightEl) {
+      if (liveHighlightScrollHandler) {
+        liveHighlightTarget?.removeEventListener('scroll', liveHighlightScrollHandler);
+        liveHighlightScrollHandler = null;
+      }
+      if (liveHighlightReposition) {
+        window.removeEventListener('resize', liveHighlightReposition);
+        window.removeEventListener('scroll', liveHighlightReposition, true);
+        liveHighlightReposition = null;
+      }
+      liveHighlightEl.remove();
+      liveHighlightEl = null;
+    }
+    if (liveHighlightTarget && liveHighlightRestore) {
+      liveHighlightTarget.style.color = liveHighlightRestore.color;
+      liveHighlightTarget.style.caretColor = liveHighlightRestore.caretColor;
+      liveHighlightRestore = null;
+    }
+    liveHighlightTarget = null;
   }
 
   // -----------------------------------------------------------------------
@@ -943,7 +906,7 @@
           return;
         }
         if (data?.errors?.length > 0) {
-          showErrorFloat(data.errors, ta);
+          highlightLiveDraft(ta, data.errors);
         }
       } catch (err) {
         console.debug('[AI Grammar] Live check error:', err);
