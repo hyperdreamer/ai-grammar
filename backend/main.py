@@ -288,6 +288,13 @@ async def _call_ai(text: str, language: str, config: AIConfig) -> dict[str, Any]
 
 def _parse_errors(content: str) -> list[ErrorItem]:
     """Parse the AI response content into a list of ErrorItem objects."""
+    # AI may return null/non-string content — treat as a bad upstream response
+    if not isinstance(content, str):
+        raise HTTPException(
+            status_code=502,
+            detail="AI response had no text content",
+        )
+
     # Strip markdown code fences if present
     content = content.strip()
     if content.startswith("```"):
@@ -307,18 +314,18 @@ def _parse_errors(content: str) -> list[ErrorItem]:
                 raw_errors = json.loads(match.group(0))
             except json.JSONDecodeError:
                 raise HTTPException(
-                    status_code=500,
+                    status_code=502,
                     detail=f"Failed to parse AI response as JSON: {content[:300]}",
                 )
         else:
             raise HTTPException(
-                status_code=500,
+                status_code=502,
                 detail=f"AI response is not valid JSON: {content[:300]}",
             )
 
     if not isinstance(raw_errors, list):
         raise HTTPException(
-            status_code=500,
+            status_code=502,
             detail=f"AI response is not a JSON array: {content[:300]}",
         )
 
@@ -378,16 +385,31 @@ async def check_grammar(request: CheckRequest) -> Response:
     try:
         config = load_config()
     except RuntimeError as exc:
+        # Misconfiguration is a genuine server-side problem
         raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        # Bad/unreadable config file (YAML error, bad value, OSError, ...)
+        raise HTTPException(
+            status_code=500, detail=f"Configuration error: {type(exc).__name__}: {exc}"
+        )
 
     try:
         result = await _call_ai(text, request.language, config)
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"AI call failed: {exc}")
+        # AI provider problems must surface as 502, never 500
+        raise HTTPException(status_code=502, detail=f"AI call failed: {exc}")
 
-    errors = _parse_errors(result["content"])
+    try:
+        errors = _parse_errors(result["content"])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Malformed AI output should never escape as a 500
+        raise HTTPException(
+            status_code=502, detail=f"Failed to parse AI response: {type(exc).__name__}: {exc}"
+        )
 
     body = json.dumps(
         {
