@@ -40,6 +40,9 @@
   let liveHighlightMouseMoveHandler = null;
   let liveHighlightMouseLeaveHandler = null;
 
+  // AbortController for in-flight grammar checks — aborted when user resumes typing
+  let activeCheckController = null;
+
   // Track the last text the user submitted so we only check their content,
   // not AI replies or other page text that happens to appear in the DOM.
   let lastUserText = '';
@@ -921,6 +924,10 @@
     async function checkLiveDraft(ta, text) {
       try {
         showBadge('Checking grammar...', true);
+        // Create fresh controller, abort any previous in-flight check
+        activeCheckController?.abort();
+        activeCheckController = new AbortController();
+
         const settings = await chrome.storage.sync.get({
           grammarHost: '127.0.0.1',
           grammarPort: 8766,
@@ -932,7 +939,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(30000),
+          signal: activeCheckController.signal,
         });
         const data = await resp.json();
         removeBadge();
@@ -954,6 +961,11 @@
 
       // Clear old highlights when user starts typing fresh
       clearPostSubmitHighlights();
+      clearLiveDraftHighlights();
+
+      // Abort any in-flight grammar check
+      activeCheckController?.abort();
+      removeBadge();
 
       // Skip placeholder-only text
       const raw = ta.value || ta.textContent || '';
@@ -961,7 +973,6 @@
       const text = raw.trim();
       if (text.length < minChars) return;
 
-      clearLiveDraftHighlights();
       liveCheckTarget = ta;
       lastInputTime = Date.now();
     }, true);
@@ -991,6 +1002,10 @@
     const id = ++checkIdCounter;
     showBadge('Checking grammar...', true);
 
+    // Create fresh controller, abort any previous in-flight check
+    activeCheckController?.abort();
+    activeCheckController = new AbortController();
+
     try {
       // Read backend URL and settings from storage
       const settings = await chrome.storage.sync.get({
@@ -1003,8 +1018,8 @@
       const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, language: 'auto' }),
-        signal: AbortSignal.timeout(30000),
+        body: JSON.stringify(body),
+        signal: activeCheckController.signal,
       });
       const data = await resp.json();
 
@@ -1197,7 +1212,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: draft, language: 'auto' }),
-                      signal: AbortSignal.timeout(30000),
+                      signal: activeCheckController.signal,
                     });
           const data = await resp.json();
           removeBadge();
@@ -1269,7 +1284,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: draft, language: 'auto' }),
-                      signal: AbortSignal.timeout(30000),
+                      signal: activeCheckController.signal,
                     });
           const data = await resp.json();
           removeBadge();
