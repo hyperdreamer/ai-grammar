@@ -1168,12 +1168,15 @@
             grammarHost: '127.0.0.1',
             grammarPort: 8766,
           });
+          const fixController = new AbortController();
+          const timeoutId = setTimeout(() => fixController.abort(), 30000);
           const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: draft, language: 'auto' }),
-                      signal: activeCheckController.signal,
-                    });
+            signal: fixController.signal,
+          });
+          clearTimeout(timeoutId);
           const data = await resp.json();
           removeBadge();
           if (!data?.errors?.length) {
@@ -1240,12 +1243,15 @@
             grammarHost: '127.0.0.1',
             grammarPort: 8766,
           });
+          const fixController = new AbortController();
+          const timeoutId = setTimeout(() => fixController.abort(), 30000);
           const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: draft, language: 'auto' }),
-                      signal: activeCheckController.signal,
-                    });
+            signal: fixController.signal,
+          });
+          clearTimeout(timeoutId);
           const data = await resp.json();
           removeBadge();
           if (!data?.errors?.length) {
