@@ -47,6 +47,7 @@
   // Function to cancel pending live draft check — set by setupLiveDraftCheck
   let cancelLiveDraft = null;
   let commandInFlight = false;
+  let skipLiveCheck = false;   // set during fix/polish to prevent re-triggering live draft
 
   // Track whether the extension context has been invalidated (MV3 service worker
   // termination / extension reload). Once invalidated, chrome.* APIs throw
@@ -972,6 +973,7 @@
       const text = raw.trim();
       if (text.length < minChars) return;
 
+      if (skipLiveCheck) return;   // fix/polish dispatched this input — don't re-schedule
       liveCheckTarget = ta;
       lastInputTime = Date.now();
     }, true);
@@ -1234,6 +1236,7 @@
             fixed = fixed.slice(0, err.start) + err.correction + fixed.slice(err.end);
           }
           // Replace textarea content with fixed text
+          skipLiveCheck = true;
           if (ta.tagName === 'TEXTAREA') {
             ta.value = fixed;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1241,6 +1244,7 @@
             ta.textContent = fixed;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
           }
+          skipLiveCheck = false;
           // Cancel pending live draft check — text is already corrected
           cancelLiveDraft?.();
           activeCheckController?.abort();
@@ -1300,6 +1304,7 @@
             return;
           }
           // Replace textarea content with polished text
+          skipLiveCheck = true;
           if (ta.tagName === 'TEXTAREA') {
             ta.value = polished;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1307,6 +1312,7 @@
             ta.textContent = polished;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
           }
+          skipLiveCheck = false;
           // Cancel pending live draft check — text is already polished
           cancelLiveDraft?.();
           activeCheckController?.abort();

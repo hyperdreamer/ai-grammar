@@ -22,9 +22,17 @@ fi
 HOST=$(python -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c.get('server',{}).get('host','127.0.0.1'))" 2>/dev/null || echo "127.0.0.1")
 PORT=$(python -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c.get('server',{}).get('port',8766))" 2>/dev/null || echo "8766")
 
-# Kill any process already on this port
-fuser -k "${PORT}/tcp" 2>/dev/null || true
-sleep 0.5
+# Kill only the previous ai-grammar process on this port — not arbitrary
+# processes.  Blind fuser -k would terminate unrelated daemons (e.g.
+# hermes-webui) if they happened to share the same port.
+OLD_PID=$(fuser "${PORT}/tcp" 2>/dev/null | tr -d ' ' || true)
+if [[ -n "$OLD_PID" ]] && [[ "$OLD_PID" =~ ^[0-9]+$ ]]; then
+    PROC_CWD=$(readlink "/proc/$OLD_PID/cwd" 2>/dev/null || true)
+    if [[ "$PROC_CWD" == "$BACKEND_DIR"* ]]; then
+        kill "$OLD_PID" 2>/dev/null || true
+        sleep 0.5
+    fi
+fi
 
 echo "Installing dependencies..."
 pip install -q -r requirements.txt
