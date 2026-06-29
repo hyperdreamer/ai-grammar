@@ -188,7 +188,7 @@ def load_server_config() -> ServerConfig:
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="AI Grammar Checker", version="0.0.16")
+app = FastAPI(title="AI Grammar Checker", version="0.0.24")
 
 # Allow requests from any origin (content scripts run in page context)
 app.add_middleware(
