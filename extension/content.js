@@ -846,12 +846,15 @@
   };
 
   /**
-   * Check if text starts with a ?/ command and execute it. Returns true if handled.
+   * Check if text contains a ?/ command and execute it. Returns true if handled.
    */
   async function handleCommand(text) {
-    if (!text.startsWith(COMMAND_PREFIX)) return false;
+    // Find ?/command at the end of the text
+    const match = text.match(/\?\/\w+(\s+\S+)?$/);
+    if (!match) return false;
 
-    const parts = text.slice(COMMAND_PREFIX.length).trim().split(/\s+/);
+    const cmdText = match[0].trim();
+    const parts = cmdText.slice(2).trim().split(/\s+/);
     const cmdName = parts[0].toLowerCase();
     const args = parts.slice(1).join(' ');
 
@@ -982,8 +985,10 @@
     hideCommandPalette();
     const ta = paletteTarget;
     const value = ta.value || ta.textContent || '';
-    // Replace the ?/ at the end with the new text
-    const newValue = text + value.replace(/^\?\/\s*/, '');
+    // Replace the last ?/ with the new text, keeping everything before it
+    const idx = value.lastIndexOf('?/');
+    const prefix = idx >= 0 ? value.slice(0, idx) : '';
+    const newValue = prefix + text;
     if (ta.tagName === 'TEXTAREA') {
       ta.value = newValue;
       ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -998,10 +1003,12 @@
     const ta = paletteTarget;
     hideCommandPalette();
 
-    // Replace ?/ with the full command in the textarea
+    // Replace the last ?/ with the full command, keeping text before it
     const value = ta.value || ta.textContent || '';
     const fullCmd = cmdName === 'lang' ? '?/lang en' : `?/${cmdName}`;
-    const newValue = value.replace(/^\?\/\s*/, fullCmd);
+    const idx = value.lastIndexOf('?/');
+    const prefix = idx >= 0 ? value.slice(0, idx) : '';
+    const newValue = prefix + fullCmd;
     if (ta.tagName === 'TEXTAREA') {
       ta.value = newValue;
       ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1019,7 +1026,7 @@
     // Clear the command text from the input
     setTimeout(() => {
       const v = ta.value || ta.textContent || '';
-      const cleaned = v.replace(fullCmd, '').trimStart();
+      const cleaned = v.replace(fullCmd, '').trimEnd();
       if (ta.tagName === 'TEXTAREA') {
         ta.value = cleaned;
         ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1043,8 +1050,8 @@
     // Helper: process captured text — handle commands, otherwise store for matching
     async function processCapturedText(captured) {
       if (!captured || captured.length < MIN_TEXT_LENGTH) return;
-      // Check for ?/ prefix commands first
-      if (captured.startsWith(COMMAND_PREFIX)) {
+      // Check for ?/ prefix commands at the end
+      if (/\?\/\w+(\s+\S+)?$/.test(captured)) {
         await handleCommand(captured);
         return;
       }
@@ -1107,13 +1114,13 @@
       const value = ta.value || ta.textContent || '';
 
       // Bare ?/ at end → show command palette
-      if (/^\s*\?\/$/.test(value)) {
+      if (/\?\/\s*$/.test(value) && !/\w\?\/\s*$/.test(value)) {
         showCommandPalette(ta);
         return;
       }
 
-      // Full command typed (e.g., "?/off", "?/lang en") → hide palette, execute
-      const match = value.match(/^\s*\?\/\w+(\s+\S+)?/);
+      // Full command at end (e.g., "?/off", "hello ?/off", "?/lang en")
+      const match = value.match(/\?\/\w+(\s+\S+)?$/);
       if (match) {
         hideCommandPalette();
         const cmdText = match[0].trim();
@@ -1133,7 +1140,9 @@
             showBadge(`Command failed: ${err.message}`);
           }
 
-          const cleaned = currentValue.replace(cmdText, '').trimStart();
+          // Strip the command portion, keep text before it
+          const idx = currentValue.lastIndexOf(cmdText);
+          const cleaned = (idx >= 0 ? currentValue.slice(0, idx) + currentValue.slice(idx + cmdText.length) : currentValue).trimEnd();
           if (ta.tagName === 'TEXTAREA') {
             ta.value = cleaned;
             ta.dispatchEvent(new Event('input', { bubbles: true }));

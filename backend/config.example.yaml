@@ -17,12 +17,13 @@ ai:
   # and are much cheaper than flagship models for this task.
   model: gpt-4o-mini
 
-  # API base URL. Change this for proxies or alternative providers.
+  # API base URL. /v1 is auto-appended if omitted.
   # Examples:
-  #   OpenAI:        https://api.openai.com/v1
-  #   chat2api:      http://127.0.0.1:23333/v1
-  #   DeepSeek:      https://api.deepseek.com/v1
-  api_base: https://api.openai.com/v1
+  #   OpenAI:        https://api.openai.com
+  #   Tencent TokenHub: https://tokenhub.tencentmaas.com
+  #   chat2api:      http://127.0.0.1:8000
+  #   DeepSeek:      https://api.deepseek.com
+  api_base: https://api.openai.com
 
   # --- API Key ---
   # $ prefix: read from environment variable (recommended).

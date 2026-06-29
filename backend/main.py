@@ -154,11 +154,16 @@ def load_config() -> AIConfig:
         pool=float(timeout_raw.get("pool", 10)),
     )
 
+    # Normalize api_base: auto-append /v1 if not present
+    api_base = ai_section.get("api_base", "https://api.openai.com/v1")
+    if not api_base.rstrip("/").endswith("/v1"):
+        api_base = api_base.rstrip("/") + "/v1"
+
     return AIConfig(
         provider=ai_section.get("provider", "openai"),
         model=ai_section.get("model", "gpt-4o-mini"),
         api_key=api_key,
-        api_base=ai_section.get("api_base", "https://api.openai.com/v1"),
+        api_base=api_base,
         timeout=timeout,
     )
 

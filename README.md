@@ -105,7 +105,7 @@ The backend uses OpenAI-compatible chat APIs. Configure in `backend/config.yaml`
 ai:
   provider: openai
   model: gpt-4o-mini
-  api_base: https://api.openai.com/v1
+  api_base: https://api.openai.com  # /v1 auto-appended
   api_key: ***            # reads from env var
   # api_key: sk-abc123    # or inline key
 
