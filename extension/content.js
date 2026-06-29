@@ -690,92 +690,75 @@
   }
 
   function highlightLiveDraftTextarea(textarea, errors) {
+    const text = textarea.value;
     const styles = window.getComputedStyle(textarea);
-    const rect = textarea.getBoundingClientRect();
-    const textColor = styles.color || '#e2e8f0';
 
-    // Create backdrop div that mirrors textarea rendering
+    // Save original display state
+    textarea.dataset.agLiveOrigDisplay = textarea.style.display || '';
+
+    // Create a wrapper around the textarea
+    const wrapper = document.createElement('div');
+    wrapper.className = LIVE_HIGHLIGHT_CLASS;
+    wrapper.style.cssText = 'position:relative;display:inline-block;';
+
+    // Create the highlight backdrop (mirrors textarea rendering)
     const backdrop = document.createElement('div');
-    backdrop.className = LIVE_HIGHLIGHT_CLASS;
     backdrop.style.cssText = `
-      position: fixed;
-      top: ${rect.top}px; left: ${rect.left}px;
-      width: ${rect.width}px; height: ${rect.height}px;
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
       pointer-events: none; z-index: 2147483645;
       font-family: ${styles.fontFamily}; font-size: ${styles.fontSize};
-      line-height: ${styles.lineHeight}; letter-spacing: ${styles.letterSpacing};
-      word-spacing: ${styles.wordSpacing}; white-space: ${styles.whiteSpace || 'pre-wrap'};
-      overflow: hidden; overflow-wrap: ${styles.overflowWrap || 'break-word'};
+      line-height: ${styles.lineHeight}; white-space: pre-wrap;
+      overflow-wrap: ${styles.overflowWrap || 'break-word'};
+      overflow: hidden; word-break: break-word;
       padding: ${styles.paddingTop} ${styles.paddingRight} ${styles.paddingBottom} ${styles.paddingLeft};
-      border: ${styles.borderWidth} solid transparent;
-      color: ${textColor}; background: transparent;
-      text-align: ${styles.textAlign || 'start'};
+      border: ${styles.borderTopWidth} ${styles.borderRightWidth} ${styles.borderBottomWidth} ${styles.borderLeftWidth};
+      border-style: solid; border-color: transparent;
+      color: transparent; background: transparent;
+      box-sizing: border-box;
     `;
 
-    // Build highlighted HTML from errors
-    const text = textarea.value;
+    // Build highlighted HTML
     let html = '';
     let pos = 0;
     const sorted = [...errors].sort((a, b) => a.start - b.start);
     for (const err of sorted) {
       if (err.start < pos) continue;
-      // Text before this error
       html += escapeHtml(text.slice(pos, err.start));
-      // Error span with colored underline — use grammar classes for tooltip support
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
       html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer;" data-correction="${escapeHtml(err.correction)}" data-explanation="${escapeHtml(err.explanation || '')}" data-error="${escapeHtml(err.error)}" data-type="${err.type}" tabindex="0">${escapeHtml(text.slice(err.start, err.end))}</span>`;
       pos = err.end;
     }
     html += escapeHtml(text.slice(pos));
-
     backdrop.innerHTML = html;
-    document.body.appendChild(backdrop);
-    liveHighlightEl = backdrop;
-    liveHighlightTarget = textarea;
 
-    // Make textarea text transparent so backdrop underlines show through
+    // Insert wrapper before textarea, move textarea inside
+    textarea.parentNode.insertBefore(wrapper, textarea);
+    wrapper.appendChild(textarea);
+    wrapper.appendChild(backdrop);
+
+    // Make textarea text transparent
     textarea.style.color = 'transparent';
-    textarea.style.caretColor = textColor;
-    textarea.dataset.agOrigColor = textColor;
+    textarea.style.caretColor = styles.color || '#e2e8f0';
 
-    // Sync scroll
-    const syncScroll = () => { backdrop.scrollTop = textarea.scrollTop; backdrop.scrollLeft = textarea.scrollLeft; };
-    textarea.addEventListener('scroll', syncScroll);
-    backdrop._agScrollHandler = syncScroll;
-
-    // Reposition on resize
-    const reposition = () => {
-      if (!liveHighlightEl) return;
-      const r = textarea.getBoundingClientRect();
-      liveHighlightEl.style.top = r.top + 'px';
-      liveHighlightEl.style.left = r.left + 'px';
-      liveHighlightEl.style.width = r.width + 'px';
-      liveHighlightEl.style.height = r.height + 'px';
-    };
-    window.addEventListener('resize', reposition);
-    window.addEventListener('scroll', reposition, true);
-    backdrop._agReposition = reposition;
+    liveHighlightEl = wrapper;
+    liveHighlightTarget = textarea;
   }
 
   function clearLiveDraftHighlights() {
-    if (liveHighlightEl) {
-      if (liveHighlightEl._agScrollHandler) {
-        liveHighlightTarget?.removeEventListener('scroll', liveHighlightEl._agScrollHandler);
-      }
-      if (liveHighlightEl._agReposition) {
-        window.removeEventListener('resize', liveHighlightEl._agReposition);
-        window.removeEventListener('scroll', liveHighlightEl._agReposition, true);
+    if (liveHighlightEl && liveHighlightTarget) {
+      // Restore textarea to its original position
+      const parent = liveHighlightEl.parentNode;
+      if (parent) {
+        parent.insertBefore(liveHighlightTarget, liveHighlightEl);
       }
       liveHighlightEl.remove();
-      liveHighlightEl = null;
+
+      // Restore textarea appearance
+      liveHighlightTarget.style.color = '';
+      liveHighlightTarget.style.caretColor = '';
     }
-    if (liveHighlightTarget) {
-      if (liveHighlightTarget.dataset?.agOrigColor) {
-        liveHighlightTarget.style.color = liveHighlightTarget.dataset.agOrigColor;
-        delete liveHighlightTarget.dataset.agOrigColor;
-      }
-      liveHighlightTarget = null;
-    }
+    liveHighlightEl = null;
+    liveHighlightTarget = null;
   }
 
   // -----------------------------------------------------------------------
@@ -1056,12 +1039,60 @@
         showBadge(lines.join(' | '), false, 8000);
       },
     },
+    fix: {
+      help: 'Auto-correct the text you typed (everything before ?/fix)',
+      async run(_args, ta) {
+        const value = ta.value || ta.textContent || '';
+        const cmdIdx = value.lastIndexOf('?/fix');
+        const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
+        if (!draft || draft.length < MIN_TEXT_LENGTH) {
+          showBadge('No text to fix (need at least ' + MIN_TEXT_LENGTH + ' characters)');
+          return;
+        }
+        showBadge('Fixing...', true);
+        try {
+          const settings = await chrome.storage.sync.get({
+            grammarHost: '127.0.0.1',
+            grammarPort: 8766,
+          });
+          const data = await fetchViaPage(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: draft, language: 'auto' }),
+          });
+          removeBadge();
+          if (!data?.errors?.length) {
+            showBadge('✓ No corrections needed');
+            return;
+          }
+          // Apply corrections bottom-up to preserve offsets
+          const sorted = [...data.errors].sort((a, b) => b.start - a.start);
+          let fixed = draft;
+          for (const err of sorted) {
+            fixed = fixed.slice(0, err.start) + err.correction + fixed.slice(err.end);
+          }
+          // Replace textarea content with fixed text
+          if (ta.tagName === 'TEXTAREA') {
+            ta.value = fixed;
+            ta.dispatchEvent(new Event('input', { bubbles: true }));
+          } else {
+            ta.textContent = fixed;
+            ta.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          ta.focus();
+          showBadge(`✓ Fixed ${sorted.length} issue${sorted.length > 1 ? 's' : ''}`);
+        } catch (e) {
+          removeBadge();
+          showBadge(`Fix failed: ${e.message}`);
+        }
+      },
+    },
   };
 
   /**
    * Check if text contains a ?/ command and execute it. Returns true if handled.
    */
-  async function handleCommand(text) {
+  async function handleCommand(text, ta = null) {
     // Find ?/command at the end of the text
     const match = text.match(/\?\/\w+(\s+\S+)?$/);
     if (!match) return false;
@@ -1078,7 +1109,46 @@
     }
 
     try {
-      await cmd.run(args);
+      if (cmdName === 'fix' && ta) {
+        await cmd.run(args, ta);
+      } else if (cmdName === 'fix') {
+        // Called from submit handler — extract text before ?/fix and apply
+        const cmdIdx = text.lastIndexOf('?/fix');
+        const draft = (cmdIdx >= 0 ? text.slice(0, cmdIdx) : text).trim();
+        if (!draft || draft.length < MIN_TEXT_LENGTH) {
+          showBadge('No text to fix (need at least ' + MIN_TEXT_LENGTH + ' characters)');
+          return true;
+        }
+        showBadge('Fixing...', true);
+        try {
+          const settings = await chrome.storage.sync.get({
+            grammarHost: '127.0.0.1',
+            grammarPort: 8766,
+          });
+          const data = await fetchViaPage(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: draft, language: 'auto' }),
+          });
+          removeBadge();
+          if (!data?.errors?.length) {
+            showBadge('✓ No corrections needed');
+            return true;
+          }
+          const sorted = [...data.errors].sort((a, b) => b.start - a.start);
+          let fixed = draft;
+          for (const err of sorted) {
+            fixed = fixed.slice(0, err.start) + err.correction + fixed.slice(err.end);
+          }
+          // Show corrected text as a float notification
+          showBadge(`Corrected: "${fixed.slice(0, 80)}${fixed.length > 80 ? '...' : ''}"`, false, 10000);
+        } catch (e) {
+          removeBadge();
+          showBadge(`Fix failed: ${e.message}`);
+        }
+      } else {
+        await cmd.run(args);
+      }
     } catch (e) {
       showBadge(`Command failed: ${e.message}`);
     }
@@ -1348,19 +1418,27 @@
           if (!currentValue.includes(cmdText)) return;
 
           try {
-            await COMMANDS[cmdName].run(cmdArgs);
+            if (cmdName === 'fix') {
+              await COMMANDS.fix.run(cmdArgs, ta);
+            } else {
+              await COMMANDS[cmdName].run(cmdArgs);
+            }
           } catch (err) {
             showBadge(`Command failed: ${err.message}`);
           }
 
           // Strip the command portion, keep text before it
-          const idx = currentValue.lastIndexOf(cmdText);
-          const cleaned = (idx >= 0 ? currentValue.slice(0, idx) + currentValue.slice(idx + cmdText.length) : currentValue).trimEnd();
-          if (ta.tagName === 'TEXTAREA') {
-            ta.value = cleaned;
-            ta.dispatchEvent(new Event('input', { bubbles: true }));
-          } else {
-            ta.textContent = cleaned;
+          // Skip for 'fix' — it already replaced the textarea content
+          if (cmdName !== 'fix') {
+            const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
+            const val = ta.value || ta.textContent || '';
+            const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
+            if (ta.tagName === 'TEXTAREA') {
+              ta.value = cleaned;
+              ta.dispatchEvent(new Event('input', { bubbles: true }));
+            } else {
+              ta.textContent = cleaned;
+            }
           }
         }, 600);
         return;
