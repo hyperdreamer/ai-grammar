@@ -273,7 +273,7 @@ async def _call_ai(text: str, language: str, config: AIConfig) -> dict[str, Any]
             {"role": "user", "content": text},
         ],
         "temperature": 0.1,
-        "max_tokens": 1024,  # grammar responses are small
+        "max_tokens": 2048,  # grammar responses are small
     }
 
     debug = _load_debug()
