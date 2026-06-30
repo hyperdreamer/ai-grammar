@@ -3,11 +3,9 @@
 
 Uses the persistent browser profile from auth_whatsapp.py.
 Sends a message with a deliberate grammar error to the first chat
-in the list and captures extension console logs to diagnose rendering issues.
+in the list and verifies overlay highlighting via DOM inspection.
 """
-
 import sys
-import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -20,16 +18,6 @@ if not PROFILE_DIR.is_dir():
     sys.exit(1)
 
 TEST_MESSAGE = "I has went to the store yesterday and buyed some apple."
-
-# --- Collect extension console logs ---
-logs: list[dict] = []
-
-
-def on_console(msg):
-    if "[AI Grammar]" in msg.text:
-        logs.append({"type": msg.type, "text": msg.text, "ts": time.time()})
-        print(f"  [EXT] {msg.text}")
-
 
 print("Launching WhatsApp Web with extension...")
 print(f"Test message: {TEST_MESSAGE!r}")
@@ -47,7 +35,6 @@ with sync_playwright() as p:
     )
 
     page = context.new_page()
-    page.on("console", on_console)
 
     # --- Navigate to WhatsApp Web ---
     page.goto("https://web.whatsapp.com/", wait_until="domcontentloaded")
@@ -79,7 +66,6 @@ with sync_playwright() as p:
 
     # --- Type and send the test message ---
     print(f"\nSending test message: {TEST_MESSAGE!r}")
-    logs.clear()  # clear logs collected during navigation
 
     # Find the input box
     input_box = page.locator(
@@ -119,52 +105,28 @@ with sync_playwright() as p:
     print("RESULTS")
     print("=" * 60)
 
-    grammar_logs = [l for l in logs if "[AI Grammar]" in l["text"]]
-    if not grammar_logs:
-        print("✗ No [AI Grammar] console logs found.")
-        print("  The extension may not be running. Check:")
-        print("  1. Is the extension loaded? Check chrome://extensions")
-        print("  2. Is the backend running on port 8766?")
-        print("  3. Open DevTools in the launched browser and check manually.")
+    # Check DOM for overlay elements (not console logs — those were removed in v1.3.0)
+    overlay_count = page.evaluate('document.querySelectorAll(".ag-message-overlay").length')
+    error_spans = page.evaluate('''() => {
+        const spans = document.querySelectorAll('.ag-message-overlay .ai-grammar-error, .ag-message-overlay .ai-grammar-improvement, .ag-message-overlay .ai-grammar-idiom');
+        return Array.from(spans).map(s => s.textContent);
+    }''')
+    green_checks = page.evaluate('document.querySelectorAll(".ai-grammar-ok-ta").length')
+    badge_visible = page.evaluate('''() => {
+        const b = document.querySelector('.ai-grammar-badge');
+        return b ? b.textContent : null;
+    }''')
+
+    print(f"  Overlay divs in DOM: {overlay_count}")
+    if error_spans:
+        print(f"  Error spans: {error_spans}")
     else:
-        print(f"Found {len(grammar_logs)} grammar-related log entries:\n")
-        for log in grammar_logs:
-            print(f"  [{log['type']}] {log['text']}")
+        print(f"  Error spans: 0")
+    print(f"  Green checks: {green_checks}")
+    print(f"  Badge text: {badge_visible}")
 
-    print()
-    print("All console logs for manual review:")
-    for log in logs:
-        print(f"  [{log['type']}] {log['text']}")
-
-    print("\nBrowser will close in 10s. Review the WhatsApp window if needed.")
-    page.wait_for_timeout(10_000)
-    context.close()
-
-    # --- Summary ---
     print("\nDIAGNOSIS SUMMARY:")
-    block_queued = any("Block queued" in l["text"] for l in logs)
-    check_result = any("checkText result" in l["text"] for l in logs)
-    green_check = any("showGreenCheck" in l["text"] for l in logs)
-    highlight = any("highlightErrors" in l["text"] for l in logs)
-
-    print(f"  Block queued by MutationObserver: {'✓' if block_queued else '✗'}")
-    if block_queued:
-        for l in logs:
-            if "Block queued" in l["text"]:
-                print(f"    → {l['text']}")
-
-    print(f"  checkText API result: {'✓' if check_result else '✗'}")
-    if check_result:
-        for l in logs:
-            if "checkText result" in l["text"]:
-                print(f"    → {l['text']}")
-
-    print(f"  showGreenCheck / highlightErrors: {'✓' if (green_check or highlight) else '✗'}")
-    if green_check:
-        for l in logs:
-            if "showGreenCheck" in l["text"]:
-                print(f"    → {l['text']}")
-    if highlight:
-        for l in logs:
-            if "highlightErrors" in l["text"]:
-                print(f"    → {l['text']}")
+    print(f"  Overlay created: {'✓' if overlay_count > 0 else '✗'}")
+    print(f"  Errors highlighted: {'✓' if len(error_spans) > 0 else '✗'}")
+    print(f"  Badge visible: {'✓' if badge_visible else '✗'}")
+    print(f"  Green check: {'✓' if green_checks > 0 else '— (errors found, no check expected)'}" if error_spans else f"  Green check: {'✓' if green_checks > 0 else '✗'}")
