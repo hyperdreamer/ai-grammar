@@ -41,6 +41,10 @@
   let liveHighlightMouseLeaveHandler = null;
   let liveHighlightReposition = null;
 
+  // Overlay-based post-submit highlights (survives React re-renders on
+  // WhatsApp Web, Teams, etc. — DOM injection gets stripped by vdom reconcilation)
+  const messageOverlays = new Map(); // container → { overlay, cleanup }
+
   // AbortController for in-flight grammar checks — aborted when user resumes typing
   let activeCheckController = null;
 
@@ -328,6 +332,10 @@
           background: rgba(220, 252, 231, 0.9);
         }
       }
+      .ag-message-overlay {
+        color: transparent !important;
+        -webkit-text-fill-color: transparent !important;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -559,6 +567,124 @@
     }
 
     return highlighted;
+  }
+
+  /**
+   * Overlay-based post-submit highlighting.
+   *
+   * Instead of injecting <span> elements into the container DOM (which React /
+   * Vue re-rendering strips within seconds), create a fixed-position overlay
+   * that mirrors the message text with error underlines.  Non-error text is
+   * transparent; only the red/green/blue wavy underlines are visible, sitting
+   * on top of the real message.
+   */
+  function highlightOverlay(container, errors, fullText) {
+    if (!errors?.length) return 0;
+
+    // Remove any existing overlay for this container
+    removeMessageOverlay(container);
+
+    // Build HTML with invisible non-error text and visible error spans
+    let html = '';
+    let pos = 0;
+    const sorted = [...errors].sort((a, b) => Number(a.start) - Number(b.start));
+
+    for (const err of sorted) {
+      const s = Math.max(0, Number(err.start));
+      const e = Math.min(fullText.length, Number(err.end));
+      if (s < pos || s >= e) continue;
+
+      html += escapeHtml(fullText.slice(pos, s));
+
+      const cls = err.type === 'improvement' ? 'ai-grammar-improvement' :
+                  err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
+      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer"
+          data-correction="${escapeHtml(err.correction || '')}"
+          data-explanation="${escapeHtml(err.explanation || '')}"
+          data-error="${escapeHtml(err.error || '')}"
+          data-type="${err.type || 'error'}" tabindex="0">${escapeHtml(fullText.slice(s, e))}</span>`;
+      pos = e;
+    }
+    html += escapeHtml(fullText.slice(pos));
+
+    // Create the overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'ag-message-overlay';
+    overlay.setAttribute('data-ag-overlay', '');
+    overlay.innerHTML = html;
+
+    // Copy font / layout metrics from container so text lines up exactly
+    const cs = window.getComputedStyle(container);
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      zIndex: '2147483644',
+      pointerEvents: 'none',
+      font: cs.font,
+      fontSize: cs.fontSize,
+      fontFamily: cs.fontFamily,
+      fontWeight: cs.fontWeight,
+      lineHeight: cs.lineHeight,
+      letterSpacing: cs.letterSpacing,
+      wordSpacing: cs.wordSpacing,
+      textAlign: cs.textAlign,
+      whiteSpace: cs.whiteSpace,
+      overflowWrap: cs.overflowWrap,
+      wordBreak: cs.wordBreak,
+      color: 'transparent',
+      WebkitTextFillColor: 'transparent',
+      background: 'transparent',
+      paddingTop: cs.paddingTop,
+      paddingRight: cs.paddingRight,
+      paddingBottom: cs.paddingBottom,
+      paddingLeft: cs.paddingLeft,
+      boxSizing: cs.boxSizing,
+      overflow: 'hidden',
+    });
+
+    document.body.appendChild(overlay);
+
+    // --- Position & track ---
+    function reposition() {
+      if (!document.contains(container)) {
+        removeMessageOverlay(container);
+        return;
+      }
+      const r = container.getBoundingClientRect();
+      overlay.style.top = r.top + 'px';
+      overlay.style.left = r.left + 'px';
+      overlay.style.width = r.width + 'px';
+    }
+
+    reposition();
+
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+
+    // Polling fallback — container may be removed without a mutation
+    // we can observe (e.g. React recycles the parent).
+    const poll = setInterval(() => {
+      if (!document.contains(container)) removeMessageOverlay(container);
+    }, 2000);
+
+    const cleanup = () => {
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+      clearInterval(poll);
+      if (document.contains(overlay)) overlay.remove();
+    };
+
+    messageOverlays.set(container, { overlay, cleanup });
+    console.debug('[AI Grammar] Overlay created:', { errors: errors.length, containerTag: container.tagName });
+    return errors.length;
+  }
+
+  function removeMessageOverlay(container) {
+    const entry = messageOverlays.get(container);
+    if (entry) {
+      entry.cleanup();
+      messageOverlays.delete(container);
+      console.debug('[AI Grammar] Overlay removed');
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -799,49 +925,44 @@
     if (!document.contains(container)) { console.debug('[AI Grammar] showGreenCheck: container detached from DOM, tag:', container.tagName); return; }
     removeGreenCheck(container);
 
-    const tag = container.tagName;
-    if (tag === 'TEXTAREA' || container.isContentEditable) {
-      // Position a fixed check near the top-right of the textarea
-      const check = document.createElement('div');
+    // Always use fixed-position — inline appendChild gets stripped by React re-renders
+    const check = document.createElement('div');
+    if (container.tagName === 'TEXTAREA' || container.isContentEditable) {
       check.className = 'ai-grammar-ok-ta';
-      check.textContent = '✓';
-      check.setAttribute('data-ag-ok-for', '');
-      const rect = container.getBoundingClientRect();
-      check.style.top = (rect.top + 4) + 'px';
-      check.style.left = (rect.right - 28) + 'px';
-      document.body.appendChild(check);
-
-      // Reposition on scroll/resize
-      const reposition = () => {
-        if (!document.contains(check)) return;
-        const r = container.getBoundingClientRect();
-        check.style.top = (r.top + 4) + 'px';
-        check.style.left = (r.right - 28) + 'px';
-      };
-      window.addEventListener('resize', reposition);
-      window.addEventListener('scroll', reposition, true);
-      check._agReposition = reposition;
-
-      // Auto-fade + remove after 5s
-      const fadeTimer = setTimeout(() => {
-        if (document.contains(check)) check.classList.add('fading');
-      }, 4500);
-      const removeTimer = setTimeout(() => {
-        removeGreenCheck(container);
-      }, 5500);
-      check._agTimers = { fade: fadeTimer, remove: removeTimer };
-      greenCheckTimers.set(container, { el: check, timers: [fadeTimer, removeTimer], cleanup: () => {
-        window.removeEventListener('resize', reposition);
-        window.removeEventListener('scroll', reposition, true);
-      }});
     } else {
-      // Inline checkmark at end of text for block-level containers — permanent
-      const check = document.createElement('span');
-      check.className = 'ai-grammar-ok';
-      check.textContent = '✓';
-      container.appendChild(check);
-      greenCheckTimers.set(container, { el: check, timers: [] });
+      // Post-submit message: fixed-position at bottom-right of container
+      check.className = 'ai-grammar-ok-ta';
     }
+    check.textContent = '✓';
+    check.setAttribute('data-ag-ok-for', '');
+    const rect = container.getBoundingClientRect();
+    check.style.top = (rect.bottom - 24) + 'px';
+    check.style.left = (rect.right - 28) + 'px';
+    document.body.appendChild(check);
+
+    // Reposition on scroll/resize
+    const reposition = () => {
+      if (!document.contains(check)) return;
+      const r = container.getBoundingClientRect();
+      check.style.top = (r.bottom - 24) + 'px';
+      check.style.left = (r.right - 28) + 'px';
+    };
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+    check._agReposition = reposition;
+
+    // Auto-fade + remove after 5s
+    const fadeTimer = setTimeout(() => {
+      if (document.contains(check)) check.classList.add('fading');
+    }, 4500);
+    const removeTimer = setTimeout(() => {
+      removeGreenCheck(container);
+    }, 5500);
+    check._agTimers = { fade: fadeTimer, remove: removeTimer };
+    greenCheckTimers.set(container, { el: check, timers: [fadeTimer, removeTimer], cleanup: () => {
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+    }});
   }
 
   function removeGreenCheck(container) {
@@ -1257,11 +1378,12 @@
         return;
       }
 
-      // Highlight errors inline with colored underlines
+      // Use overlay-based highlighting — survives React/Vue re-renders
+      // (DOM injection via highlightErrors gets stripped on WhatsApp, Teams, etc.)
       isHighlighting = true;
-      const count = highlightErrors(container, errors, text);
+      const count = highlightOverlay(container, errors, text);
       isHighlighting = false;
-      console.debug('[AI Grammar] highlightErrors returned:', count, 'errors, container:', container.tagName, 'inDOM:', document.contains(container));
+      console.debug('[AI Grammar] highlightOverlay returned:', count, 'errors, container:', container.tagName, 'inDOM:', document.contains(container));
 
       if (count > 0) {
         const breakdown = { error: 0, improvement: 0, idiom: 0 };
