@@ -347,7 +347,10 @@
   function isIgnored(el) {
     if (!el || !el.tagName) return true;
     if (IGNORE_TAGS.has(el.tagName)) return true;
-    if (el.isContentEditable) return true;
+    // Only skip elements that have contentEditable directly set (not inherited).
+    // Descendants of contentEditable must pass through so live-draft highlighting
+    // can find text nodes inside the input.
+    if (el.contentEditable === 'true') return true;
     // Check for our own classes
     for (const cls of IGNORE_CLASSES) {
       if (el.classList?.contains(cls)) return true;
