@@ -1559,9 +1559,15 @@
     }
     if (!container) return;
 
-    // If the container is tiny, walk up to a block-level element
+    // Walk up past inline elements to the nearest block-level container.
+    // The old text-length heuristic (getTextContent(el).length < text.length * 1.2)
+    // overshot to document.body for short selections because no ancestor has
+    // enough text — producing overlays at full viewport width with left-aligned
+    // text, while the actual text sits in a right-aligned message bubble.
     let el = container;
-    while (el && el !== document.body && getTextContent(el).length < text.length * 1.2) {
+    while (el && el !== document.body) {
+      const display = getComputedStyle(el).display;
+      if (display !== 'inline' && display !== 'contents') break;
       el = el.parentElement;
     }
     container = el || container;
