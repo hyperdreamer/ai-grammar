@@ -61,7 +61,7 @@ Type and submit text in any message box, comment field, or post form. After subm
 ### Manual mode
 
 1. Select any text on a page
-2. Press `Ctrl+Shift+G` (Mac: `Cmd+Shift+G`)
+2. Press `Alt+G` (Mac: `Alt+G`)
 3. Errors in the selection will be highlighted
 
 ### Popup settings
@@ -144,7 +144,7 @@ Smaller models work well because grammar checking is a focused task with a struc
 
 | Action | Shortcut |
 |---|---|
-| Check selected text | `Ctrl+Shift+G` / `Cmd+Shift+G` |
+| Check selected text | `Alt+G` |
 
 ## Limitations
 

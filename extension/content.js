@@ -927,17 +927,13 @@
     removeGreenCheck(container);
 
     // Always use fixed-position — inline appendChild gets stripped by React re-renders
+    const isEditable = container.tagName === 'TEXTAREA' || container.isContentEditable;
     const check = document.createElement('div');
-    if (container.tagName === 'TEXTAREA' || container.isContentEditable) {
-      check.className = 'ai-grammar-ok-ta';
-    } else {
-      // Post-submit message: fixed-position at bottom-right of container
-      check.className = 'ai-grammar-ok-ta';
-    }
+    check.className = 'ai-grammar-ok-ta';
     check.textContent = '✓';
     check.setAttribute('data-ag-ok-for', '');
     const rect = container.getBoundingClientRect();
-    check.style.top = (rect.bottom - 24) + 'px';
+    check.style.top = (isEditable ? rect.top + 4 : rect.bottom - 24) + 'px';
     check.style.left = (rect.right - 28) + 'px';
     document.body.appendChild(check);
 
@@ -945,25 +941,33 @@
     const reposition = () => {
       if (!document.contains(check)) return;
       const r = container.getBoundingClientRect();
-      check.style.top = (r.bottom - 24) + 'px';
+      check.style.top = (isEditable ? r.top + 4 : r.bottom - 24) + 'px';
       check.style.left = (r.right - 28) + 'px';
     };
     window.addEventListener('resize', reposition);
     window.addEventListener('scroll', reposition, true);
     check._agReposition = reposition;
 
-    // Auto-fade + remove after 5s
-    const fadeTimer = setTimeout(() => {
-      if (document.contains(check)) check.classList.add('fading');
-    }, 4500);
-    const removeTimer = setTimeout(() => {
-      removeGreenCheck(container);
-    }, 5500);
-    check._agTimers = { fade: fadeTimer, remove: removeTimer };
-    greenCheckTimers.set(container, { el: check, timers: [fadeTimer, removeTimer], cleanup: () => {
-      window.removeEventListener('resize', reposition);
-      window.removeEventListener('scroll', reposition, true);
-    }});
+    if (isEditable) {
+      // Live draft — auto-fade + remove after 5s
+      const fadeTimer = setTimeout(() => {
+        if (document.contains(check)) check.classList.add('fading');
+      }, 4500);
+      const removeTimer = setTimeout(() => {
+        removeGreenCheck(container);
+      }, 5500);
+      check._agTimers = { fade: fadeTimer, remove: removeTimer };
+      greenCheckTimers.set(container, { el: check, timers: [fadeTimer, removeTimer], cleanup: () => {
+        window.removeEventListener('resize', reposition);
+        window.removeEventListener('scroll', reposition, true);
+      }});
+    } else {
+      // Post-submit message — permanent (no auto-fade)
+      greenCheckTimers.set(container, { el: check, timers: [], cleanup: () => {
+        window.removeEventListener('resize', reposition);
+        window.removeEventListener('scroll', reposition, true);
+      }});
+    }
   }
 
   function removeGreenCheck(container) {
