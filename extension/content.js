@@ -2104,6 +2104,32 @@
       processCapturedText(captured);
     }, true);
 
+    // Capture on mousedown BEFORE the platform clears the input
+    // (WhatsApp Web clears contentEditable on mousedown, so by the time
+    // 'click' fires the text is gone)
+    document.addEventListener('mousedown', (e) => {
+      const control = e.target.closest?.('button, input[type="button"], input[type="submit"], [role="button"]');
+      if (!control) return;
+      const ariaLabel = (control.getAttribute?.('aria-label') || '').toLowerCase();
+      const testId = (control.getAttribute?.('data-testid') || '').toLowerCase();
+      const label = (control.innerText || control.value || ariaLabel || '').trim().toLowerCase();
+      const looksLikeSend = /^(send|submit|post|reply|comment)$/.test(label) ||
+                            control.type === 'submit' ||
+                            testId.includes('send');
+      if (!looksLikeSend) return;
+
+      // Grab text from the contentEditable input before the platform clears it
+      const active = document.activeElement;
+      if (active?.tagName === 'TEXTAREA' || active?.isContentEditable) {
+        const captured = (active.value || active.textContent || '').trim();
+        if (captured) {
+          clearTimeout(commandDebounce);
+          commandDebounce = null;
+          processCapturedText(captured);
+        }
+      }
+    }, true);
+
     document.addEventListener('click', (e) => {
       // Standard button elements
       let control = e.target.closest?.('button, input[type="button"], input[type="submit"]');
