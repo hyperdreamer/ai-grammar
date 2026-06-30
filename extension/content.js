@@ -1319,6 +1319,7 @@
       clearLiveDraftHighlights();
       removeErrorFloat();
       removeEditableGreenChecks();
+      activeCheckController?.abort();
     }, true);
 
     document.addEventListener('submit', () => {
@@ -1326,6 +1327,7 @@
       clearLiveDraftHighlights();
       removeErrorFloat();
       removeEditableGreenChecks();
+      activeCheckController?.abort();
     }, true);
   }
 
