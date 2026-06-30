@@ -754,7 +754,7 @@
       <div><span style="text-decoration:line-through;color:#f87171;">${escapeHtml(original)}</span> → <span class="ag-correction">${escapeHtml(correction)}</span></div>
       ${explanation ? `<div class="ag-explanation">${escapeHtml(explanation)}</div>` : ''}
       <div class="ag-actions">
-        <button class="ag-apply" data-action="apply">Apply fix</button>
+        ${errorEl.hasAttribute('data-live-draft') ? '<button class="ag-apply" data-action="apply">Apply fix</button>' : ''}
         <button class="ag-dismiss" data-action="dismiss">Dismiss</button>
       </div>
     `;
@@ -798,20 +798,35 @@
     if (!correction) return;
 
     if (errorEl.hasAttribute('data-live-draft')) {
-      const wrapper = errorEl.closest(`.${LIVE_HIGHLIGHT_CLASS}`);
-      const textarea = wrapper?.querySelector('textarea');
       const start = Number(errorEl.getAttribute('data-start'));
       const end = Number(errorEl.getAttribute('data-end'));
-      if (textarea && Number.isInteger(start) && Number.isInteger(end)) {
-        const value = textarea.value;
-        textarea.value = value.slice(0, start) + correction + value.slice(end);
-        textarea.selectionStart = textarea.selectionEnd = start + correction.length;
-        textarea.focus();
-        textarea.dispatchEvent(new InputEvent('input', {
-          bubbles: true,
-          inputType: 'insertReplacementText',
-          data: correction,
-        }));
+      if (Number.isInteger(start) && Number.isInteger(end)) {
+        const ta = liveHighlightTarget;
+        if (ta?.tagName === 'TEXTAREA') {
+          ta.value = ta.value.slice(0, start) + correction + ta.value.slice(end);
+          ta.selectionStart = ta.selectionEnd = start + correction.length;
+          ta.focus();
+          ta.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            inputType: 'insertReplacementText',
+            data: correction,
+          }));
+        } else if (ta?.isContentEditable) {
+          // Get the current text content and replace the error
+          const walker = document.createTreeWalker(ta, NodeFilter.SHOW_TEXT);
+          let offset = 0;
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const nodeLen = node.textContent.length;
+            if (start >= offset && end <= offset + nodeLen) {
+              const s = start - offset, e = end - offset;
+              node.textContent = node.textContent.slice(0, s) + correction + node.textContent.slice(e);
+              break;
+            }
+            offset += nodeLen;
+          }
+          ta.focus();
+        }
       }
       removeErrorFloat();
       hideTooltip();
@@ -1163,7 +1178,7 @@
       if (s < pos || s >= e) continue;
       html += escapeHtml(text.slice(pos, s));
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
-      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer" data-correction="${escapeHtml(err.correction||'')}" data-explanation="${escapeHtml(err.explanation||'')}" data-error="${escapeHtml(err.error||'')}" data-type="${err.type||'error'}" tabindex="0">${escapeHtml(text.slice(s, e))}</span>`;
+      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer" data-correction="${escapeHtml(err.correction||'')}" data-explanation="${escapeHtml(err.explanation||'')}" data-error="${escapeHtml(err.error||'')}" data-type="${err.type||'error'}" data-live-draft="1" data-start="${s}" data-end="${e}" tabindex="0">${escapeHtml(text.slice(s, e))}</span>`;
       pos = e;
     }
     html += escapeHtml(text.slice(pos));
