@@ -372,6 +372,17 @@
     return text.trim();
   }
 
+  /**
+   * Strip trailing timestamps / metadata that chat platforms append to
+   * message text (WhatsApp: "11:39", "11:39 PM").  The AI sees this as
+   * part of the sentence and returns wrong offsets or nonsensical errors
+   * (e.g. flagging the period between "apple." and "11:39").
+   */
+  function cleanMessageText(raw) {
+    // Strip trailing time pattern: "11:39", "11:39 PM", "11:39 AM"
+    return raw.replace(/[\s.]*\d{1,2}:\d{2}(\s*[APap][Mm])?\s*$/, '').trim();
+  }
+
   function isTextBlock(el) {
     if (isIgnored(el)) return false;
     if (checkedElements.has(el)) return false;
@@ -1415,7 +1426,8 @@
     // Add to pending and debounce — only user-authored content
     let matchedByText = false;
     for (const block of newBlocks) {
-      const text = getTextContent(block);
+      const rawText = getTextContent(block);
+      const text = cleanMessageText(rawText);
       const cssMatch = isLikelyUserMessage(block);
       const textMatch = isUserText(text);
       if (text.length >= minChars && (cssMatch || textMatch)) {
