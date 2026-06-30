@@ -180,6 +180,7 @@
     div.textContent = text;
     document.getElementById('messages').appendChild(div);
     document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
+    return div;
   }
 
   function sendMessage() {
@@ -196,7 +197,8 @@
     setTimeout(addRandomReply, 800);
 
     // Call backend for grammar checking
-    addMessage('system-msg', 'Checking...');
+    var checkingEl = addMessage('system-msg', 'Checking...');
+    checkingEl.setAttribute('data-checking', '1');
     fetch('/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -204,9 +206,11 @@
     })
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        // Remove "Checking..." message
+        // Remove the specific "Checking..." element (not lastChild,
+        // which could be a random reply added after it)
         var msgs = document.getElementById('messages');
-        msgs.removeChild(msgs.lastChild);
+        var el = msgs.querySelector('[data-checking]');
+        if (el) msgs.removeChild(el);
         if (!data.errors || data.errors.length === 0) {
           addMessage('system-msg', '✓ No errors found');
         } else {
@@ -218,9 +222,8 @@
       })
       .catch(function(err) {
         var msgs = document.getElementById('messages');
-        if (msgs.lastChild && msgs.lastChild.textContent === 'Checking...') {
-          msgs.removeChild(msgs.lastChild);
-        }
+        var el = msgs.querySelector('[data-checking]');
+        if (el) msgs.removeChild(el);
         addMessage('system-msg', '✗ Error: ' + err.message);
       });
   }
