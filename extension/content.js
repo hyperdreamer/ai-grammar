@@ -740,7 +740,10 @@
   // Status badge
   // -----------------------------------------------------------------------
 
+  let batchInFlight = 0;  // >0 when ?/check is running multiple checks; badge auto-suppressed
+
   function showBadge(text, isPending = false, durationMs = 4000) {
+    if (batchInFlight > 0) return;  // badge managed by batch orchestrator
     removeBadge();
     const badge = document.createElement('div');
     badge.className = 'ai-grammar-badge';
@@ -754,8 +757,19 @@
   }
 
   function removeBadge() {
+    if (batchInFlight > 0) return;  // badge managed by batch orchestrator
     const existing = document.querySelector('.ai-grammar-badge');
     if (existing) existing.remove();
+  }
+
+  function updateBatchBadge(completed, total) {
+    // Only called from ?/check batch orchestrator
+    const existing = document.querySelector('.ai-grammar-badge');
+    if (existing) existing.remove();
+    const badge = document.createElement('div');
+    badge.className = 'ai-grammar-badge';
+    badge.innerHTML = `<div class="ag-spinner"></div>Checking ${completed}/${total} text blocks...`;
+    document.body.appendChild(badge);
   }
 
   // -----------------------------------------------------------------------
@@ -1345,33 +1359,57 @@
     check: {
       help: 'Force grammar check of the page',
       async run() {
-        const candidates = Array.from(document.querySelectorAll(
-          'p, div, article, section, li, blockquote, td, th, dd, figcaption, h1, h2, h3, h4, h5, h6, span'
-        ));
-        // Sort deepest-first so leaf text nodes are checked before their
-        // parent containers — this lets us deduplicate by text content.
-        candidates.sort((a, b) => {
-          let da = 0, db = 0;
-          for (let el = a; el; el = el.parentElement) da++;
-          for (let el = b; el; el = el.parentElement) db++;
-          return db - da;
-        });
-        const seenTexts = new Set();
-        let checked = 0;
-        for (const el of candidates) {
-          if (isIgnored(el) || checkedElements.has(el) || el.hasAttribute(CHECKED_ATTR)) continue;
-          const text = getTextContent(el);
-          if (text.length < minChars) continue;
-          // Skip if identical text already seen from a deeper descendant
-          const key = text.trim();
-          if (seenTexts.has(key)) continue;
-          seenTexts.add(key);
-          checkedElements.add(el);
-          el.setAttribute(CHECKED_ATTR, '');
-          checkText(text, el);
-          checked++;
+        commandInFlight = true;
+        batchInFlight = 1;
+        try {
+          const candidates = Array.from(document.querySelectorAll(
+            'p, div, article, section, li, blockquote, td, th, dd, figcaption, h1, h2, h3, h4, h5, h6, span'
+          ));
+          // Sort deepest-first so leaf text nodes are checked before their
+          // parent containers — this lets us deduplicate by text content.
+          candidates.sort((a, b) => {
+            let da = 0, db = 0;
+            for (let el = a; el; el = el.parentElement) da++;
+            for (let el = b; el; el = el.parentElement) db++;
+            return db - da;
+          });
+          const seenTexts = new Set();
+          const tasks = [];
+          for (const el of candidates) {
+            if (isIgnored(el) || checkedElements.has(el) || el.hasAttribute(CHECKED_ATTR)) continue;
+            const text = getTextContent(el);
+            if (text.length < minChars) continue;
+            const key = text.trim();
+            if (seenTexts.has(key)) continue;
+            seenTexts.add(key);
+            checkedElements.add(el);
+            el.setAttribute(CHECKED_ATTR, '');
+            tasks.push({ text, el });
+          }
+          if (tasks.length === 0) {
+            showBadge('No new text to check');
+            return;
+          }
+          // Throttled concurrent execution: max 5 checks at a time,
+          // with a shared progress badge showing N/total.
+          const CONCURRENCY = 5;
+          let completed = 0;
+          updateBatchBadge(0, tasks.length);
+          for (let i = 0; i < tasks.length; i += CONCURRENCY) {
+            const batch = tasks.slice(i, i + CONCURRENCY);
+            await Promise.all(
+              batch.map(({ text, el }) => checkText(text, el).then(() => {
+                completed++;
+                updateBatchBadge(completed, tasks.length);
+              }))
+            );
+          }
+          removeBadge();
+          showBadge(`Done: ${completed} blocks checked`);
+        } finally {
+          commandInFlight = false;
+          batchInFlight = 0;
         }
-        showBadge(checked > 0 ? `Checking ${checked} text block${checked > 1 ? 's' : ''}...` : 'No new text to check');
       },
     },
     lang: {
