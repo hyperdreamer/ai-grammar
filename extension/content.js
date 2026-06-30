@@ -1576,6 +1576,59 @@
     }
     container = el || container;
 
+    // --- Walk up further to find the message-level container ---
+    // The block-level element found above (e.g. <p>, inner <div>) may not
+    // be the actual message-bubble container.  highlightOverlay() positions
+    // the fixed overlay at container.getBoundingClientRect() and copies
+    // getComputedStyle(container) — if the wrong element is used, underlines
+    // appear offset from the visible text.
+    let found = null;
+
+    // 1. Try USER_MESSAGE_SELECTOR on current element and ancestors
+    let candidate = container;
+    while (candidate && candidate !== document.body && candidate !== document.documentElement) {
+      if (candidate.nodeType === Node.ELEMENT_NODE && candidate.matches(USER_MESSAGE_SELECTOR)) {
+        found = candidate;
+        break;
+      }
+      candidate = candidate.parentElement;
+    }
+
+    // 2. If no selector match, look for ancestors that are direct children
+    //    of a message-list / chat container (role=list/log/feed, or class
+    //    containing msg/message/chat/conversation).  Also accept ancestors
+    //    whose own class name suggests a message bubble.
+    if (!found) {
+      candidate = container.parentElement;
+      while (candidate && candidate !== document.body && candidate !== document.documentElement) {
+        const parent = candidate.parentElement;
+        if (parent && parent !== document.body && parent !== document.documentElement) {
+          const parentCls = (parent.className || '').toLowerCase();
+          const parentId = (parent.id || '').toLowerCase();
+          const role = parent.getAttribute('role');
+          if (parentCls.includes('msg') || parentCls.includes('message') ||
+              parentCls.includes('chat') || parentCls.includes('conversation') ||
+              parentId.includes('msg') || parentId.includes('message') ||
+              parentId.includes('chat') || parentId.includes('conversation') ||
+              role === 'list' || role === 'log' || role === 'feed') {
+            found = candidate;
+            break;
+          }
+        }
+        // Also accept candidate if its own class looks message-like
+        const cls = (candidate.className || '').toLowerCase();
+        if (cls.includes('msg') || cls.includes('message') || cls.includes('bubble') ||
+            cls.includes('row') || cls.includes('item')) {
+          found = candidate;
+          break;
+        }
+        candidate = candidate.parentElement;
+      }
+    }
+
+    if (found) container = found;
+    // 3. Fallback: use the existing block-level container (already set above)
+
     checkText(text, container);
   }
 
