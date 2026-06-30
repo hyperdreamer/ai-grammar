@@ -505,6 +505,14 @@
       const bStart = Number.isFinite(Number(b.start)) ? Number(b.start) : -1;
       return bStart - aStart;
     });
+    console.debug('[AI Grammar] highlightErrors:', {
+      errors: errors.length,
+      fullTextLen: fullText.length,
+      textNodesCount: textNodes.length,
+      checkedTextMatch: checkedText === fullText,
+      containerTag: container.tagName,
+      firstErrorSample: errors[0] ? JSON.stringify(errors[0]).slice(0, 80) : 'none',
+    });
 
     for (const err of sortedErrors) {
       const errText = err.error;
@@ -787,7 +795,8 @@
   let greenCheckTimers = new Map();  // container → timer (for cleanup)
 
   function showGreenCheck(container) {
-    if (!container || !document.contains(container)) return;
+    if (!container) { console.debug('[AI Grammar] showGreenCheck: null container'); return; }
+    if (!document.contains(container)) { console.debug('[AI Grammar] showGreenCheck: container detached from DOM, tag:', container.tagName); return; }
     removeGreenCheck(container);
 
     const tag = container.tagName;
@@ -1234,7 +1243,16 @@
 
       if (!data?.errors) return;
       const errors = data.errors;
+      console.debug('[AI Grammar] checkText result:', {
+        errors: errors.length,
+        containerTag: container.tagName,
+        containerInDOM: document.contains(container),
+        containerText: text.slice(0, 80),
+        isContentEditable: container.isContentEditable,
+        id: id,
+      });
       if (errors.length === 0) {
+        console.debug('[AI Grammar] showGreenCheck called, container:', container.tagName, 'inDOM:', document.contains(container));
         showGreenCheck(container);
         return;
       }
@@ -1243,6 +1261,7 @@
       isHighlighting = true;
       const count = highlightErrors(container, errors, text);
       isHighlighting = false;
+      console.debug('[AI Grammar] highlightErrors returned:', count, 'errors, container:', container.tagName, 'inDOM:', document.contains(container));
 
       if (count > 0) {
         const breakdown = { error: 0, improvement: 0, idiom: 0 };
@@ -1275,11 +1294,21 @@
     let matchedByText = false;
     for (const block of newBlocks) {
       const text = getTextContent(block);
-      if (text.length >= minChars && (isLikelyUserMessage(block) || isUserText(text))) {
+      const cssMatch = isLikelyUserMessage(block);
+      const textMatch = isUserText(text);
+      if (text.length >= minChars && (cssMatch || textMatch)) {
         pendingChecks.set(block, text);
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
-        if (isUserText(text)) matchedByText = true;
+        if (textMatch) matchedByText = true;
+        console.debug('[AI Grammar] Block queued:', {
+          tag: block.tagName,
+          classes: block.className?.slice?.(0, 60),
+          textLen: text.length,
+          textPreview: text.slice(0, 50),
+          cssMatch,
+          textMatch,
+        });
       }
     }
 
