@@ -20,16 +20,17 @@ backend/            # FastAPI server
 
 ## How It Works
 
-1. **Content script** watches the page for newly submitted text (messages, comments, posts) using `MutationObserver`.
-2. When new text blocks appear, the text is sent to the **background service worker**.
-3. The background forwards it to the **FastAPI backend** (`POST /check`).
-4. The backend calls an AI model (OpenAI, Anthropic, etc.) with a grammar-checking prompt.
-5. The AI returns structured JSON with error positions and corrections.
-6. Issues are **highlighted inline** with colored wavy underlines:
+1. **Select text** on any page (non-editable text like messages, articles, comments).
+2. Press the **keyboard shortcut** (`Ctrl+Shift+L` / `Cmd+Shift+L`) to trigger a grammar check.
+3. The selected text is sent to the **background service worker**.
+4. The background forwards it to the **FastAPI backend** (`POST /check`).
+5. The backend calls an AI model (OpenAI, Anthropic, etc.) with a grammar-checking prompt.
+6. The AI returns structured JSON with error positions and corrections.
+7. Issues are **highlighted inline** with colored wavy underlines:
    - 🔴 **Red** — errors (spelling, grammar, punctuation)
    - 🟢 **Green** — improvements (awkward phrasing, wordiness)
    - 🔵 **Blue** — idioms (more natural expressions)
-7. **Hover or click** on highlighted text to see the correction in a tooltip. Click "Apply fix" to correct inline.
+8. **Hover or click** on highlighted text to see the correction in a tooltip.
 
 ## Setup
 
@@ -54,15 +55,13 @@ The backend runs on `http://127.0.0.1:8766` by default.
 
 ## Usage
 
-### Automatic mode (default)
-
-Type and submit text in any message box, comment field, or post form. After submission, the extension automatically detects the new text and checks it for errors. Highlighted errors appear with wavy red underlines.
-
-### Manual mode
+### Manual check
 
 1. Select any text on a page
 2. Press `Ctrl+Shift+L` (Mac: `Cmd+Shift+L`)
 3. Errors in the selection will be highlighted
+
+You can also check text as you compose it in any text input using the live draft checker or inline commands.
 
 ### Popup settings
 
@@ -89,9 +88,8 @@ Type `?/` in any text input to open the **command palette** — a popup menu lis
 
 | Command | Action |
 |---------|--------|
-| `?/off` | Disable auto grammar checking |
-| `?/on` | Enable auto grammar checking |
-| `?/check` | Force grammar check of all unchecked text blocks on the page |
+| `?/off` | Disable grammar checking |
+| `?/on` | Enable grammar checking |
 | `?/fix` | Auto-correct the text you typed (everything before `?/fix`) |
 | `?/polish` | Polish/improve the text for clarity and naturalness (everything before `?/polish`) |
 | `?/lang en` | Set language to English (also: zh, ja, ko, fr, de, es, ru, pt, it, ar, auto) |
@@ -148,7 +146,7 @@ Smaller models work well because grammar checking is a focused task with a struc
 
 ## Limitations
 
-- **Not realtime** — grammar checking runs after text is submitted, not while typing
+- **Manual activation** — grammar checking is triggered by selecting text and pressing the keyboard shortcut
 - **Text only** — checks text content, not images or other media
 - **Plain text areas only** — rich text editors (Google Docs, Notion) may not work reliably
 - **Text length** — maximum 50,000 characters per check (configurable in backend)
