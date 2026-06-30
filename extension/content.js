@@ -1345,17 +1345,31 @@
     check: {
       help: 'Force grammar check of the page',
       async run() {
-        const candidates = document.querySelectorAll('p, div, article, section, li, blockquote, td, th, dd, h1, h2, h3, h4, h5, h6');
+        const candidates = Array.from(document.querySelectorAll(
+          'p, div, article, section, li, blockquote, td, th, dd, figcaption, h1, h2, h3, h4, h5, h6, span'
+        ));
+        // Sort deepest-first so leaf text nodes are checked before their
+        // parent containers — this lets us deduplicate by text content.
+        candidates.sort((a, b) => {
+          let da = 0, db = 0;
+          for (let el = a; el; el = el.parentElement) da++;
+          for (let el = b; el; el = el.parentElement) db++;
+          return db - da;
+        });
+        const seenTexts = new Set();
         let checked = 0;
         for (const el of candidates) {
           if (isIgnored(el) || checkedElements.has(el) || el.hasAttribute(CHECKED_ATTR)) continue;
           const text = getTextContent(el);
-          if (text.length >= minChars) {
-            checkedElements.add(el);
-            el.setAttribute(CHECKED_ATTR, '');
-            checkText(text, el);
-            checked++;
-          }
+          if (text.length < minChars) continue;
+          // Skip if identical text already seen from a deeper descendant
+          const key = text.trim();
+          if (seenTexts.has(key)) continue;
+          seenTexts.add(key);
+          checkedElements.add(el);
+          el.setAttribute(CHECKED_ATTR, '');
+          checkText(text, el);
+          checked++;
         }
         showBadge(checked > 0 ? `Checking ${checked} text block${checked > 1 ? 's' : ''}...` : 'No new text to check');
       },
