@@ -121,21 +121,18 @@
     const style = document.createElement('style');
     style.id = 'ai-grammar-styles';
     style.textContent = `
-      /* SVG wavy underlines — independent of text color / zoom level.
-         text-decoration on near-transparent overlay text can be
-         quantized away at certain DPI×zoom combos.  SVG backgrounds
-         render the same wave pattern at every zoom. */
-      /* background-position-y offsets the SVG wave from the element bottom.
-         2 px is a compromise: tight line-height (1.0–1.2, e.g. iMessage)
-         needs ~2 px; loose (1.5) needs ~5 px.  At 2 px the underline
-         sits slightly below the baseline on loose layouts (still an
-         improvement over 0) and right on the baseline on tight ones. */
+      /* text-decoration wavy underlines — positioned at the text baseline
+         by the browser, independent of platform font/line-height.  The
+         old SVG background-image approach required manual offsets that
+         varied by platform (iMessage vs Hermes WebUI vs test page).
+         rgba(0,0,0,0.01) triggers Chromium text-decoration painting at
+         all common zoom/DPI combos (unlike transparent / alpha=0). */
       .ai-grammar-error {
-        text-decoration-line: none !important;
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='4' viewBox='0 0 10 4'%3E%3Cpath d='M0,3 Q2.5,0 5,3 Q7.5,6 10,3' fill='none' stroke='%23dc2626' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
-        background-repeat: repeat-x;
-        background-position-y: bottom 2px;
-        background-size: 10px 5px;
+        text-decoration-line: underline !important;
+        text-decoration-style: wavy !important;
+        text-decoration-color: #dc2626 !important;
+        text-decoration-thickness: from-font !important;
+        text-underline-offset: 0.12em;
         cursor: pointer;
         border-radius: 2px;
       }
@@ -143,11 +140,11 @@
         background-color: rgba(220, 38, 38, 0.08);
       }
       .ai-grammar-improvement {
-        text-decoration-line: none !important;
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='4' viewBox='0 0 10 4'%3E%3Cpath d='M0,3 Q2.5,0 5,3 Q7.5,6 10,3' fill='none' stroke='%234ade80' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
-        background-repeat: repeat-x;
-        background-position-y: bottom 2px;
-        background-size: 10px 5px;
+        text-decoration-line: underline !important;
+        text-decoration-style: wavy !important;
+        text-decoration-color: #4ade80 !important;
+        text-decoration-thickness: from-font !important;
+        text-underline-offset: 0.12em;
         cursor: pointer;
         border-radius: 2px;
       }
@@ -155,11 +152,11 @@
         background-color: rgba(74, 222, 128, 0.08);
       }
       .ai-grammar-idiom {
-        text-decoration-line: none !important;
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='4' viewBox='0 0 10 4'%3E%3Cpath d='M0,3 Q2.5,0 5,3 Q7.5,6 10,3' fill='none' stroke='%2360a5fa' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
-        background-repeat: repeat-x;
-        background-position-y: bottom 2px;
-        background-size: 10px 5px;
+        text-decoration-line: underline !important;
+        text-decoration-style: wavy !important;
+        text-decoration-color: #60a5fa !important;
+        text-decoration-thickness: from-font !important;
+        text-underline-offset: 0.12em;
         cursor: pointer;
         border-radius: 2px;
       }
