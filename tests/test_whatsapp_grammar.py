@@ -4,6 +4,10 @@
 Uses the persistent browser profile from auth_whatsapp.py.
 Sends a message with a deliberate grammar error and captures
 extension console logs to diagnose rendering issues.
+
+Usage:
+  python tests/test_whatsapp_grammar.py "Chat Name"
+  python tests/test_whatsapp_grammar.py              # picks first chat
 """
 
 import json
@@ -19,6 +23,10 @@ EXTENSION_DIR = Path(__file__).resolve().parents[1] / "extension"
 if not PROFILE_DIR.is_dir():
     print("Profile not found. Run auth_whatsapp.py first to log into WhatsApp.")
     sys.exit(1)
+
+# --- Config ---
+TARGET_CHAT = sys.argv[1] if len(sys.argv) > 1 else ""
+TEST_MESSAGE = "I has went to the store yesterday and buyed some apple."
 
 # --- Collect extension console logs ---
 logs: list[dict] = []
