@@ -798,37 +798,43 @@
     if (!correction) return;
 
     if (errorEl.hasAttribute('data-live-draft')) {
-      const start = Number(errorEl.getAttribute('data-start'));
-      const end = Number(errorEl.getAttribute('data-end'));
-      if (Number.isInteger(start) && Number.isInteger(end)) {
-        const ta = liveHighlightTarget;
-        if (ta?.tagName === 'TEXTAREA') {
-          ta.value = ta.value.slice(0, start) + correction + ta.value.slice(end);
-          ta.selectionStart = ta.selectionEnd = start + correction.length;
+      const ta = liveHighlightTarget;
+      if (!ta) { hideTooltip(); return; }
+
+      // Collect all error spans from the live-draft overlay and apply
+      // every correction at once.  Sort by start offset descending so
+      // replacements don't shift earlier positions.
+      const spans = liveHighlightEl?.querySelectorAll?.(
+        '.ai-grammar-error, .ai-grammar-improvement, .ai-grammar-idiom'
+      );
+      if (spans?.length) {
+        const fixes = Array.from(spans)
+          .map(s => ({
+            start: Number(s.getAttribute('data-start')),
+            end: Number(s.getAttribute('data-end')),
+            correction: s.getAttribute('data-correction') || '',
+          }))
+          .filter(f => Number.isInteger(f.start) && Number.isInteger(f.end) && f.correction)
+          .sort((a, b) => b.start - a.start); // descending for safe in-place edits
+
+        let text = ta.value || ta.textContent || '';
+        for (const f of fixes) {
+          text = text.slice(0, f.start) + f.correction + text.slice(f.end);
+        }
+        if (ta.tagName === 'TEXTAREA') {
+          ta.value = text;
+          ta.selectionStart = ta.selectionEnd = text.length;
           ta.focus();
           ta.dispatchEvent(new InputEvent('input', {
             bubbles: true,
             inputType: 'insertReplacementText',
-            data: correction,
+            data: text,
           }));
-        } else if (ta?.isContentEditable) {
-          // Get the current text content and replace the error
-          const walker = document.createTreeWalker(ta, NodeFilter.SHOW_TEXT);
-          let offset = 0;
-          while (walker.nextNode()) {
-            const node = walker.currentNode;
-            const nodeLen = node.textContent.length;
-            if (start >= offset && end <= offset + nodeLen) {
-              const s = start - offset, e = end - offset;
-              node.textContent = node.textContent.slice(0, s) + correction + node.textContent.slice(e);
-              break;
-            }
-            offset += nodeLen;
-          }
+        } else if (ta.isContentEditable) {
+          ta.textContent = text;
           ta.focus();
         }
       }
-      removeErrorFloat();
       hideTooltip();
       return;
     }
