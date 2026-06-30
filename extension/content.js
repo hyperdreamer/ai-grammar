@@ -524,14 +524,6 @@
       const bStart = Number.isFinite(Number(b.start)) ? Number(b.start) : -1;
       return bStart - aStart;
     });
-    console.debug('[AI Grammar] highlightErrors:', {
-      errors: errors.length,
-      fullTextLen: fullText.length,
-      textNodesCount: textNodes.length,
-      checkedTextMatch: checkedText === fullText,
-      containerTag: container.tagName,
-      firstErrorSample: errors[0] ? JSON.stringify(errors[0]).slice(0, 80) : 'none',
-    });
 
     for (const err of sortedErrors) {
       const errText = err.error;
@@ -685,7 +677,6 @@
     };
 
     messageOverlays.set(container, { overlay, cleanup });
-    console.debug('[AI Grammar] Overlay created:', { errors: errors.length, containerTag: container.tagName });
     return errors.length;
   }
 
@@ -694,7 +685,6 @@
     if (entry) {
       entry.cleanup();
       messageOverlays.delete(container);
-      console.debug('[AI Grammar] Overlay removed');
     }
   }
 
@@ -932,8 +922,8 @@
   let greenCheckTimers = new Map();  // container → timer (for cleanup)
 
   function showGreenCheck(container) {
-    if (!container) { console.debug('[AI Grammar] showGreenCheck: null container'); return; }
-    if (!document.contains(container)) { console.debug('[AI Grammar] showGreenCheck: container detached from DOM, tag:', container.tagName); return; }
+    if (!container) return;
+    if (!document.contains(container)) return;
     removeGreenCheck(container);
 
     // Always use fixed-position — inline appendChild gets stripped by React re-renders
@@ -1375,16 +1365,7 @@
 
       if (!data?.errors) return;
       const errors = data.errors;
-      console.debug('[AI Grammar] checkText result:', {
-        errors: errors.length,
-        containerTag: container.tagName,
-        containerInDOM: document.contains(container),
-        containerText: text.slice(0, 80),
-        isContentEditable: container.isContentEditable,
-        id: id,
-      });
       if (errors.length === 0) {
-        console.debug('[AI Grammar] showGreenCheck called, container:', container.tagName, 'inDOM:', document.contains(container));
         showGreenCheck(container);
         return;
       }
@@ -1394,7 +1375,6 @@
       isHighlighting = true;
       const count = highlightOverlay(container, errors, text);
       isHighlighting = false;
-      console.debug('[AI Grammar] highlightOverlay returned:', count, 'errors, container:', container.tagName, 'inDOM:', document.contains(container));
 
       if (count > 0) {
         const breakdown = { error: 0, improvement: 0, idiom: 0 };
@@ -1426,8 +1406,7 @@
     // Add to pending and debounce — only user-authored content
     let matchedByText = false;
     for (const block of newBlocks) {
-      const rawText = getTextContent(block);
-      const text = cleanMessageText(rawText);
+      const text = cleanMessageText(getTextContent(block));
       const cssMatch = isLikelyUserMessage(block);
       const textMatch = isUserText(text);
       if (text.length >= minChars && (cssMatch || textMatch)) {
@@ -1435,14 +1414,6 @@
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
         if (textMatch) matchedByText = true;
-        console.debug('[AI Grammar] Block queued:', {
-          tag: block.tagName,
-          classes: block.className?.slice?.(0, 60),
-          textLen: text.length,
-          textPreview: text.slice(0, 50),
-          cssMatch,
-          textMatch,
-        });
       }
     }
 
