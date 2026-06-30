@@ -333,8 +333,8 @@
         }
       }
       .ag-message-overlay {
-        color: transparent !important;
-        -webkit-text-fill-color: transparent !important;
+        color: rgba(0, 0, 0, 0.004) !important;
+        -webkit-text-fill-color: rgba(0, 0, 0, 0.004) !important;
       }
     `;
     document.head.appendChild(style);
@@ -641,8 +641,8 @@
       whiteSpace: cs.whiteSpace,
       overflowWrap: cs.overflowWrap,
       wordBreak: cs.wordBreak,
-      color: 'transparent',
-      WebkitTextFillColor: 'transparent',
+      color: 'rgba(0, 0, 0, 0.004)',
+      WebkitTextFillColor: 'rgba(0, 0, 0, 0.004)',
       background: 'transparent',
       paddingTop: cs.paddingTop,
       paddingRight: cs.paddingRight,
