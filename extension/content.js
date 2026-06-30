@@ -125,14 +125,20 @@
          by the browser, independent of platform font/line-height.  The
          old SVG background-image approach required manual offsets that
          varied by platform (iMessage vs Hermes WebUI vs test page).
-         rgba(0,0,0,0.01) triggers Chromium text-decoration painting at
-         all common zoom/DPI combos (unlike transparent / alpha=0). */
+         Overlay spans use rgba(0,0,0,0.02) to defeat Chromium's
+         text-decoration paint skip: 0.02 * 255 = 5.1 → never quantises
+         to 0 at any zoom/DPI combo (0.01 could floor to 0 at extreme
+         subpixel configurations).  text-decoration-skip-ink: none
+         prevents the browser from omitting decorations that intersect
+         glyph descenders. */
       .ai-grammar-error {
         text-decoration-line: underline !important;
         text-decoration-style: wavy !important;
         text-decoration-color: #dc2626 !important;
         text-decoration-thickness: from-font !important;
         text-underline-offset: 0.12em;
+        text-decoration-skip-ink: none;
+        -webkit-text-decoration-skip: none;
         cursor: pointer;
         border-radius: 2px;
       }
@@ -145,6 +151,8 @@
         text-decoration-color: #4ade80 !important;
         text-decoration-thickness: from-font !important;
         text-underline-offset: 0.12em;
+        text-decoration-skip-ink: none;
+        -webkit-text-decoration-skip: none;
         cursor: pointer;
         border-radius: 2px;
       }
@@ -157,6 +165,8 @@
         text-decoration-color: #60a5fa !important;
         text-decoration-thickness: from-font !important;
         text-underline-offset: 0.12em;
+        text-decoration-skip-ink: none;
+        -webkit-text-decoration-skip: none;
         cursor: pointer;
         border-radius: 2px;
       }
@@ -172,8 +182,8 @@
         isolation: isolate;
       }
       .ag-live-highlight-backdrop {
-        color: rgba(0, 0, 0, 0.01) !important;
-        -webkit-text-fill-color: rgba(0, 0, 0, 0.01) !important;
+        color: rgba(0, 0, 0, 0.02) !important;
+        -webkit-text-fill-color: rgba(0, 0, 0, 0.02) !important;
         scrollbar-width: none;
       }
       .ag-live-highlight-backdrop::-webkit-scrollbar {
@@ -182,8 +192,8 @@
       .ag-live-highlight-backdrop .ai-grammar-error,
       .ag-live-highlight-backdrop .ai-grammar-improvement,
       .ag-live-highlight-backdrop .ai-grammar-idiom {
-        color: rgba(0, 0, 0, 0.01) !important;
-        -webkit-text-fill-color: rgba(0, 0, 0, 0.01) !important;
+        color: rgba(0, 0, 0, 0.02) !important;
+        -webkit-text-fill-color: rgba(0, 0, 0, 0.02) !important;
       }
       .ai-grammar-tooltip {
         position: fixed;
@@ -345,8 +355,8 @@
         }
       }
       .ag-message-overlay {
-        color: rgba(0, 0, 0, 0.01) !important;
-        -webkit-text-fill-color: rgba(0, 0, 0, 0.01) !important;
+        color: rgba(0, 0, 0, 0.02) !important;
+        -webkit-text-fill-color: rgba(0, 0, 0, 0.02) !important;
       }
     `;
     document.head.appendChild(style);
@@ -662,8 +672,8 @@
       overflowWrap: cs.overflowWrap,
       wordBreak: cs.wordBreak,
       wordWrap: cs.wordWrap,
-      color: 'rgba(0, 0, 0, 0.01)',
-      WebkitTextFillColor: 'rgba(0, 0, 0, 0.01)',
+      color: 'rgba(0, 0, 0, 0.02)',
+      WebkitTextFillColor: 'rgba(0, 0, 0, 0.02)',
       background: 'transparent',
       paddingTop: cs.paddingTop,
       paddingRight: cs.paddingRight,
