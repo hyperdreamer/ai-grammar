@@ -111,12 +111,16 @@
     const style = document.createElement('style');
     style.id = 'ai-grammar-styles';
     style.textContent = `
+      /* SVG wavy underlines — independent of text color / zoom level.
+         text-decoration on near-transparent overlay text can be
+         quantized away at certain DPI×zoom combos.  SVG backgrounds
+         render the same wave pattern at every zoom. */
       .ai-grammar-error {
-        text-decoration-line: underline !important;
-        text-decoration-style: wavy !important;
-        text-decoration-color: #dc2626 !important;
-        text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.12em;
+        text-decoration-line: none !important;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='4' viewBox='0 0 10 4'%3E%3Cpath d='M0,3 Q2.5,0 5,3 Q7.5,6 10,3' fill='none' stroke='%23dc2626' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
+        background-repeat: repeat-x;
+        background-position: 0 100%;
+        background-size: 10px 5px;
         cursor: pointer;
         border-radius: 2px;
       }
@@ -124,11 +128,11 @@
         background-color: rgba(220, 38, 38, 0.08);
       }
       .ai-grammar-improvement {
-        text-decoration-line: underline !important;
-        text-decoration-style: wavy !important;
-        text-decoration-color: #4ade80 !important;
-        text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.12em;
+        text-decoration-line: none !important;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='4' viewBox='0 0 10 4'%3E%3Cpath d='M0,3 Q2.5,0 5,3 Q7.5,6 10,3' fill='none' stroke='%234ade80' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
+        background-repeat: repeat-x;
+        background-position: 0 100%;
+        background-size: 10px 5px;
         cursor: pointer;
         border-radius: 2px;
       }
@@ -136,11 +140,11 @@
         background-color: rgba(74, 222, 128, 0.08);
       }
       .ai-grammar-idiom {
-        text-decoration-line: underline !important;
-        text-decoration-style: wavy !important;
-        text-decoration-color: #60a5fa !important;
-        text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.12em;
+        text-decoration-line: none !important;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='4' viewBox='0 0 10 4'%3E%3Cpath d='M0,3 Q2.5,0 5,3 Q7.5,6 10,3' fill='none' stroke='%2360a5fa' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
+        background-repeat: repeat-x;
+        background-position: 0 100%;
+        background-size: 10px 5px;
         cursor: pointer;
         border-radius: 2px;
       }
@@ -619,16 +623,29 @@
     overlay.setAttribute('data-ag-overlay', '');
     overlay.innerHTML = html;
 
-    // Copy font / layout metrics from container so text lines up exactly
+    // Copy font / layout metrics from container so text lines up exactly.
+    // Must copy every property that affects text rendering — even a 0.5px
+    // mismatch makes underlines look misaligned, and the mismatch is far
+    // more visible at non-100% zoom levels.
     const cs = window.getComputedStyle(container);
     Object.assign(overlay.style, {
       position: 'fixed',
+      top: '0',
+      left: '0',
       zIndex: '2147483644',
       pointerEvents: 'none',
+      // --- Text rendering properties (complete set) ---
       font: cs.font,
       fontSize: cs.fontSize,
       fontFamily: cs.fontFamily,
       fontWeight: cs.fontWeight,
+      fontStyle: cs.fontStyle,
+      fontVariant: cs.fontVariant,
+      fontStretch: cs.fontStretch,
+      fontKerning: cs.fontKerning,
+      textRendering: cs.textRendering,
+      textTransform: cs.textTransform,
+      direction: cs.direction,
       lineHeight: cs.lineHeight,
       letterSpacing: cs.letterSpacing,
       wordSpacing: cs.wordSpacing,
@@ -636,6 +653,7 @@
       whiteSpace: cs.whiteSpace,
       overflowWrap: cs.overflowWrap,
       wordBreak: cs.wordBreak,
+      wordWrap: cs.wordWrap,
       color: 'rgba(0, 0, 0, 0.01)',
       WebkitTextFillColor: 'rgba(0, 0, 0, 0.01)',
       background: 'transparent',
@@ -656,8 +674,10 @@
         return;
       }
       const r = container.getBoundingClientRect();
-      overlay.style.top = r.top + 'px';
-      overlay.style.left = r.left + 'px';
+      // transform:translate uses subpixel positioning — critical for
+      // alignment at non-100% zoom where integer-pixel top/left can
+      // drift 0.5-1 px off the real text.
+      overlay.style.transform = `translate(${r.left}px, ${r.top}px)`;
       overlay.style.width = r.width + 'px';
     }
 
