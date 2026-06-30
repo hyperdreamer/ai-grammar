@@ -981,7 +981,10 @@
     removeGreenCheck(container);
 
     // Always use fixed-position — inline appendChild gets stripped by React re-renders
-    const isEditable = container.tagName === 'TEXTAREA' || container.isContentEditable;
+    // contentEditable is inherited — descendants of a contentEditable element
+    // return true for .isContentEditable even though they're not directly editable.
+    // Use .contentEditable === 'true' to only match elements with the attribute set.
+    const isEditable = container.tagName === 'TEXTAREA' || container.contentEditable === 'true';
     const check = document.createElement('div');
     check.className = 'ai-grammar-ok-ta';
     check.textContent = '✓';
@@ -1041,10 +1044,11 @@
   }
 
   /** Only clear green checks on editable elements (textareas, contentEditable).
-   *  Leaves post-submit paragraph checks untouched — those auto-dismiss. */
+   *  Leaves post-submit paragraph checks untouched — those are permanent.
+   *  Uses .contentEditable === 'true' (not inherited .isContentEditable). */
   function removeEditableGreenChecks() {
     for (const [container] of greenCheckTimers) {
-      if (container.tagName === 'TEXTAREA' || container.isContentEditable) {
+      if (container.tagName === 'TEXTAREA' || container.contentEditable === 'true') {
         removeGreenCheck(container);
       }
     }
