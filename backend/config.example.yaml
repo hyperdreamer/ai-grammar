@@ -14,9 +14,6 @@ server:
 debug: false
 
 ai:
-  # Provider type: "openai" for OpenAI-compatible APIs (includes most proxies)
-  provider: openai
-
   # Model to use for grammar checking.
   # Smaller/faster models (gpt-4o-mini, claude-haiku, deepseek-chat) work well
   # and are much cheaper than flagship models for this task.

@@ -88,6 +88,14 @@
     '[data-testid*="user"]',
     '[class*="user"][class*="msg"]',
     '[class*="user"][class*="message"]',
+    // WhatsApp Web outgoing messages
+    '.message-out',
+    '[data-pre-plain-text]',
+    // Microsoft Teams self/sent messages
+    '[class*="self"]',
+    '[class*="outgoing"]',
+    '[class*="sent"]',
+    '[data-tid*="self"]',
   ].join(', ');
 
   // -----------------------------------------------------------------------
@@ -1909,6 +1917,12 @@
 
     function getTextFromControls(scope) {
       if (!scope?.querySelectorAll) return '';
+      // Check contentEditable divs first (WhatsApp Web, Teams, etc.)
+      const editables = scope.querySelectorAll('[contenteditable="true"]');
+      for (const ed of editables) {
+        const captured = (ed.textContent || '').trim();
+        if (captured) return captured;
+      }
       const textareas = scope.querySelectorAll('textarea');
       const inputs = scope.querySelectorAll('input[type="text"], input:not([type])');
       for (const ta of textareas) {
@@ -1927,6 +1941,7 @@
       const form = e.target;
       const textareas = form.querySelectorAll('textarea');
       const inputs = form.querySelectorAll('input[type="text"]');
+      const editables = form.querySelectorAll('[contenteditable="true"]');
       let captured = '';
       for (const ta of textareas) {
         captured = ta.value.trim();
@@ -1938,13 +1953,31 @@
           if (captured) break;
         }
       }
+      if (!captured) {
+        for (const ed of editables) {
+          captured = (ed.textContent || '').trim();
+          if (captured) break;
+        }
+      }
       clearTimeout(commandDebounce);
       commandDebounce = null;
       processCapturedText(captured);
     }, true);
 
     document.addEventListener('click', (e) => {
-      const control = e.target.closest?.('button, input[type="button"], input[type="submit"]');
+      // Standard button elements
+      let control = e.target.closest?.('button, input[type="button"], input[type="submit"]');
+
+      // WhatsApp Web / Teams send buttons are often <span>/<div> with
+      // aria-label="Send" or data-testid containing "send"
+      if (!control) {
+        const candidate = e.target.closest?.('[role="button"]') || e.target;
+        const ariaLabel = (candidate.getAttribute?.('aria-label') || '').toLowerCase();
+        const testId = (candidate.getAttribute?.('data-testid') || '').toLowerCase();
+        if (/^(send|submit)$/.test(ariaLabel) || testId.includes('send')) {
+          control = candidate;
+        }
+      }
       if (!control) return;
 
       const label = (control.innerText || control.value || control.getAttribute('aria-label') || '').trim().toLowerCase();

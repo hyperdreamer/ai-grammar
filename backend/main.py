@@ -116,7 +116,6 @@ class TimeoutConfig:
 class AIConfig:
     """Settings needed to call a configured AI provider."""
 
-    provider: str = "openai"
     model: str = "gpt-4o-mini"
     api_key: str = ""
     api_base: str = "https://api.openai.com/v1"
@@ -179,7 +178,6 @@ def load_config() -> AIConfig:
         api_base = api_base.rstrip("/") + "/v1"
 
     return AIConfig(
-        provider=ai_section.get("provider", "openai"),
         model=ai_section.get("model", "gpt-4o-mini"),
         api_key=api_key,
         api_base=api_base,
@@ -264,7 +262,7 @@ def _load_debug() -> bool:
 async def _do_ai_call(body: dict, headers: dict, timeout: httpx.Timeout, config: AIConfig, deadline: float) -> dict[str, Any]:
     """Shared AI provider call with retry logic."""
     debug = _load_debug()
-    _debug("ai", f"calling provider={config.provider} model={config.model} base={config.api_base}", enabled=debug)
+    _debug("ai", f"calling model={config.model} base={config.api_base}", enabled=debug)
 
     async def make_request():
         async with httpx.AsyncClient(timeout=timeout, limits=httpx.Limits(max_keepalive_connections=5)) as client:
