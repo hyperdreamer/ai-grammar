@@ -2,15 +2,10 @@
 """Test the AI Grammar Checker extension on WhatsApp Web.
 
 Uses the persistent browser profile from auth_whatsapp.py.
-Sends a message with a deliberate grammar error and captures
-extension console logs to diagnose rendering issues.
-
-Usage:
-  python tests/test_whatsapp_grammar.py "Chat Name"
-  python tests/test_whatsapp_grammar.py              # picks first chat
+Sends a message with a deliberate grammar error to the first chat
+in the list and captures extension console logs to diagnose rendering issues.
 """
 
-import json
 import sys
 import time
 from pathlib import Path
@@ -24,8 +19,6 @@ if not PROFILE_DIR.is_dir():
     print("Profile not found. Run auth_whatsapp.py first to log into WhatsApp.")
     sys.exit(1)
 
-# --- Config ---
-TARGET_CHAT = sys.argv[1] if len(sys.argv) > 1 else ""
 TEST_MESSAGE = "I has went to the store yesterday and buyed some apple."
 
 # --- Collect extension console logs ---
@@ -37,12 +30,6 @@ def on_console(msg):
         logs.append({"type": msg.type, "text": msg.text, "ts": time.time()})
         print(f"  [EXT] {msg.text}")
 
-
-# --- Config ---
-# The chat to send a message to. Change this to an exact contact/group name
-# visible in your WhatsApp chat list, or leave empty to pick the first chat.
-TARGET_CHAT = ""  # e.g. "John Doe" or "Test Group"
-TEST_MESSAGE = "I has went to the store yesterday and buyed some apple."
 
 print("Launching WhatsApp Web with extension...")
 print(f"Test message: {TEST_MESSAGE!r}")
@@ -80,40 +67,15 @@ with sync_playwright() as p:
     # Give WhatsApp time to fully render
     page.wait_for_timeout(3_000)
 
-    # --- Open a chat ---
-    if TARGET_CHAT:
-        # Search for the chat
-        search_box = page.locator(
-            '[contenteditable="true"][data-testid="chat-list-search"]'
-        ).or_(page.locator('[title="Search input textbox"]')).or_(
-            page.locator('div[role="textbox"][aria-label="Search or start new chat"]')
-        )
-        try:
-            search_box.first.click(timeout=3_000)
-            search_box.first.fill(TARGET_CHAT)
-            page.wait_for_timeout(1_500)
-            # Click the first search result
-            first_result = page.locator(
-                'span[title="' + TARGET_CHAT + '"]'
-            ).or_(page.locator(f'span:has-text("{TARGET_CHAT}")').first)
-            first_result.first.click(timeout=3_000)
-            page.wait_for_timeout(2_000)
-            print(f"✓ Opened chat: {TARGET_CHAT}")
-        except Exception as e:
-            print(f"! Could not search for '{TARGET_CHAT}': {e}")
-            print("  Clicking the first chat in the list instead...")
-            page.locator("#pane-side div[role='row']").first.click(timeout=5_000)
-            page.wait_for_timeout(2_000)
-    else:
-        # Click first chat in the list
-        try:
-            page.locator("#pane-side div[role='row']").first.click(timeout=10_000)
-            page.wait_for_timeout(2_000)
-            print("✓ Opened first chat in list")
-        except Exception as e:
-            print(f"✗ Could not open any chat: {e}")
-            context.close()
-            sys.exit(1)
+    # --- Open first chat ---
+    try:
+        page.locator("#pane-side div[role='row']").first.click(timeout=10_000)
+        page.wait_for_timeout(2_000)
+        print("✓ Opened first chat in list")
+    except Exception as e:
+        print(f"✗ Could not open any chat: {e}")
+        context.close()
+        sys.exit(1)
 
     # --- Type and send the test message ---
     print(f"\nSending test message: {TEST_MESSAGE!r}")
