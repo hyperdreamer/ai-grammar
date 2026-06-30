@@ -125,17 +125,16 @@
          text-decoration on near-transparent overlay text can be
          quantized away at certain DPI×zoom combos.  SVG backgrounds
          render the same wave pattern at every zoom. */
-      /* background-position-y: calc(100% - 5px) pulls the wave up to the text
-         baseline instead of sitting at the bottom of the line box.  The SVG
-         wave is 5 px tall with its center ~1.25 px from the bottom; the extra
-         line-height whitespace below the descenders pushes the underline too
-         far down at plain 100%.  5 px works across 12–18 px font sizes with
-         1.3–1.6 line-height. */
+      /* background-position-y offsets the SVG wave from the element bottom.
+         2 px is a compromise: tight line-height (1.0–1.2, e.g. iMessage)
+         needs ~2 px; loose (1.5) needs ~5 px.  At 2 px the underline
+         sits slightly below the baseline on loose layouts (still an
+         improvement over 0) and right on the baseline on tight ones. */
       .ai-grammar-error {
         text-decoration-line: none !important;
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='4' viewBox='0 0 10 4'%3E%3Cpath d='M0,3 Q2.5,0 5,3 Q7.5,6 10,3' fill='none' stroke='%23dc2626' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
         background-repeat: repeat-x;
-        background-position: 0 calc(100% - 5px);
+        background-position-y: bottom 2px;
         background-size: 10px 5px;
         cursor: pointer;
         border-radius: 2px;
@@ -147,7 +146,7 @@
         text-decoration-line: none !important;
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='4' viewBox='0 0 10 4'%3E%3Cpath d='M0,3 Q2.5,0 5,3 Q7.5,6 10,3' fill='none' stroke='%234ade80' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
         background-repeat: repeat-x;
-        background-position: 0 calc(100% - 5px);
+        background-position-y: bottom 2px;
         background-size: 10px 5px;
         cursor: pointer;
         border-radius: 2px;
@@ -159,7 +158,7 @@
         text-decoration-line: none !important;
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='4' viewBox='0 0 10 4'%3E%3Cpath d='M0,3 Q2.5,0 5,3 Q7.5,6 10,3' fill='none' stroke='%2360a5fa' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E");
         background-repeat: repeat-x;
-        background-position: 0 calc(100% - 5px);
+        background-position-y: bottom 2px;
         background-size: 10px 5px;
         cursor: pointer;
         border-radius: 2px;
