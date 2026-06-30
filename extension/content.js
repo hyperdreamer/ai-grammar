@@ -115,8 +115,8 @@
         text-decoration-line: underline !important;
         text-decoration-style: wavy !important;
         text-decoration-color: #dc2626 !important;
-        text-decoration-thickness: 1.5px !important;
-        text-underline-offset: 3px;
+        text-decoration-thickness: from-font !important;
+        text-underline-offset: 0.12em;
         cursor: pointer;
         border-radius: 2px;
       }
@@ -127,8 +127,8 @@
         text-decoration-line: underline !important;
         text-decoration-style: wavy !important;
         text-decoration-color: #4ade80 !important;
-        text-decoration-thickness: 1.5px !important;
-        text-underline-offset: 3px;
+        text-decoration-thickness: from-font !important;
+        text-underline-offset: 0.12em;
         cursor: pointer;
         border-radius: 2px;
       }
@@ -139,8 +139,8 @@
         text-decoration-line: underline !important;
         text-decoration-style: wavy !important;
         text-decoration-color: #60a5fa !important;
-        text-decoration-thickness: 1.5px !important;
-        text-underline-offset: 3px;
+        text-decoration-thickness: from-font !important;
+        text-underline-offset: 0.12em;
         cursor: pointer;
         border-radius: 2px;
       }
@@ -156,8 +156,8 @@
         isolation: isolate;
       }
       .ag-live-highlight-backdrop {
-        color: transparent !important;
-        -webkit-text-fill-color: transparent !important;
+        color: rgba(0, 0, 0, 0.01) !important;
+        -webkit-text-fill-color: rgba(0, 0, 0, 0.01) !important;
         scrollbar-width: none;
       }
       .ag-live-highlight-backdrop::-webkit-scrollbar {
@@ -166,8 +166,8 @@
       .ag-live-highlight-backdrop .ai-grammar-error,
       .ag-live-highlight-backdrop .ai-grammar-improvement,
       .ag-live-highlight-backdrop .ai-grammar-idiom {
-        color: transparent !important;
-        -webkit-text-fill-color: transparent !important;
+        color: rgba(0, 0, 0, 0.01) !important;
+        -webkit-text-fill-color: rgba(0, 0, 0, 0.01) !important;
       }
       .ai-grammar-tooltip {
         position: fixed;
@@ -333,8 +333,8 @@
         }
       }
       .ag-message-overlay {
-        color: rgba(0, 0, 0, 0.004) !important;
-        -webkit-text-fill-color: rgba(0, 0, 0, 0.004) !important;
+        color: rgba(0, 0, 0, 0.01) !important;
+        -webkit-text-fill-color: rgba(0, 0, 0, 0.01) !important;
       }
     `;
     document.head.appendChild(style);
@@ -636,8 +636,8 @@
       whiteSpace: cs.whiteSpace,
       overflowWrap: cs.overflowWrap,
       wordBreak: cs.wordBreak,
-      color: 'rgba(0, 0, 0, 0.004)',
-      WebkitTextFillColor: 'rgba(0, 0, 0, 0.004)',
+      color: 'rgba(0, 0, 0, 0.01)',
+      WebkitTextFillColor: 'rgba(0, 0, 0, 0.01)',
       background: 'transparent',
       paddingTop: cs.paddingTop,
       paddingRight: cs.paddingRight,
