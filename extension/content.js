@@ -1181,9 +1181,10 @@
     removeGreenCheck(container);
     showBadge('Checking grammar...', true);
 
-    // Create fresh controller, abort any previous in-flight check
-    activeCheckController?.abort();
-    activeCheckController = new AbortController();
+    // Each post-submit check gets its OWN controller so concurrent checks
+    // can run independently. The shared activeCheckController is only for
+    // live-draft checks that should be aborted when the user resumes typing.
+    const checkController = new AbortController();
 
     try {
       // Read backend URL and settings from storage
@@ -1198,7 +1199,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-        signal: activeCheckController.signal,
+        signal: checkController.signal,
       });
       const data = await resp.json();
 
@@ -1232,7 +1233,9 @@
       }
     } catch (e) {
       removeBadge();
-      console.debug('[AI Grammar] Check error:', e);
+      if (e.name !== 'AbortError') {
+        console.debug('[AI Grammar] Check error:', e);
+      }
     }
   }
 
