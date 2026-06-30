@@ -18,7 +18,7 @@
     'SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA', 'INPUT',
     'SVG', 'MATH', 'NOSCRIPT', 'IFRAME', 'CANVAS',
   ]);
-  const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge', 'ai-grammar-ok'];
+  const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge', 'ai-grammar-ok', 'ag-message-overlay'];
   const CHECKED_ATTR = 'data-ai-grammar-checked';
 
   // -----------------------------------------------------------------------
@@ -1494,6 +1494,13 @@
   function processPendingChecks() {
     const entries = [...pendingChecks.entries()];
     pendingChecks.clear();
+
+    // Clear pendingSubmission after consuming matched blocks.
+    // This prevents AI replies in the same container from matching
+    // on subsequent mutation batches (they'd appear without .user-msg
+    // CSS class and with different text, but proximity alone would
+    // match them if we left the submission open).
+    pendingSubmission = null;
 
     for (const [container, text] of entries) {
       if (!document.contains(container)) continue;

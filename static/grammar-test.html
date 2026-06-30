@@ -61,6 +61,7 @@
     max-width: 85%; line-height: 1.6; font-size: 14px;
   }
   .user-msg { background: var(--ag-border); margin-left: auto; }
+  .reply-msg { background: var(--ag-bg); border: 1px solid var(--ag-border); margin-right: auto; }
   .system-msg { color: var(--ag-text-muted); font-size: 12px; text-align: center; }
   .input-row { display: flex; padding: 12px 16px; gap: 8px; border-top: 1px solid var(--ag-border); }
   .input-row textarea {
@@ -143,6 +144,36 @@
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
   });
 
+  // Random AI-like replies to test that the grammar checker only
+  // underlines YOUR messages, not random replies.
+  var randomReplies = [
+    "That's interesting! I would of thought differently about it.",
+    "Thanks for sharing — they're approach seems reasonable.",
+    "I see what you mean. Its a complex topic for sure.",
+    "Good point! There going to need more data to confirm.",
+    "Hmm, I hadn't considered that. Your right about the timing.",
+    "Let me think about this... the affect on performance is unclear.",
+    "Between you and I, this whole thing could of been avoided.",
+    "The team has went above and beyond on this project.",
+    "I could care less about the deadline — quality matters more.",
+    "Each of the developers have their own style, and it works.",
+    "She don't think the current approach will scale properly.",
+    "We should of tested this earlier in the development cycle.",
+    "The data suggests that less people are using this feature now.",
+    "Its been a long day but the results are promising so far.",
+    "I'm not sure who's responsibility this falls under anymore.",
+  ];
+
+  function addRandomReply() {
+    var idx = Math.floor(Math.random() * randomReplies.length);
+    var reply = randomReplies[idx];
+    var div = document.createElement('div');
+    div.className = 'message reply-msg';
+    div.textContent = reply;
+    document.getElementById('messages').appendChild(div);
+    document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
+  }
+
   function addMessage(cls, text) {
     var div = document.createElement('div');
     div.className = 'message ' + cls;
@@ -157,6 +188,12 @@
     addMessage('user-msg', text);
     textarea.value = '';
     textarea.style.height = 'auto';
+
+    // Add a random AI-like reply after a short delay so it appears
+    // as a separate DOM mutation.  The grammar checker should only
+    // underline the user's message (detected by proximity tracking
+    // at submit time), NOT the random reply.
+    setTimeout(addRandomReply, 800);
 
     // Call backend for grammar checking
     addMessage('system-msg', 'Checking...');
