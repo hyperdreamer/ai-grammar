@@ -1576,73 +1576,17 @@
   const COMMAND_PREFIX = '?/';
   const COMMANDS = {
     off: {
-      help: 'Disable auto grammar checking',
+      help: 'Disable grammar checking',
       async run() {
         await chrome.storage.sync.set({ grammarEnabled: false });
         showBadge('Grammar checker disabled');
       },
     },
     on: {
-      help: 'Enable auto grammar checking',
+      help: 'Enable grammar checking',
       async run() {
         await chrome.storage.sync.set({ grammarEnabled: true });
         showBadge('Grammar checker enabled');
-      },
-    },
-    check: {
-      help: 'Force grammar check of the page',
-      async run() {
-        commandInFlight = true;
-        batchInFlight = 1;
-        try {
-          const candidates = Array.from(document.querySelectorAll(
-            'p, div, article, section, li, blockquote, td, th, dd, figcaption, h1, h2, h3, h4, h5, h6, span'
-          ));
-          // Sort deepest-first so leaf text nodes are checked before their
-          // parent containers — this lets us deduplicate by text content.
-          candidates.sort((a, b) => {
-            let da = 0, db = 0;
-            for (let el = a; el; el = el.parentElement) da++;
-            for (let el = b; el; el = el.parentElement) db++;
-            return db - da;
-          });
-          const seenTexts = new Set();
-          const tasks = [];
-          for (const el of candidates) {
-            if (isIgnored(el) || checkedElements.has(el) || el.hasAttribute(CHECKED_ATTR)) continue;
-            const text = getTextContent(el);
-            if (text.length < minChars) continue;
-            const key = text.trim();
-            if (seenTexts.has(key)) continue;
-            seenTexts.add(key);
-            checkedElements.add(el);
-            el.setAttribute(CHECKED_ATTR, '');
-            tasks.push({ text, el });
-          }
-          if (tasks.length === 0) {
-            showBadge('No new text to check');
-            return;
-          }
-          // Throttled concurrent execution: max 5 checks at a time,
-          // with a shared progress badge showing N/total.
-          const CONCURRENCY = 5;
-          let completed = 0;
-          updateBatchBadge(0, tasks.length);
-          for (let i = 0; i < tasks.length; i += CONCURRENCY) {
-            const batch = tasks.slice(i, i + CONCURRENCY);
-            await Promise.all(
-              batch.map(({ text, el }) => checkText(text, el).then(() => {
-                completed++;
-                updateBatchBadge(completed, tasks.length);
-              }))
-            );
-          }
-          removeBadge();
-          showBadge(`Done: ${completed} blocks checked`);
-        } finally {
-          commandInFlight = false;
-          batchInFlight = 0;
-        }
       },
     },
     lang: {
@@ -2121,11 +2065,9 @@
   function init() {
     injectStyles();
 
-    // Start observing mutations
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
+    // Auto-check on submit is disabled — grammar checks are now
+    // manual-only via keyboard shortcut (Ctrl+Shift+L) on selected text.
+    // The MutationObserver is intentionally not started.
 
     // --- Track user-submitted text so we only check the user's content ---
     // Helper: process captured text — handle commands, otherwise store for matching
