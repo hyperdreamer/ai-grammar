@@ -85,6 +85,16 @@
   let lastUserTextTime = 0;
   const USER_TEXT_TTL_MS = 8000;       // how long we remember user text
   const USER_TEXT_MIN_MATCH = 0.6;     // fraction of user text that must appear in rendered block
+
+  // Proximity-based message container tracking (v1.3.10+).
+  // At submit time we walk up from the textarea to find the chat's
+  // message-list container.  The MutationObserver then checks structural
+  // proximity (block inside that container) before falling back to CSS
+  // selectors or text matching.  60s TTL is safe because checks are
+  // scoped to one container — false positives are structurally impossible.
+  const SUBMISSION_TTL_MS = 60000;
+  let pendingSubmission = null;        // { text, messageList, time }
+
   const USER_MESSAGE_SELECTOR = [
     '.user-msg',
     '.user-message',
@@ -1429,20 +1439,44 @@
   const observer = new MutationObserver((mutations) => {
     if (isHighlighting) return; // Ignore our own DOM changes
 
+    // Expire stale pendingSubmission
+    if (pendingSubmission && Date.now() - pendingSubmission.time > SUBMISSION_TTL_MS) {
+      pendingSubmission = null;
+    }
+
     const newBlocks = findNewTextBlocks(mutations);
     if (newBlocks.length === 0) return;
 
-    // Add to pending and debounce — only user-authored content
+    // Add to pending and debounce — only user-authored content.
+    // Priority chain: structural proximity > CSS selector > text matching.
     let matchedByText = false;
     for (const block of newBlocks) {
       const text = cleanMessageText(getTextContent(block));
-      const cssMatch = isLikelyUserMessage(block);
-      const textMatch = isUserText(text);
-      if (text.length >= minChars && (cssMatch || textMatch)) {
+      if (text.length < minChars) continue;
+
+      let matched = false;
+
+      // 1) STRUCTURAL PROXIMITY (most reliable — v1.3.10+)
+      if (pendingSubmission && pendingSubmission.messageList &&
+          pendingSubmission.messageList.contains(block)) {
+        matched = true;
+      }
+
+      // 2) CSS SELECTOR (platform-specific fallback)
+      if (!matched && isLikelyUserMessage(block)) {
+        matched = true;
+      }
+
+      // 3) TEXT MATCHING (last resort — TTL-limited)
+      if (!matched && isUserText(text)) {
+        matched = true;
+        matchedByText = true;
+      }
+
+      if (matched) {
         pendingChecks.set(block, text);
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
-        if (textMatch) matchedByText = true;
       }
     }
 
@@ -2067,7 +2101,7 @@
 
     // --- Track user-submitted text so we only check the user's content ---
     // Helper: process captured text — handle commands, otherwise store for matching
-    async function processCapturedText(captured) {
+    async function processCapturedText(captured, textarea) {
       if (!captured || captured.length < minChars) return;
       // Check for ?/ prefix commands at the end
       if (/\?\/\w+(\s+\S+)?$/.test(captured)) {
@@ -2076,6 +2110,16 @@
       }
       lastUserText = captured;
       lastUserTextTime = Date.now();
+
+      // Capture the message-list container via structural proximity.
+      // This lets the MutationObserver match the user's message by
+      // container membership instead of fragile text/CSS heuristics.
+      if (textarea && document.contains(textarea)) {
+        const messageList = findMessageList(textarea);
+        if (messageList) {
+          pendingSubmission = { text: captured, messageList, time: Date.now() };
+        }
+      }
     }
 
     function getTextFromControls(scope) {
@@ -2099,6 +2143,41 @@
       return '';
     }
 
+    /**
+     * Walk up from the textarea to find the chat's message-list container.
+     * Strategy: find an ancestor whose children include 2+ elements with the
+     * same tag name — the hallmark of a chat message list (repeated message
+     * blocks).  Falls back to the great-grandparent of the input.
+     */
+    function findMessageList(textarea) {
+      if (!textarea || !document.contains(textarea)) return null;
+
+      let el = textarea.parentElement;
+      let depth = 0;
+      const MAX_DEPTH = 12;
+
+      while (el && el !== document.body && depth < MAX_DEPTH) {
+        const children = Array.from(el.children);
+        if (children.length >= 2) {
+          // Count how many children share each tag name
+          const tagCounts = {};
+          for (const child of children) {
+            const tag = child.tagName;
+            tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+          }
+          // Repeated tag → this looks like a list (messages, posts, etc.)
+          if (Object.values(tagCounts).some(c => c >= 2)) {
+            return el;
+          }
+        }
+        el = el.parentElement;
+        depth++;
+      }
+
+      // Fallback: input → toolbar → form → main-message-area (common pattern)
+      return textarea.parentElement?.parentElement?.parentElement || null;
+    }
+
     // Capture text when the user submits a form (e.g., chat send)
     document.addEventListener('submit', (e) => {
       const form = e.target;
@@ -2106,25 +2185,26 @@
       const inputs = form.querySelectorAll('input[type="text"]');
       const editables = form.querySelectorAll('[contenteditable="true"]');
       let captured = '';
-      for (const ta of textareas) {
-        captured = ta.value.trim();
-        if (captured) break;
+      let ta = null;
+      for (const t of textareas) {
+        captured = t.value.trim();
+        if (captured) { ta = t; break; }
       }
       if (!captured) {
         for (const inp of inputs) {
           captured = inp.value.trim();
-          if (captured) break;
+          if (captured) { ta = inp; break; }
         }
       }
       if (!captured) {
         for (const ed of editables) {
           captured = (ed.textContent || '').trim();
-          if (captured) break;
+          if (captured) { ta = ed; break; }
         }
       }
       clearTimeout(commandDebounce);
       commandDebounce = null;
-      processCapturedText(captured);
+      processCapturedText(captured, ta);
     }, true);
 
     // Capture on mousedown BEFORE the platform clears the input
@@ -2148,7 +2228,7 @@
         if (captured) {
           clearTimeout(commandDebounce);
           commandDebounce = null;
-          processCapturedText(captured);
+          processCapturedText(captured, active);
         }
       }
     }, true);
@@ -2178,15 +2258,22 @@
       const form = control.closest('form');
       const scope = form || control.closest('.input-row, [role="form"], [contenteditable="true"]') || control.parentElement;
       let captured = getTextFromControls(scope);
+      let active = document.activeElement;
       if (!captured) {
-        const active = document.activeElement;
         if (active?.tagName === 'TEXTAREA' || active?.isContentEditable) {
           captured = (active.value || active.textContent || '').trim();
         }
       }
+      // active may be the button (not the textarea) — search scope for the input element
+      let ta = active;
+      if (!ta || (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable)) {
+        // Try to find the textarea in scope
+        const t = scope?.querySelector?.('textarea, [contenteditable="true"]');
+        if (t) ta = t;
+      }
       clearTimeout(commandDebounce);
       commandDebounce = null;
-      processCapturedText(captured);
+      processCapturedText(captured, ta);
     }, true);
 
     // Capture text on Enter + palette keyboard navigation
@@ -2214,7 +2301,7 @@
       const text = (ta.value || ta.textContent || '').trim();
       clearTimeout(commandDebounce);
       commandDebounce = null;
-      processCapturedText(text);
+      processCapturedText(text, ta);
     }, true);
 
     // Detect ?/ commands inline as the user types — no submit needed
