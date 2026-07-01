@@ -1218,19 +1218,26 @@
             data: text,
           }));
         } else if (ta.isContentEditable) {
-          // WhatsApp Lexical blocks all DOM writes. Copy corrected text
-          // to clipboard instead — the user pastes it manually (Ctrl+V).
+          // WhatsApp Lexical blocks all DOM writes.
+          // Try CDP fixer first (keyboard simulation via DevTools Protocol),
+          // fall back to clipboard copy if unavailable.
           skipLiveCheck = true;
-          navigator.clipboard.writeText(text).catch(() => {});
-          // Select the contentEditable so paste target is ready
-          ta.focus();
-          const range = document.createRange();
-          range.selectNodeContents(ta);
-          const sel = window.getSelection();
-          sel.removeAllRanges();
-          sel.addRange(range);
-          showBadge('Copied to clipboard — paste (Ctrl+V) to apply', false, 4000);
-          skipLiveCheck = false;
+          applyFixCDP(text).then(success => {
+            if (success) {
+              showBadge('✓ Fixed!', false, 3000);
+            } else {
+              // Fallback: copy to clipboard for manual paste
+              navigator.clipboard.writeText(text).catch(() => {});
+              ta.focus();
+              const range = document.createRange();
+              range.selectNodeContents(ta);
+              const sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+              showBadge('Copied to clipboard — paste (Ctrl+V) to apply', false, 4000);
+            }
+            skipLiveCheck = false;
+          });
         }
       }
       hideTooltip();
@@ -1245,6 +1252,23 @@
     errorEl.removeAttribute('data-type');
     errorEl.removeAttribute('tabindex');
     hideTooltip();
+  }
+
+  // -----------------------------------------------------------------------
+  // CDP Fixer integration — automated clear+retype on WhatsApp Lexical
+  // -----------------------------------------------------------------------
+
+  async function applyFixCDP(text) {
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        type: 'grammar:apply-fix',
+        text,
+      });
+      return resp && resp.ok === true;
+    } catch {
+      // Background may not be ready — fall back to clipboard
+      return false;
+    }
   }
 
   // -----------------------------------------------------------------------
