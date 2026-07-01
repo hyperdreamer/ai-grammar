@@ -42,6 +42,7 @@
   let liveHighlightMouseMoveHandler = null;
   let liveHighlightMouseLeaveHandler = null;
   let liveHighlightReposition = null;
+  let liveHighlightAnimationFrame = null;
 
   // Overlay-based post-submit highlights (survives React re-renders on
   // WhatsApp Web, Teams, etc. — DOM injection gets stripped by vdom reconcilation)
@@ -1219,6 +1220,11 @@
         } else if (ta.isContentEditable) {
           ta.textContent = text;
           ta.focus();
+          ta.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            inputType: 'insertReplacementText',
+            data: text,
+          }));
         }
       }
       hideTooltip();
@@ -1610,6 +1616,7 @@
     };
     window.addEventListener('resize', liveHighlightReposition);
     window.addEventListener('scroll', liveHighlightReposition, true);
+    startLiveHighlightPositionLoop();
 
     liveHighlightTarget = textarea;
   }
@@ -1664,12 +1671,28 @@
     };
     window.addEventListener('resize', liveHighlightReposition);
     window.addEventListener('scroll', liveHighlightReposition, true);
+    startLiveHighlightPositionLoop();
 
     liveHighlightTarget = ce;
   }
 
+  function startLiveHighlightPositionLoop() {
+    if (liveHighlightAnimationFrame) return;
+    const tick = () => {
+      liveHighlightAnimationFrame = null;
+      if (!liveHighlightEl || !liveHighlightReposition) return;
+      liveHighlightReposition();
+      liveHighlightAnimationFrame = requestAnimationFrame(tick);
+    };
+    liveHighlightAnimationFrame = requestAnimationFrame(tick);
+  }
+
   function clearLiveDraftHighlights() {
     if (liveHighlightEl) {
+      if (liveHighlightAnimationFrame) {
+        cancelAnimationFrame(liveHighlightAnimationFrame);
+        liveHighlightAnimationFrame = null;
+      }
       if (liveHighlightScrollHandler) {
         liveHighlightTarget?.removeEventListener('scroll', liveHighlightScrollHandler);
         liveHighlightScrollHandler = null;
