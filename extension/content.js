@@ -20,6 +20,7 @@
   ]);
   const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge', 'ai-grammar-ok', 'ag-message-overlay'];
   const CHECKED_ATTR = 'data-ai-grammar-checked';
+  const isWhatsApp = window.location.hostname === 'web.whatsapp.com';
 
   // -----------------------------------------------------------------------
   // State
@@ -415,6 +416,81 @@
     return raw.replace(/[\s.]*\d{1,2}:\d{2}(\s*[APap][Mm])?\s*$/, '').trim();
   }
 
+  function normalizeWhatsAppTextWithMap(raw) {
+    const text = raw || '';
+    let normalized = '';
+    const normalizedToRaw = [];
+
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+
+      // Drop bidi/zero-width markers and variation selectors WhatsApp can
+      // place in message text. Keep a map so backend offsets still locate
+      // the corresponding visible overlay characters.
+      if (
+        code === 0x00ad ||
+        code === 0x034f ||
+        code === 0x061c ||
+        (code >= 0x200b && code <= 0x200f) ||
+        (code >= 0x202a && code <= 0x202e) ||
+        (code >= 0x2060 && code <= 0x206f) ||
+        (code >= 0xfe00 && code <= 0xfe0f) ||
+        code === 0xfeff
+      ) {
+        continue;
+      }
+
+      normalizedToRaw.push(i);
+      normalized += text[i];
+    }
+
+    normalized = normalized.replace(/\u00a0/g, ' ');
+    const first = normalized.search(/\S/);
+    if (first === -1) return { text: '', normalizedToRaw: [] };
+    const lastMatch = normalized.match(/\S\s*$/);
+    const last = lastMatch ? lastMatch.index + 1 : normalized.length;
+
+    return {
+      text: normalized.slice(first, last),
+      normalizedToRaw: normalizedToRaw.slice(first, last),
+    };
+  }
+
+  function stripWhatsAppTextArtifacts(raw) {
+    return (raw || '')
+      .replace(/[\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufe00-\ufe0f\ufeff]/g, '')
+      .replace(/\u00a0/g, ' ');
+  }
+
+  function getWhatsAppTextElement(container) {
+    if (!container?.querySelector) return null;
+    const copyable = container.matches?.('.copyable-text')
+      ? container
+      : container.querySelector('.copyable-text');
+    if (!copyable) return null;
+    return copyable.querySelector('span.selectable-text') || copyable;
+  }
+
+  function getWhatsAppMessageInfo(container) {
+    const textEl = getWhatsAppTextElement(container);
+    if (!textEl) return { textEl: null, text: '', rawText: '', normalizedToRaw: [] };
+
+    const rawText = textEl.textContent || '';
+    const normalized = normalizeWhatsAppTextWithMap(rawText);
+    return { textEl, rawText, ...normalized };
+  }
+
+  function getWhatsAppMessageText(container) {
+    return getWhatsAppMessageInfo(container).text;
+  }
+
+  function findWhatsAppMessageContainer(el) {
+    let node = el;
+    if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
+    if (!node?.closest) return null;
+    return node.closest('div.message-out, div.message-in');
+  }
+
   function isTextBlock(el) {
     if (isIgnored(el)) return false;
     if (checkedElements.has(el)) return false;
@@ -803,6 +879,145 @@
 
     messageOverlays.set(container, { overlay, cleanup });
     return errors.length;
+  }
+
+  function highlightWhatsAppOverlay(container, errors, fullText) {
+    if (!errors?.length) return 0;
+
+    const waContainer = findWhatsAppMessageContainer(container) || container;
+    const info = getWhatsAppMessageInfo(waContainer);
+    if (!info.textEl || !info.text) return 0;
+
+    removeMessageOverlay(waContainer);
+
+    const overlayText = fullText || info.text;
+    const useRawMap = overlayText === info.text && info.normalizedToRaw.length === info.text.length;
+
+    function visibleSlice(start, end) {
+      if (!useRawMap) return overlayText.slice(start, end);
+      const rawStart = info.normalizedToRaw[start] ?? info.rawText.length;
+      const rawEnd = end >= info.text.length
+        ? ((info.normalizedToRaw[info.normalizedToRaw.length - 1] ?? info.rawText.length - 1) + 1)
+        : (info.normalizedToRaw[end] ?? info.rawText.length);
+      return stripWhatsAppTextArtifacts(info.rawText.slice(rawStart, rawEnd));
+    }
+
+    let html = '';
+    let pos = 0;
+    let rendered = 0;
+    const sorted = [...errors].sort((a, b) => Number(a.start) - Number(b.start));
+
+    for (const err of sorted) {
+      const s = Math.max(0, Number(err.start));
+      const e = Math.min(overlayText.length, Number(err.end));
+      if (s < pos || s >= e) continue;
+
+      html += escapeHtml(visibleSlice(pos, s));
+
+      const cls = err.type === 'improvement' ? 'ai-grammar-improvement' :
+                  err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
+      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer"
+          data-correction="${escapeHtml(err.correction || '')}"
+          data-explanation="${escapeHtml(err.explanation || '')}"
+          data-error="${escapeHtml(err.error || '')}"
+          data-type="${err.type || 'error'}" tabindex="0">${escapeHtml(visibleSlice(s, e))}</span>`;
+      pos = e;
+      rendered++;
+    }
+    html += escapeHtml(visibleSlice(pos, overlayText.length));
+
+    if (!rendered) return 0;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'ag-message-overlay';
+    overlay.setAttribute('data-ag-overlay', '');
+    overlay.setAttribute('data-ag-whatsapp-overlay', '');
+    overlay.innerHTML = html;
+
+    const styleSource = info.textEl.querySelector?.('span[dir]') || info.textEl;
+    const cs = window.getComputedStyle(styleSource);
+    const dirEl = styleSource.closest?.('[dir]');
+    const explicitDir = dirEl?.getAttribute('dir');
+    const direction = explicitDir === 'rtl' || explicitDir === 'ltr' ? explicitDir : cs.direction;
+
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      top: '0',
+      left: '0',
+      zIndex: '2147483644',
+      pointerEvents: 'none',
+      font: cs.font,
+      fontSize: cs.fontSize,
+      fontFamily: cs.fontFamily,
+      fontWeight: cs.fontWeight,
+      fontStyle: cs.fontStyle,
+      fontVariant: cs.fontVariant,
+      fontStretch: cs.fontStretch,
+      fontKerning: cs.fontKerning,
+      fontFeatureSettings: cs.fontFeatureSettings,
+      fontVariationSettings: cs.fontVariationSettings,
+      fontOpticalSizing: cs.fontOpticalSizing,
+      textRendering: cs.textRendering,
+      textTransform: cs.textTransform,
+      direction,
+      lineHeight: cs.lineHeight,
+      letterSpacing: cs.letterSpacing,
+      wordSpacing: cs.wordSpacing,
+      textAlign: cs.textAlign,
+      textIndent: cs.textIndent,
+      whiteSpace: cs.whiteSpace,
+      overflowWrap: cs.overflowWrap,
+      wordBreak: cs.wordBreak,
+      wordWrap: cs.wordWrap,
+      tabSize: cs.tabSize,
+      hyphens: cs.hyphens,
+      textWrapMode: cs.textWrapMode,
+      textWrapStyle: cs.textWrapStyle,
+      writingMode: cs.writingMode,
+      unicodeBidi: cs.unicodeBidi,
+      color: 'rgba(0, 0, 0, 0.02)',
+      WebkitTextFillColor: 'rgba(0, 0, 0, 0.02)',
+      background: 'transparent',
+      padding: '0',
+      margin: '0',
+      boxSizing: 'border-box',
+      overflow: 'hidden',
+    });
+
+    document.body.appendChild(overlay);
+
+    function reposition() {
+      if (!document.contains(waContainer) || !document.contains(info.textEl)) {
+        removeMessageOverlay(waContainer);
+        return;
+      }
+
+      const textRect = info.textEl.getBoundingClientRect();
+      overlay.style.transform = `translate(${textRect.left}px, ${textRect.top}px)`;
+      overlay.style.width = textRect.width + 'px';
+      overlay.style.minHeight = textRect.height + 'px';
+    }
+
+    reposition();
+
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+
+    const poll = setInterval(() => {
+      if (!document.contains(waContainer) || !document.contains(info.textEl)) {
+        removeMessageOverlay(waContainer);
+      }
+    }, 2000);
+
+    const cleanup = () => {
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+      clearInterval(poll);
+      if (document.contains(overlay)) overlay.remove();
+    };
+
+    messageOverlays.set(waContainer, { overlay, cleanup });
+    return rendered;
   }
 
   function removeMessageOverlay(container) {
@@ -1471,6 +1686,15 @@
   // -----------------------------------------------------------------------
 
   async function checkText(text, container) {
+    if (isWhatsApp) {
+      const waContainer = findWhatsAppMessageContainer(container) || container;
+      const waText = getWhatsAppMessageText(waContainer);
+      if (waContainer && waText) {
+        container = waContainer;
+        text = waText;
+      }
+    }
+
     const id = ++checkIdCounter;
     removeGreenCheck(container);
     showBadge('Checking grammar...', true);
@@ -1514,7 +1738,9 @@
       // Use overlay-based highlighting — survives React/Vue re-renders
       // (DOM injection via highlightErrors gets stripped on WhatsApp, Teams, etc.)
       isHighlighting = true;
-      const count = highlightOverlay(container, errors, text);
+      const count = isWhatsApp
+        ? highlightWhatsAppOverlay(container, errors, text)
+        : highlightOverlay(container, errors, text);
       isHighlighting = false;
 
       if (count > 0) {
@@ -1630,6 +1856,18 @@
     const text = range.toString().trim();
     if (text.length < minChars) {
       showBadge('Selection too short to check');
+      return;
+    }
+
+    if (isWhatsApp) {
+      const waContainer = findWhatsAppMessageContainer(range.commonAncestorContainer);
+      if (!waContainer) return;
+      const waText = getWhatsAppMessageText(waContainer);
+      if (waText.length < minChars) {
+        showBadge('Selection too short to check');
+        return;
+      }
+      checkText(waText, waContainer);
       return;
     }
 
@@ -2235,7 +2473,7 @@
     function getTextFromControls(scope) {
       if (!scope?.querySelectorAll) return '';
       // Check contentEditable divs first (WhatsApp Web, Teams, etc.)
-      const editables = scope.querySelectorAll('[contenteditable="true"]');
+      const editables = scope.querySelectorAll('[role="textbox"][contenteditable="true"], [contenteditable="true"]');
       for (const ed of editables) {
         const captured = (ed.textContent || '').trim();
         if (captured) return captured;
@@ -2293,7 +2531,7 @@
       const form = e.target;
       const textareas = form.querySelectorAll('textarea');
       const inputs = form.querySelectorAll('input[type="text"]');
-      const editables = form.querySelectorAll('[contenteditable="true"]');
+      const editables = form.querySelectorAll('[role="textbox"][contenteditable="true"], [contenteditable="true"]');
       let captured = '';
       let ta = null;
       for (const t of textareas) {
@@ -2366,7 +2604,7 @@
       if (!looksLikeSend) return;
 
       const form = control.closest('form');
-      const scope = form || control.closest('.input-row, [role="form"], [contenteditable="true"]') || control.parentElement;
+      const scope = form || control.closest('.input-row, [role="form"], [role="textbox"][contenteditable="true"], [contenteditable="true"]') || control.parentElement;
       let captured = getTextFromControls(scope);
       let active = document.activeElement;
       if (!captured) {
@@ -2378,7 +2616,7 @@
       let ta = active;
       if (!ta || (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable)) {
         // Try to find the textarea in scope
-        const t = scope?.querySelector?.('textarea, [contenteditable="true"]');
+        const t = scope?.querySelector?.('textarea, [role="textbox"][contenteditable="true"], [contenteditable="true"]');
         if (t) ta = t;
       }
       clearTimeout(commandDebounce);
