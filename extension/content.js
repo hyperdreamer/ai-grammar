@@ -1548,7 +1548,7 @@
     if (ta.tagName === 'TEXTAREA') {
       highlightLiveDraftTextarea(ta, errors);
     } else if (ta.isContentEditable) {
-      showErrorFloat(errors, ta);
+      highlightLiveDraftContentEditable(ta, errors);
     }
   }
 
@@ -1611,6 +1611,60 @@
     window.addEventListener('scroll', liveHighlightReposition, true);
 
     liveHighlightTarget = textarea;
+  }
+
+  function highlightLiveDraftContentEditable(ce, errors) {
+    const text = ce.textContent || ce.innerText || '';
+    const cs = window.getComputedStyle(ce);
+    const rect = ce.getBoundingClientRect();
+
+    // Create overlay — positioned exactly over the contentEditable
+    const overlay = document.createElement('div');
+    liveHighlightEl = overlay;
+    Object.assign(overlay.style, {
+      position: 'fixed', top: rect.top + 'px', left: rect.left + 'px',
+      width: rect.width + 'px', height: rect.height + 'px',
+      pointerEvents: 'none', zIndex: '2147483645',
+      font: cs.font, fontSize: cs.fontSize, fontFamily: cs.fontFamily,
+      fontWeight: cs.fontWeight, fontStyle: cs.fontStyle,
+      fontVariant: cs.fontVariant, fontStretch: cs.fontStretch,
+      fontKerning: cs.fontKerning, textRendering: cs.textRendering,
+      lineHeight: cs.lineHeight, letterSpacing: cs.letterSpacing,
+      wordSpacing: cs.wordSpacing, textAlign: cs.textAlign,
+      whiteSpace: cs.whiteSpace || 'pre-wrap',
+      overflowWrap: cs.overflowWrap || 'break-word',
+      wordBreak: cs.wordBreak || 'break-word',
+      color: 'rgba(0,0,0,0.01)',
+      background: 'transparent', overflow: 'hidden',
+      padding: cs.padding, boxSizing: 'border-box',
+    });
+
+    let html = '', pos = 0;
+    const sorted = [...errors].sort((a, b) => a.start - b.start);
+    for (const err of sorted) {
+      const s = Math.max(0, Number(err.start)), e = Math.min(text.length, Number(err.end));
+      if (s < pos || s >= e) continue;
+      html += escapeHtml(text.slice(pos, s));
+      const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
+      html += '<span class="' + cls + '" style="pointer-events:auto;cursor:pointer" data-correction="' + escapeHtml(err.correction||'') + '" data-explanation="' + escapeHtml(err.explanation||'') + '" data-error="' + escapeHtml(err.error||'') + '" data-type="' + (err.type||'error') + '" data-live-draft="1" data-start="' + s + '" data-end="' + e + '" tabindex="0">' + escapeHtml(text.slice(s, e)) + '</span>';
+      pos = e;
+    }
+    html += escapeHtml(text.slice(pos));
+    overlay.innerHTML = html;
+    document.body.appendChild(overlay);
+
+    liveHighlightReposition = () => {
+      if (!liveHighlightEl || !document.contains(ce)) return;
+      const r = ce.getBoundingClientRect();
+      liveHighlightEl.style.top = r.top + 'px';
+      liveHighlightEl.style.left = r.left + 'px';
+      liveHighlightEl.style.width = r.width + 'px';
+      liveHighlightEl.style.height = r.height + 'px';
+    };
+    window.addEventListener('resize', liveHighlightReposition);
+    window.addEventListener('scroll', liveHighlightReposition, true);
+
+    liveHighlightTarget = ce;
   }
 
   function clearLiveDraftHighlights() {
