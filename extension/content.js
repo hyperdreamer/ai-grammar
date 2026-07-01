@@ -1218,25 +1218,38 @@
             data: text,
           }));
         } else if (ta.isContentEditable) {
-          // execCommand('selectAll') may fail on rich editors (Lexical).
-          // Fall back: clear via textContent, then insert via execCommand
-          // which goes through Lexical's beforeinput pipeline.
+          // WhatsApp Lexical hooks beforeinput to manage content changes.
+          // Dispatch two-event sequence: deleteContentBackward to clear,
+          // then insertText with corrected text.
           skipLiveCheck = true;
           ta.focus();
-          const selected = document.execCommand('selectAll', false, null);
-          if (selected) {
-            document.execCommand('delete', false, null);
-          } else {
-            // selectAll failed (Lexical) — clear the field directly
-            ta.textContent = '';
-          }
-          document.execCommand('insertText', false, text);
-          skipLiveCheck = false;
+          // Select all via Selection API
+          const range = document.createRange();
+          range.selectNodeContents(ta);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          // Event 1: delete selected content
+          ta.dispatchEvent(new InputEvent('beforeinput', {
+            bubbles: true, cancelable: true,
+            inputType: 'deleteContentBackward', data: null,
+          }));
+          ta.textContent = '';
           ta.dispatchEvent(new InputEvent('input', {
             bubbles: true,
-            inputType: 'insertReplacementText',
-            data: text,
+            inputType: 'deleteContentBackward', data: null,
           }));
+          // Event 2: insert corrected text
+          ta.dispatchEvent(new InputEvent('beforeinput', {
+            bubbles: true, cancelable: true,
+            inputType: 'insertText', data: text,
+          }));
+          ta.textContent = text;
+          ta.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            inputType: 'insertText', data: text,
+          }));
+          skipLiveCheck = false;
         }
       }
       hideTooltip();
