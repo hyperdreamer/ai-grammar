@@ -262,25 +262,25 @@ async function handleApplyFix(text, tabId) {
     const pressKey = async (key, code, vk, mod, txt) => {
       const base = { _tabId, key, code, modifiers: mod || 0, windowsVirtualKeyCode: vk || 0, text: txt };
       await dispatchKey({ ...base, type: 'keyDown' });
-      await sleep(10);
+      await sleep(2);
       await dispatchKey({ ...base, type: 'keyUp' });
     };
 
     // Ctrl+A (select all)
     await dispatchKey({ _tabId, type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
-    await sleep(30);
+    await sleep(5);
     await dispatchKey({ _tabId, type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
-    await sleep(50);
+    await sleep(10);
 
     // Backspace (delete)
     await pressKey('Backspace', 'Backspace', 8, 0, '');
-    await sleep(80);
+    await sleep(15);
 
     // Type each character
     for (const c of text) {
       const info = charToKeyInfo(c);
       await pressKey(info.key, info.code, info.vk, info.mod, c);
-      await sleep(15);  // small delay between chars
+      await sleep(5);  // fast — Lexical handles 5ms gaps reliably
     }
 
     // Detach
