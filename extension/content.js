@@ -2319,6 +2319,21 @@
           if (ta.tagName === 'TEXTAREA') {
             ta.value = fixed;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
+          } else if (isWhatsApp) {
+            // WhatsApp Lexical blocks direct DOM writes — use CDP keyboard simulation
+            applyFixCDP(fixed).then(success => {
+              if (success) {
+                showBadge(`✓ Fixed ${sorted.length} issue${sorted.length > 1 ? 's' : ''}`, false, 3000);
+              } else {
+                // Fallback: copy to clipboard
+                navigator.clipboard.writeText(fixed).catch(() => {});
+                showBadge(`Copied fixed text to clipboard — paste (Ctrl+V) to apply`, false, 4000);
+              }
+              skipLiveCheck = false;
+            });
+            cancelLiveDraft?.();
+            activeCheckController?.abort();
+            return;  // badge handled above
           } else {
             ta.textContent = fixed;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -2387,6 +2402,21 @@
           if (ta.tagName === 'TEXTAREA') {
             ta.value = polished;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
+          } else if (isWhatsApp) {
+            // WhatsApp Lexical blocks direct DOM writes — use CDP keyboard simulation
+            applyFixCDP(polished).then(success => {
+              if (success) {
+                showBadge('✓ Polished', false, 3000);
+              } else {
+                // Fallback: copy to clipboard
+                navigator.clipboard.writeText(polished).catch(() => {});
+                showBadge('Copied polished text to clipboard — paste (Ctrl+V) to apply', false, 4000);
+              }
+              skipLiveCheck = false;
+            });
+            cancelLiveDraft?.();
+            activeCheckController?.abort();
+            return;  // badge handled above
           } else {
             ta.textContent = polished;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -2937,6 +2967,14 @@
       const text = (ta.value || ta.textContent || '').trim();
       clearTimeout(commandDebounce);
       commandDebounce = null;
+
+      // Prevent WhatsApp/chat platforms from sending when a ?/fix or ?/polish
+      // command is pending — the Enter triggers our handler, not the platform's send.
+      if (/\?\/\b(fix|polish)\b/.test(text)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+
       processCapturedText(text, ta);
     }, true);
 
