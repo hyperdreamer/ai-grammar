@@ -97,6 +97,8 @@ Type `?/` in any text input to open the **command palette** — a popup menu lis
 
 The palette opens when you type `?/`. Arrow keys navigate, Enter selects, Escape closes. Type more to filter (e.g., `?/o` filters to `?/off` and `?/on`). Prefix shortcuts auto-execute when only one match remains (e.g., `?/pol` → `?/polish`).
 
+Commands work on all text inputs — `<textarea>`, `<input>`, and `contentEditable` fields (including WhatsApp Web, Teams, and other rich-text editors). On WhatsApp Web, `?/fix` and `?/polish` use Chrome DevTools Protocol keyboard simulation to work around WhatsApp's Lexical editor.
+
 ## Configuration
 
 ### Server
