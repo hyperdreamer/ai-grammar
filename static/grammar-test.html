@@ -195,37 +195,6 @@
     // underline the user's message (detected by proximity tracking
     // at submit time), NOT the random reply.
     setTimeout(addRandomReply, 800);
-
-    // Call backend for grammar checking
-    var checkingEl = addMessage('system-msg', 'Checking...');
-    checkingEl.setAttribute('data-checking', '1');
-    fetch('/check', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text, language: 'auto' })
-    })
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        // Remove the specific "Checking..." element (not lastChild,
-        // which could be a random reply added after it)
-        var msgs = document.getElementById('messages');
-        var el = msgs.querySelector('[data-checking]');
-        if (el) msgs.removeChild(el);
-        if (!data.errors || data.errors.length === 0) {
-          addMessage('system-msg', '✓ No errors found');
-        } else {
-          data.errors.forEach(function(e) {
-            addMessage('system-msg',
-              e.type.toUpperCase() + ': "' + e.error + '" → "' + e.correction + '" — ' + e.explanation);
-          });
-        }
-      })
-      .catch(function(err) {
-        var msgs = document.getElementById('messages');
-        var el = msgs.querySelector('[data-checking]');
-        if (el) msgs.removeChild(el);
-        addMessage('system-msg', '✗ Error: ' + err.message);
-      });
   }
 
   function fillAndSend(text) {
