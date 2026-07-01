@@ -1218,8 +1218,16 @@
             data: text,
           }));
         } else if (ta.isContentEditable) {
-          ta.textContent = text;
+          // Use execCommand so WhatsApp's Lexical editor sees the change
+          // through its input pipeline.  Direct textContent writes are
+          // silently reverted by Lexical's state reconciliation.
           ta.focus();
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(ta);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          document.execCommand('insertText', false, text);
           ta.dispatchEvent(new InputEvent('input', {
             bubbles: true,
             inputType: 'insertReplacementText',
