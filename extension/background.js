@@ -37,6 +37,13 @@ async function getEnabled() {
 // Message handlers
 // ---------------------------------------------------------------------------
 
+// Accept persistent port connections from content scripts — keeps worker alive
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'grammar-fix') {
+    // Port accepted — worker stays alive while connected
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'grammar:check') {
     handleCheck(message, sender.tab?.id)

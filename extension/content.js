@@ -22,6 +22,19 @@
   const CHECKED_ATTR = 'data-ai-grammar-checked';
   const isWhatsApp = window.location.hostname === 'web.whatsapp.com';
 
+  // Persistent port to background — keeps the service worker alive so
+  // apply-fix messages are delivered even after the 30s idle timeout.
+  let fixPort = null;
+  try {
+    fixPort = chrome.runtime.connect({ name: 'grammar-fix' });
+    fixPort.onDisconnect.addListener(() => {
+      // Reconnect on disconnect (worker restarted)
+      setTimeout(() => {
+        try { fixPort = chrome.runtime.connect({ name: 'grammar-fix' }); } catch {}
+      }, 1000);
+    });
+  } catch {}
+
   // -----------------------------------------------------------------------
   // State
   // -----------------------------------------------------------------------
@@ -1267,23 +1280,13 @@
 
   function applyFixCDP(text) {
     return new Promise((resolve) => {
-      let settled = false;
-      const done = (val) => { if (!settled) { settled = true; resolve(val); } };
-      
-      // Timeout: if service worker doesn't respond in 5s, fall back to clipboard
-      const timer = setTimeout(() => done(false), 5000);
-      
       try {
         chrome.runtime.sendMessage(
           { type: 'grammar:apply-fix', text },
-          (resp) => {
-            clearTimeout(timer);
-            done(resp && resp.ok === true);
-          }
+          (resp) => resolve(resp && resp.ok === true)
         );
       } catch {
-        clearTimeout(timer);
-        done(false);
+        resolve(false);
       }
     });
   }
