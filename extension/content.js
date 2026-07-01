@@ -1178,26 +1178,16 @@
 
   function replaceContentEditableText(el, text) {
     el.focus();
-    // WhatsApp's Lexical ignores synthetic beforeinput/paste/execCommand.
-    // Simulate real keyboard events — Lexical processes these as user input.
-    // Ctrl+A selects all, Backspace deletes, then type each character.
-
-    // Ctrl+A: select all
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }));
-    // Backspace: delete selection
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Backspace', bubbles: true }));
-
-    // Type each character individually
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
-      el.dispatchEvent(new KeyboardEvent('keypress', { key: ch, bubbles: true }));
-      // Insert the actual character into the DOM
-      document.execCommand('insertText', false, ch);
-      el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
-    }
-
+    // WhatsApp's Lexical rejects all programmatic DOM manipulation.
+    // The only reliable approach: replaceChildren() + textContent,
+    // which atomically swaps the entire DOM tree. Then dispatch
+    // beforeinput+input so Lexical sees the change as an IME commit.
+    el.innerHTML = '';
+    el.appendChild(document.createTextNode(text));
+    el.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true, cancelable: true,
+      inputType: 'insertReplacementText', data: text,
+    }));
     el.dispatchEvent(new InputEvent('input', {
       bubbles: true,
       inputType: 'insertReplacementText',
