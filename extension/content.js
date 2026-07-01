@@ -1864,6 +1864,8 @@
     }, 500);
 
     async function checkLiveDraft(ta, text) {
+      // Don't start a grammar check while a command (fix/polish) is running
+      if (commandInFlight) return;
       try {
         showBadge('Checking grammar...', true);
         // Create fresh controller, abort any previous in-flight check
