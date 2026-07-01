@@ -1218,13 +1218,14 @@
             data: text,
           }));
         } else if (ta.isContentEditable) {
-          // Use execCommand so WhatsApp's Lexical editor handles the
-          // substitution through its native beforeinput pipeline.
-          // skipLiveCheck prevents the input handler from clearing
-          // the overlay mid-fix.
+          // WhatsApp's Lexical editor requires a real selection change
+          // before insertText.  selectAll + delete clears the field,
+          // then insertText writes the corrected text through Lexical's
+          // native input pipeline.
           skipLiveCheck = true;
           ta.focus();
           document.execCommand('selectAll', false, null);
+          document.execCommand('delete', false, null);
           document.execCommand('insertText', false, text);
           skipLiveCheck = false;
           ta.dispatchEvent(new InputEvent('input', {
