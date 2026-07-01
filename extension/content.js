@@ -2970,7 +2970,7 @@
 
       // Prevent WhatsApp/chat platforms from sending when a ?/fix or ?/polish
       // command is pending — the Enter triggers our handler, not the platform's send.
-      if (/\?\/\b(fix|polish)\b/.test(text)) {
+      if (/\?\/\b(fix|polish)\b\s*$/.test(text)) {
         e.preventDefault();
         e.stopPropagation();
       }
