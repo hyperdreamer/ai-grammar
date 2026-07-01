@@ -1510,6 +1510,24 @@
     `;
     document.body.appendChild(panel);
 
+    if (anchorEl && document.contains(anchorEl)) {
+      const anchorRect = anchorEl.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      const gap = 8;
+      let top = anchorRect.bottom + gap;
+      if (top + panelRect.height > window.innerHeight - gap) {
+        top = Math.max(gap, anchorRect.top - panelRect.height - gap);
+      }
+      const left = Math.min(
+        Math.max(gap, anchorRect.left),
+        Math.max(gap, window.innerWidth - panelRect.width - gap)
+      );
+      panel.style.top = top + 'px';
+      panel.style.left = left + 'px';
+      panel.style.bottom = 'auto';
+      panel.style.right = 'auto';
+    }
+
     // Auto-dismiss after 30 seconds
     setTimeout(removeErrorFloat, 30_000);
   }
@@ -1530,8 +1548,7 @@
     if (ta.tagName === 'TEXTAREA') {
       highlightLiveDraftTextarea(ta, errors);
     } else if (ta.isContentEditable) {
-      highlightErrors(ta, errors);
-      liveHighlightTarget = ta;
+      showErrorFloat(errors, ta);
     }
   }
 
@@ -1923,12 +1940,26 @@
   // Manual selection check (keyboard shortcut)
   // -----------------------------------------------------------------------
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  function receiveSelectionCheckMessage(message, _sender, sendResponse) {
     if (message?.type === 'grammar:check-selection') {
       handleSelectionCheck();
-      sendResponse({ ok: true });
+      sendResponse?.({ ok: true });
       return false;
     }
+  }
+
+  try {
+    chrome.runtime.onMessage.addListener(receiveSelectionCheckMessage);
+  } catch (e) {
+    if (e.message?.includes('Extension context invalidated')) {
+      contextInvalidated = true;
+    } else {
+      console.debug('[AI Grammar] Failed to register selection listener:', e);
+    }
+  }
+
+  window.addEventListener('grammar:check-selection', () => {
+    handleSelectionCheck();
   });
 
   function handleSelectionCheck() {
@@ -1944,14 +1975,16 @@
 
     if (isWhatsApp) {
       const waContainer = findWhatsAppMessageContainer(range.commonAncestorContainer);
-      if (!waContainer) return;
-      const waText = getWhatsAppMessageText(waContainer);
-      if (waText.length < minChars) {
-        showBadge('Selection too short to check');
-        return;
+      if (waContainer) {
+        const waText = getWhatsAppMessageText(waContainer);
+        if (waText.length >= minChars) {
+          checkText(waText, waContainer);
+          return;
+        }
+        // If WhatsApp's current DOM no longer exposes the expected message
+        // classes/text spans, fall through to the generic selected-text path.
+        // Returning here makes the shortcut appear broken.
       }
-      checkText(waText, waContainer);
-      return;
     }
 
     // Find the nearest block-level ancestor to use as container
@@ -1959,7 +1992,13 @@
     while (container && container.nodeType === Node.TEXT_NODE) {
       container = container.parentElement;
     }
-    if (!container) return;
+    if (!container) {
+      if (isWhatsApp) {
+        checkText(text, document.body);
+        return;
+      }
+      return;
+    }
 
     // Walk up past inline elements to the nearest block-level container.
     // The old text-length heuristic (getTextContent(el).length < text.length * 1.2)
