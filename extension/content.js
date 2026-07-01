@@ -1218,14 +1218,15 @@
             data: text,
           }));
         } else if (ta.isContentEditable) {
-          // WhatsApp's Lexical editor may ignore execCommand; dispatch
-          // beforeinput first so Lexical prepares its state, then fall
-          // back to textContent write + InputEvent if needed.
-          ta.dispatchEvent(new InputEvent('beforeinput', {
-            bubbles: true, cancelable: true,
-            inputType: 'insertReplacementText', data: text,
-          }));
-          ta.textContent = text;
+          // Use execCommand so WhatsApp's Lexical editor handles the
+          // substitution through its native beforeinput pipeline.
+          // skipLiveCheck prevents the input handler from clearing
+          // the overlay mid-fix.
+          skipLiveCheck = true;
+          ta.focus();
+          document.execCommand('selectAll', false, null);
+          document.execCommand('insertText', false, text);
+          skipLiveCheck = false;
           ta.dispatchEvent(new InputEvent('input', {
             bubbles: true,
             inputType: 'insertReplacementText',
@@ -1857,6 +1858,9 @@
       const ta = e.target;
       if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
 
+      // Skip if a fix/polish command is in flight — don't clear its overlay.
+      if (skipLiveCheck) return;
+
       // Clear live draft highlights and abort in-flight checks
       clearLiveDraftHighlights();
       removeErrorFloat();
@@ -1873,7 +1877,6 @@
       const text = raw.trim();
       if (text.length < minChars) return;
 
-      if (skipLiveCheck) return;   // fix/polish dispatched this input — don't re-schedule
       liveCheckTarget = ta;
       lastInputTime = Date.now();
     }, true);
