@@ -35,6 +35,6 @@ ai:
   # --- Timeouts (all values in seconds) ---
   timeout:
     connect: 10     # TCP/TLS handshake
-    read: 120        # Waiting for AI response (grammar checks are fast)
+    read: 300        # Waiting for AI response (grammar checks are fast)
     write: 60        # Sending request body
     pool: 10         # Connection pool acquire

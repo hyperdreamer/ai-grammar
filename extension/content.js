@@ -1176,25 +1176,6 @@
     return div.innerHTML;
   }
 
-  function replaceContentEditableText(el, text) {
-    el.focus();
-    // WhatsApp's Lexical rejects all programmatic DOM manipulation.
-    // The only reliable approach: replaceChildren() + textContent,
-    // which atomically swaps the entire DOM tree. Then dispatch
-    // beforeinput+input so Lexical sees the change as an IME commit.
-    el.innerHTML = '';
-    el.appendChild(document.createTextNode(text));
-    el.dispatchEvent(new InputEvent('beforeinput', {
-      bubbles: true, cancelable: true,
-      inputType: 'insertReplacementText', data: text,
-    }));
-    el.dispatchEvent(new InputEvent('input', {
-      bubbles: true,
-      inputType: 'insertReplacementText',
-      data: text,
-    }));
-  }
-
   // -----------------------------------------------------------------------
   // Apply correction
   // -----------------------------------------------------------------------
@@ -1237,12 +1218,19 @@
             data: text,
           }));
         } else if (ta.isContentEditable) {
+          // WhatsApp Lexical blocks all DOM writes. Copy corrected text
+          // to clipboard instead — the user pastes it manually (Ctrl+V).
           skipLiveCheck = true;
-          try {
-            replaceContentEditableText(ta, text);
-          } finally {
-            setTimeout(() => { skipLiveCheck = false; }, 0);
-          }
+          navigator.clipboard.writeText(text).catch(() => {});
+          // Select the contentEditable so paste target is ready
+          ta.focus();
+          const range = document.createRange();
+          range.selectNodeContents(ta);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          showBadge('Copied to clipboard — paste (Ctrl+V) to apply', false, 4000);
+          skipLiveCheck = false;
         }
       }
       hideTooltip();
