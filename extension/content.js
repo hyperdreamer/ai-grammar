@@ -18,7 +18,7 @@
     'SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA', 'INPUT',
     'SVG', 'MATH', 'NOSCRIPT', 'IFRAME', 'CANVAS',
   ]);
-  const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge', 'ai-grammar-ok', 'ag-message-overlay', 'ag-live-highlight-backdrop'];
+  const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge', 'ai-grammar-ok', 'ag-message-overlay', 'ag-live-error'];
   const CHECKED_ATTR = 'data-ai-grammar-checked';
   const isWhatsApp = window.location.hostname === 'web.whatsapp.com';
 
@@ -1577,10 +1577,12 @@
     const textColor = window.getComputedStyle(textarea).color || '#e2e8f0';
     const rect = textarea.getBoundingClientRect();
 
-    // Create overlay — positioned exactly over the textarea
+    // Create overlay — positioned exactly over the textarea.
+    // Do NOT use ag-live-highlight-backdrop class — its !important
+    // color rule overrides the inline opaque text color needed for
+    // textareas (where the real text is hidden via transparent).
     const overlay = document.createElement('div');
     liveHighlightEl = overlay;
-    overlay.className = 'ag-live-highlight-backdrop';
     Object.assign(overlay.style, {
       position: 'fixed', top: rect.top + 'px', left: rect.left + 'px',
       width: rect.width + 'px', height: rect.height + 'px',
