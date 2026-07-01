@@ -1218,16 +1218,14 @@
             data: text,
           }));
         } else if (ta.isContentEditable) {
-          // Use execCommand so WhatsApp's Lexical editor sees the change
-          // through its input pipeline.  Direct textContent writes are
-          // silently reverted by Lexical's state reconciliation.
-          ta.focus();
-          const sel = window.getSelection();
-          const range = document.createRange();
-          range.selectNodeContents(ta);
-          sel.removeAllRanges();
-          sel.addRange(range);
-          document.execCommand('insertText', false, text);
+          // WhatsApp's Lexical editor may ignore execCommand; dispatch
+          // beforeinput first so Lexical prepares its state, then fall
+          // back to textContent write + InputEvent if needed.
+          ta.dispatchEvent(new InputEvent('beforeinput', {
+            bubbles: true, cancelable: true,
+            inputType: 'insertReplacementText', data: text,
+          }));
+          ta.textContent = text;
           ta.dispatchEvent(new InputEvent('input', {
             bubbles: true,
             inputType: 'insertReplacementText',
@@ -1562,7 +1560,15 @@
     if (ta.tagName === 'TEXTAREA') {
       highlightLiveDraftTextarea(ta, errors);
     } else if (ta.isContentEditable) {
-      highlightLiveDraftContentEditable(ta, errors);
+      // WhatsApp's Lexical editor corrupts on DOM-span injection;
+      // use the overlay approach only there.  Other contentEditable
+      // inputs (test pages, plain sites) get the floating panel which
+      // doesn't risk making real text invisible.
+      if (isWhatsApp) {
+        highlightLiveDraftContentEditable(ta, errors);
+      } else {
+        showErrorFloat(errors, ta);
+      }
     }
   }
 
