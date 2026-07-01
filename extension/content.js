@@ -32,6 +32,7 @@
   let debounceTimer = null;
   let isHighlighting = false;
   let tooltipEl = null;
+  let tooltipTimeout = null;
   let currentErrorEl = null;
   const LIVE_HIGHLIGHT_CLASS = 'ag-live-highlight';
   let liveHighlightEl = null;
@@ -1045,6 +1046,11 @@
   function showTooltip(errorEl) {
     if (currentErrorEl === errorEl && tooltipEl?.style.display === 'block') return;
 
+    if (tooltipTimeout) {
+      clearTimeout(tooltipTimeout);
+      tooltipTimeout = null;
+    }
+
     currentErrorEl = errorEl;
     const tip = createTooltip();
     const correction = errorEl.getAttribute('data-correction') || '';
@@ -1066,24 +1072,97 @@
       </div>
     `;
 
+    tip.style.left = '-9999px';
+    tip.style.top = '-9999px';
+    tip.style.display = 'block';
+    tip.getBoundingClientRect();
+
     // Position the tooltip near the error element
     const rect = errorEl.getBoundingClientRect();
-    const tipWidth = 360;
-    let left = Math.min(rect.left + rect.width / 2, window.innerWidth - tipWidth - 10);
-    left = Math.max(10, left);
-    let top = rect.top - tip.offsetHeight - 8;
+    const arrow = tip.querySelector('.ag-arrow');
+    const viewportGap = 10;
+    const sentenceGap = 12;
+    const tipWidth = tip.offsetWidth;
+    const tipHeight = tip.offsetHeight;
 
-    // If tooltip would go above viewport, show below instead
-    if (top < 10) {
-      top = rect.bottom + 8;
+    let left = rect.left + rect.width / 2 - tipWidth / 2;
+    left = Math.min(left, window.innerWidth - tipWidth - viewportGap);
+    left = Math.max(viewportGap, left);
+
+    const aboveTop = rect.top - tipHeight - sentenceGap;
+    const belowTop = rect.bottom + sentenceGap;
+    let top = aboveTop;
+
+    // Prefer above, but flip below if there is not enough room or clearance.
+    if (
+      aboveTop < viewportGap ||
+      tooltipOverlapsTextAbove(errorEl, {
+        top: aboveTop,
+        right: left + tipWidth,
+        bottom: aboveTop + tipHeight,
+        left,
+      }, rect)
+    ) {
+      top = belowTop;
     }
+
+    if (top + tipHeight > window.innerHeight - viewportGap) {
+      top = Math.max(viewportGap, window.innerHeight - tipHeight - viewportGap);
+    }
+    top = Math.max(viewportGap, top);
 
     tip.style.left = left + 'px';
     tip.style.top = top + 'px';
-    tip.style.display = 'block';
+
+    if (arrow) {
+      const isAbove = top + tipHeight <= rect.top;
+      const arrowCenter = rect.left + rect.width / 2 - left;
+      const clampedArrowCenter = Math.min(Math.max(arrowCenter, 14), tipWidth - 14);
+      const arrowColor = getComputedStyle(tip).backgroundColor || '#1e293b';
+      arrow.style.left = (clampedArrowCenter - 6) + 'px';
+      arrow.style.top = isAbove ? 'auto' : '-6px';
+      arrow.style.bottom = isAbove ? '-6px' : 'auto';
+      arrow.style.borderTop = isAbove ? `6px solid ${arrowColor}` : 'none';
+      arrow.style.borderBottom = isAbove ? 'none' : `6px solid ${arrowColor}`;
+    }
+  }
+
+  function tooltipOverlapsTextAbove(errorEl, tooltipRect, errorRect) {
+    const container = errorEl.closest('p, li, blockquote, td, th, div, article, section') || errorEl.parentElement;
+    if (!container) return false;
+
+    const intersects = (a, b) =>
+      a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (!node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        if (errorEl.contains(node.parentElement)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+
+    while (walker.nextNode()) {
+      const range = document.createRange();
+      range.selectNodeContents(walker.currentNode);
+      const rects = range.getClientRects();
+      range.detach();
+
+      for (const textRect of rects) {
+        if (textRect.bottom <= errorRect.top - 1 && intersects(textRect, tooltipRect)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   function hideTooltip() {
+    if (tooltipTimeout) {
+      clearTimeout(tooltipTimeout);
+      tooltipTimeout = null;
+    }
     if (tooltipEl) {
       tooltipEl.style.display = 'none';
     }
@@ -1184,7 +1263,11 @@
   document.addEventListener('mouseover', (e) => {
     const errorEl = e.target.closest(GRAMMAR_CLASSES);
     if (errorEl) {
-      showTooltip(errorEl);
+      if (tooltipTimeout) clearTimeout(tooltipTimeout);
+      tooltipTimeout = setTimeout(() => {
+        tooltipTimeout = null;
+        showTooltip(errorEl);
+      }, 300);
     } else if (!e.target.closest('.ai-grammar-tooltip')) {
       hideTooltip();
     }
