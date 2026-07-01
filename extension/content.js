@@ -1176,67 +1176,26 @@
     return div.innerHTML;
   }
 
-  function selectEditableContents(el) {
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }
-
-  function createTextClipboardData(text) {
-    let dataTransfer = null;
-    try {
-      dataTransfer = new DataTransfer();
-      dataTransfer.setData('text/plain', text);
-      dataTransfer.setData('text/html', escapeHtml(text).replace(/\n/g, '<br>'));
-    } catch (_err) {
-      dataTransfer = {
-        types: ['text/plain', 'text/html'],
-        getData(type) {
-          if (type === 'text/plain' || type === 'Text') return text;
-          if (type === 'text/html') return escapeHtml(text).replace(/\n/g, '<br>');
-          return '';
-        },
-        setData() {},
-        clearData() {},
-        files: [],
-        items: [],
-      };
-    }
-    return dataTransfer;
-  }
-
   function replaceContentEditableText(el, text) {
     el.focus();
-    selectEditableContents(el);
+    // WhatsApp's Lexical ignores synthetic beforeinput/paste/execCommand.
+    // Simulate real keyboard events — Lexical processes these as user input.
+    // Ctrl+A selects all, Backspace deletes, then type each character.
 
-    // WhatsApp uses Lexical, which owns editor state and reverts direct
-    // textContent writes. Its paste handler does update editor state, and
-    // with the whole root selected the paste becomes a replacement.
-    const clipboardData = createTextClipboardData(text);
-    let pasteEvent;
-    try {
-      pasteEvent = new ClipboardEvent('paste', {
-        bubbles: true,
-        cancelable: true,
-        clipboardData,
-      });
-    } catch (_err) {
-      pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
-    }
+    // Ctrl+A: select all
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }));
+    // Backspace: delete selection
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Backspace', bubbles: true }));
 
-    if (!pasteEvent.clipboardData) {
-      Object.defineProperty(pasteEvent, 'clipboardData', {
-        configurable: true,
-        enumerable: true,
-        value: clipboardData,
-      });
-    }
-
-    const pasteHandled = !el.dispatchEvent(pasteEvent);
-    if (!pasteHandled) {
-      document.execCommand('insertText', false, text);
+    // Type each character individually
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keypress', { key: ch, bubbles: true }));
+      // Insert the actual character into the DOM
+      document.execCommand('insertText', false, ch);
+      el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
     }
 
     el.dispatchEvent(new InputEvent('input', {
