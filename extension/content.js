@@ -121,8 +121,8 @@
     const style = document.createElement('style');
     style.id = 'ai-grammar-styles';
     style.textContent = `
-      /* text-decoration wavy underlines — positioned at the text baseline
-         by the browser, independent of platform font/line-height.  The
+      /* text-decoration wavy underlines — positioned by the browser from
+         the real mirrored text baseline, independent of platform font/line-height.  The
          old SVG background-image approach required manual offsets that
          varied by platform (iMessage vs Hermes WebUI vs test page).
          Overlay spans use rgba(0,0,0,0.02) to defeat Chromium's
@@ -130,13 +130,15 @@
          to 0 at any zoom/DPI combo (0.01 could floor to 0 at extreme
          subpixel configurations).  text-decoration-skip-ink: none
          prevents the browser from omitting decorations that intersect
-         glyph descenders. */
+         glyph descenders, so the underline needs extra offset to clear
+         descenders like g/y/p. */
       .ai-grammar-error {
         text-decoration-line: underline !important;
         text-decoration-style: wavy !important;
         text-decoration-color: #dc2626 !important;
         text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.12em;
+        text-underline-position: under;
+        text-underline-offset: 0.35em;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
@@ -150,7 +152,8 @@
         text-decoration-style: wavy !important;
         text-decoration-color: #4ade80 !important;
         text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.12em;
+        text-underline-position: under;
+        text-underline-offset: 0.35em;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
@@ -164,7 +167,8 @@
         text-decoration-style: wavy !important;
         text-decoration-color: #60a5fa !important;
         text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.12em;
+        text-underline-position: under;
+        text-underline-offset: 0.35em;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
