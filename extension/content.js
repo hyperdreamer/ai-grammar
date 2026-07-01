@@ -689,7 +689,7 @@
       paddingTop: cs.paddingTop,
       paddingRight: cs.paddingRight,
       paddingBottom: cs.paddingBottom,
-      paddingLeft: cs.paddingLeft,
+      paddingLeft: '0',
       boxSizing: 'content-box',
       overflow: 'hidden',
     });
@@ -697,17 +697,53 @@
     document.body.appendChild(overlay);
 
     // --- Position & track ---
+    function getTextStartRect(containerRect) {
+      // Fallback to the old container-content origin for empty containers or
+      // text nodes that do not produce a measurable client rect.
+      const fallback = {
+        left: containerRect.left + borderLeft + (parseFloat(cs.paddingLeft) || 0),
+        top: containerRect.top + borderTop + (parseFloat(cs.paddingTop) || 0),
+      };
+
+      const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          if (node.parentElement && isIgnored(node.parentElement)) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return node.textContent.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+        },
+      });
+
+      const firstTextNode = walker.nextNode();
+      if (!firstTextNode) return fallback;
+
+      const range = document.createRange();
+      try {
+        range.setStart(firstTextNode, 0);
+        range.setEnd(firstTextNode, Math.min(1, firstTextNode.textContent.length));
+        const textRect = range.getBoundingClientRect();
+        if (textRect.width || textRect.height) {
+          return { left: textRect.left, top: textRect.top };
+        }
+      } finally {
+        range.detach();
+      }
+
+      return fallback;
+    }
+
     function reposition() {
       if (!document.contains(container)) {
         removeMessageOverlay(container);
         return;
       }
       const r = container.getBoundingClientRect();
+      const textStart = getTextStartRect(r);
       // transform:translate uses subpixel positioning — critical for
       // alignment at non-100% zoom where integer-pixel top/left can
       // drift 0.5-1 px off the real text.
-      overlay.style.transform = `translate(${r.left + borderLeft}px, ${r.top + borderTop}px)`;
-      overlay.style.width = (r.width - borderLeft - borderRight) + 'px';
+      overlay.style.transform = `translate(${textStart.left}px, ${textStart.top}px)`;
+      overlay.style.width = (r.left + r.width - borderRight - textStart.left) + 'px';
     }
 
     reposition();
