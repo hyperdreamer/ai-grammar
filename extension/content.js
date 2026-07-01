@@ -1627,6 +1627,9 @@
     const rect = ce.getBoundingClientRect();
 
     // Create overlay — positioned exactly over the contentEditable
+    // Mirrors the post-submit highlightOverlay() approach: inline color +
+    // WebkitTextFillColor survive Chromium's text-decoration paint skip
+    // where stylesheet-based color on near-transparent text can be dropped.
     const overlay = document.createElement('div');
     liveHighlightEl = overlay;
     overlay.className = 'ag-live-highlight-backdrop';
@@ -1637,14 +1640,20 @@
       font: cs.font, fontSize: cs.fontSize, fontFamily: cs.fontFamily,
       fontWeight: cs.fontWeight, fontStyle: cs.fontStyle,
       fontVariant: cs.fontVariant, fontStretch: cs.fontStretch,
-      fontKerning: cs.fontKerning, textRendering: cs.textRendering,
-      lineHeight: cs.lineHeight, letterSpacing: cs.letterSpacing,
-      wordSpacing: cs.wordSpacing, textAlign: cs.textAlign,
+      fontKerning: cs.fontKerning, fontFeatureSettings: cs.fontFeatureSettings,
+      fontVariationSettings: cs.fontVariationSettings,
+      textRendering: cs.textRendering, textTransform: cs.textTransform,
+      direction: cs.direction, lineHeight: cs.lineHeight,
+      letterSpacing: cs.letterSpacing, wordSpacing: cs.wordSpacing,
+      textAlign: cs.textAlign, textIndent: cs.textIndent,
       whiteSpace: cs.whiteSpace || 'pre-wrap',
       overflowWrap: cs.overflowWrap || 'break-word',
-      wordBreak: cs.wordBreak || 'break-word',
+      wordBreak: cs.wordBreak || 'break-word', wordWrap: cs.wordWrap,
+      color: 'rgba(0, 0, 0, 0.02)',
+      WebkitTextFillColor: 'rgba(0, 0, 0, 0.02)',
       background: 'transparent', overflow: 'hidden',
-      padding: cs.padding, boxSizing: 'border-box',
+      paddingTop: '0', paddingRight: '0', paddingBottom: '0', paddingLeft: '0',
+      boxSizing: 'content-box',
     });
 
     let html = '', pos = 0;
