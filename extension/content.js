@@ -195,8 +195,7 @@
       .ag-live-highlight-backdrop .ai-grammar-idiom {
         color: rgba(0, 0, 0, 0.02) !important;
         -webkit-text-fill-color: rgba(0, 0, 0, 0.02) !important;
-        text-underline-position: under;
-        text-underline-offset: 0.35em;
+        text-underline-offset: 0.45em;
       }
       .ai-grammar-tooltip {
         position: fixed;
@@ -364,8 +363,7 @@
       .ag-message-overlay .ai-grammar-error,
       .ag-message-overlay .ai-grammar-improvement,
       .ag-message-overlay .ai-grammar-idiom {
-        text-underline-position: under;
-        text-underline-offset: 0.35em;
+        text-underline-offset: 0.45em;
       }
     `;
     document.head.appendChild(style);
@@ -655,6 +653,10 @@
     // mismatch makes underlines look misaligned, and the mismatch is far
     // more visible at non-100% zoom levels.
     const cs = window.getComputedStyle(container);
+    const borderLeft = parseFloat(cs.borderLeftWidth) || 0;
+    const borderTop = parseFloat(cs.borderTopWidth) || 0;
+    const borderRight = parseFloat(cs.borderRightWidth) || 0;
+    const borderBottom = parseFloat(cs.borderBottomWidth) || 0;
     Object.assign(overlay.style, {
       position: 'fixed',
       top: '0',
@@ -688,7 +690,7 @@
       paddingRight: cs.paddingRight,
       paddingBottom: cs.paddingBottom,
       paddingLeft: cs.paddingLeft,
-      boxSizing: cs.boxSizing,
+      boxSizing: 'content-box',
       overflow: 'hidden',
     });
 
@@ -704,8 +706,8 @@
       // transform:translate uses subpixel positioning — critical for
       // alignment at non-100% zoom where integer-pixel top/left can
       // drift 0.5-1 px off the real text.
-      overlay.style.transform = `translate(${r.left}px, ${r.top}px)`;
-      overlay.style.width = r.width + 'px';
+      overlay.style.transform = `translate(${r.left + borderLeft}px, ${r.top + borderTop}px)`;
+      overlay.style.width = (r.width - borderLeft - borderRight) + 'px';
     }
 
     reposition();
