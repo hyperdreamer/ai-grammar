@@ -1634,13 +1634,12 @@
     const cs = window.getComputedStyle(ce);
     const rect = ce.getBoundingClientRect();
 
-    // Create overlay — positioned exactly over the contentEditable
-    // Mirrors the post-submit highlightOverlay() approach: inline color +
-    // WebkitTextFillColor survive Chromium's text-decoration paint skip
-    // where stylesheet-based color on near-transparent text can be dropped.
+    // Create overlay — positioned exactly over the contentEditable.
+    // Do NOT use ag-live-highlight-backdrop CSS class — its !important
+    // color rule on error spans blocks Chromium's text-decoration paint.
+    // Inline styles only, matching the post-submit highlightOverlay().
     const overlay = document.createElement('div');
     liveHighlightEl = overlay;
-    overlay.className = 'ag-live-highlight-backdrop';
     Object.assign(overlay.style, {
       position: 'fixed', top: rect.top + 'px', left: rect.left + 'px',
       width: rect.width + 'px', height: rect.height + 'px',
@@ -1671,7 +1670,7 @@
       if (s < pos || s >= e) continue;
       html += escapeHtml(text.slice(pos, s));
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
-      html += '<span class="' + cls + '" style="pointer-events:auto;cursor:pointer" data-correction="' + escapeHtml(err.correction||'') + '" data-explanation="' + escapeHtml(err.explanation||'') + '" data-error="' + escapeHtml(err.error||'') + '" data-type="' + (err.type||'error') + '" data-live-draft="1" data-start="' + s + '" data-end="' + e + '" tabindex="0">' + escapeHtml(text.slice(s, e)) + '</span>';
+      html += '<span class="' + cls + '" style="pointer-events:auto;cursor:pointer;text-underline-offset:0.45em" data-correction="' + escapeHtml(err.correction||'') + '" data-explanation="' + escapeHtml(err.explanation||'') + '" data-error="' + escapeHtml(err.error||'') + '" data-type="' + (err.type||'error') + '" data-live-draft="1" data-start="' + s + '" data-end="' + e + '" tabindex="0">' + escapeHtml(text.slice(s, e)) + '</span>';
       pos = e;
     }
     html += escapeHtml(text.slice(pos));
