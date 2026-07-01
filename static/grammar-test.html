@@ -6,86 +6,136 @@
 <title>AI Grammar Checker — Test Page</title>
 <style>
   :root {
-    --bg: #0f172a;
-    --surface: #1e293b;
-    --border: #334155;
-    --text: #e2e8f0;
-    --muted: #94a3b8;
-    --accent: #4ade80;
-    --accent-hover: #22c55e;
+    --ag-bg: #0f172a;
+    --ag-surface: #1e293b;
+    --ag-border: #334155;
+    --ag-text: #e2e8f0;
+    --ag-text-muted: #94a3b8;
+    --ag-text-dim: #64748b;
+    --ag-accent: #4ade80;
+    --ag-accent-hover: #22c55e;
+    --ag-accent-text: #0f172a;
+    --ag-error: #f87171;
   }
   @media (prefers-color-scheme: light) {
     :root {
-      --bg: #ffffff;
-      --surface: #f8fafc;
-      --border: #e2e8f0;
-      --text: #0f172a;
-      --muted: #475569;
-      --accent: #16a34a;
-      --accent-hover: #15803d;
+      --ag-bg: #ffffff;
+      --ag-surface: #f8fafc;
+      --ag-border: #e2e8f0;
+      --ag-text: #0f172a;
+      --ag-text-muted: #475569;
+      --ag-text-dim: #64748b;
+      --ag-accent: #16a34a;
+      --ag-accent-hover: #15803d;
+      --ag-accent-text: #ffffff;
+      --ag-error: #dc2626;
     }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: var(--bg); color: var(--text);
-    display: flex; flex-direction: column; height: 100vh;
+    background: var(--ag-bg); color: var(--ag-text); min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 40px 20px;
   }
+  h1 { font-size: 22px; margin-bottom: 8px; }
+  .subtitle { color: var(--ag-text-dim); font-size: 13px; margin-bottom: 24px; }
+  .test-grid { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin-bottom: 24px; }
+  .test-btn {
+    background: var(--ag-surface); border: 1px solid var(--ag-border);
+    color: var(--ag-text); padding: 8px 16px; border-radius: 8px;
+    cursor: pointer; font-size: 13px; font-family: inherit;
+    transition: background 0.15s;
+  }
+  .test-btn:hover { background: var(--ag-border); }
   .chatbox {
-    flex: 1; display: flex; flex-direction: column;
-    max-width: 720px; width: 100%; margin: 0 auto;
-    background: var(--surface); border-left: 1px solid var(--border);
-    border-right: 1px solid var(--border);
+    width: 100%; max-width: 640px; background: var(--ag-surface);
+    border-radius: 12px; border: 1px solid var(--ag-border); overflow: hidden;
   }
   .messages {
-    flex: 1; overflow-y: auto; padding: 16px;
+    min-height: 200px; max-height: 400px; overflow-y: auto;
+    padding: 16px;
   }
   .message {
-    padding: 10px 14px; border-radius: 12px; margin-bottom: 8px;
-    max-width: 75%; line-height: 1.5; font-size: 14px;
-    word-wrap: break-word;
+    padding: 10px 14px; border-radius: 10px; margin-bottom: 10px;
+    max-width: 85%; line-height: 1.6; font-size: 14px;
   }
-  .user-msg {
-    background: var(--accent); color: #0f172a;
-    margin-left: auto; font-weight: 500;
-  }
-  .reply-msg {
-    background: var(--border); margin-right: auto;
-  }
-  .input-row {
-    display: flex; padding: 12px 16px; gap: 8px;
-    border-top: 1px solid var(--border);
-  }
+  .user-msg { background: var(--ag-border); margin-left: auto; }
+  .reply-msg { background: var(--ag-bg); border: 1px solid var(--ag-border); margin-right: auto; }
+  .system-msg { color: var(--ag-text-muted); font-size: 12px; text-align: center; }
+  .input-row { display: flex; padding: 12px 16px; gap: 8px; border-top: 1px solid var(--ag-border); }
   .input-row textarea {
-    flex: 1; background: var(--bg); border: 1px solid var(--border);
-    border-radius: 12px; color: var(--text); font-family: inherit;
-    font-size: 14px; padding: 10px 14px; resize: none; outline: none;
+    flex: 1; background: var(--ag-bg); border: 1px solid var(--ag-border);
+    border-radius: 8px; color: var(--ag-text); font-family: inherit;
+    font-size: 14px; padding: 10px 12px; resize: none; outline: none;
     min-height: 44px; max-height: 120px;
   }
-  .input-row textarea:focus { border-color: var(--accent); }
+  .input-row textarea:focus { border-color: var(--ag-accent); }
   .input-row button {
-    background: var(--accent); color: #0f172a;
-    border: none; border-radius: 12px; padding: 0 24px;
+    background: var(--ag-accent); color: var(--ag-accent-text);
+    border: none; border-radius: 8px; padding: 0 20px;
     font-weight: 600; font-size: 14px; cursor: pointer;
     font-family: inherit; transition: background 0.15s;
   }
-  .input-row button:hover { background: var(--accent-hover); }
+  .input-row button:hover { background: var(--ag-accent-hover); }
+  .status-bar {
+    width: 100%; max-width: 640px; margin-top: 12px;
+    font-size: 12px; color: var(--ag-text-dim); display: flex; justify-content: space-between;
+  }
+  .status-bar .ok { color: var(--ag-accent); }
+  kbd {
+    background: var(--ag-border); border: 1px solid var(--ag-text-muted);
+    border-radius: 3px; padding: 1px 6px; font-family: monospace; font-size: 11px;
+  }
 </style>
 </head>
 <body>
+  <h1>🔍 AI Grammar Checker</h1>
+  <p class="subtitle">Test page — type text with errors and submit, or use <kbd>?/</kbd> commands</p>
+
+  <div class="test-grid">
+    <button class="test-btn" onclick="fillAndSend('I has a apple and she go to store')">Grammar errors</button>
+    <button class="test-btn" onclick="fillAndSend('Their going to the party tomorow')">Spelling errors</button>
+    <button class="test-btn" onclick="fillAndSend('Due to the fact that we are in receipt of your letter')">Wordiness</button>
+    <button class="test-btn" onclick="fillText('?/help')">?/help</button>
+    <button class="test-btn" onclick="fillText('I has a apple and she go to store ?/fix')">?/fix</button>
+    <button class="test-btn" onclick="fillText('due to the fact that we are in receipt of your letter ?/polish')">?/polish</button>
+    <button class="test-btn" onclick="fillText('?/')">Open palette</button>
+  </div>
+
   <div class="chatbox">
-    <div class="messages" id="messages"></div>
+    <div class="messages" id="messages">
+      <div class="system-msg">Submit text to check for grammar errors. Try the quick-test buttons above.</div>
+    </div>
     <div class="input-row">
       <textarea id="msg" rows="1" placeholder="Type a message... (use ?/ for commands)"></textarea>
-      <button type="button" id="sendBtn">Send</button>
+      <button type="button" onclick="sendMessage()">Send</button>
     </div>
   </div>
 
-<script>
-  var textarea = document.getElementById('msg');
-  var sendBtn = document.getElementById('sendBtn');
-  var messages = document.getElementById('messages');
+  <div class="status-bar">
+    <span id="backend-status">Checking backend...</span>
+    <span>v<span id="ext-version">...</span></span>
+  </div>
 
+<script>
+  // --- PostMessage bridge for extension fetch ---
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'ag-fetch') {
+      var req = e.data;
+      fetch(req.url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: req.body })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          window.postMessage({ type: 'ag-result', id: req.id, data: data }, '*');
+        })
+        .catch(function(err) {
+          window.postMessage({ type: 'ag-error', id: req.id, error: err.message }, '*');
+        });
+    }
+  });
+
+  // --- Chat UI ---
+  var textarea = document.getElementById('msg');
   textarea.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
@@ -93,8 +143,9 @@
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
   });
-  sendBtn.addEventListener('click', sendMessage);
 
+  // Random AI-like replies to test that the grammar checker only
+  // underlines YOUR messages, not random replies.
   var randomReplies = [
     "That's interesting! I would of thought differently about it.",
     "Thanks for sharing — they're approach seems reasonable.",
@@ -113,19 +164,23 @@
     "I'm not sure who's responsibility this falls under anymore.",
   ];
 
+  function addRandomReply() {
+    var idx = Math.floor(Math.random() * randomReplies.length);
+    var reply = randomReplies[idx];
+    var div = document.createElement('div');
+    div.className = 'message reply-msg';
+    div.textContent = reply;
+    document.getElementById('messages').appendChild(div);
+    document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
+  }
+
   function addMessage(cls, text) {
     var div = document.createElement('div');
     div.className = 'message ' + cls;
     div.textContent = text;
-    messages.appendChild(div);
-    messages.scrollTop = messages.scrollHeight;
+    document.getElementById('messages').appendChild(div);
+    document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
     return div;
-  }
-
-  function addRandomReply() {
-    var idx = Math.floor(Math.random() * randomReplies.length);
-    var reply = randomReplies[idx];
-    addMessage('reply-msg', reply);
   }
 
   function sendMessage() {
@@ -140,7 +195,71 @@
     // underline the user's message (detected by proximity tracking
     // at submit time), NOT the random reply.
     setTimeout(addRandomReply, 800);
+
+    // Call backend for grammar checking
+    var checkingEl = addMessage('system-msg', 'Checking...');
+    checkingEl.setAttribute('data-checking', '1');
+    fetch('/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text, language: 'auto' })
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        // Remove the specific "Checking..." element (not lastChild,
+        // which could be a random reply added after it)
+        var msgs = document.getElementById('messages');
+        var el = msgs.querySelector('[data-checking]');
+        if (el) msgs.removeChild(el);
+        if (!data.errors || data.errors.length === 0) {
+          addMessage('system-msg', '✓ No errors found');
+        } else {
+          data.errors.forEach(function(e) {
+            addMessage('system-msg',
+              e.type.toUpperCase() + ': "' + e.error + '" → "' + e.correction + '" — ' + e.explanation);
+          });
+        }
+      })
+      .catch(function(err) {
+        var msgs = document.getElementById('messages');
+        var el = msgs.querySelector('[data-checking]');
+        if (el) msgs.removeChild(el);
+        addMessage('system-msg', '✗ Error: ' + err.message);
+      });
   }
+
+  function fillAndSend(text) {
+    textarea.value = text;
+    sendMessage();
+  }
+
+  function fillText(text) {
+    textarea.value = text;
+    textarea.focus();
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+  }
+
+  // --- Backend health check (same-origin, use relative URL) ---
+  fetch('/health')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      document.getElementById('backend-status').innerHTML = 'Backend: <span class="ok">● connected</span>';
+    })
+    .catch(function() {
+      document.getElementById('backend-status').innerHTML = 'Backend: <span style="color:#f87171">● offline</span>';
+    });
+
+  // --- Fetch extension version ---
+  fetch('/version')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      document.getElementById('ext-version').textContent = d.version || '?';
+    })
+    .catch(function() {
+      document.getElementById('ext-version').textContent = '?';
+    });
 </script>
 </body>
 </html>
