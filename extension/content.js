@@ -137,8 +137,7 @@
         text-decoration-style: wavy !important;
         text-decoration-color: #dc2626 !important;
         text-decoration-thickness: from-font !important;
-        text-underline-position: under;
-        text-underline-offset: 0.35em;
+        text-underline-offset: 0.12em;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
@@ -152,8 +151,7 @@
         text-decoration-style: wavy !important;
         text-decoration-color: #4ade80 !important;
         text-decoration-thickness: from-font !important;
-        text-underline-position: under;
-        text-underline-offset: 0.35em;
+        text-underline-offset: 0.12em;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
@@ -167,8 +165,7 @@
         text-decoration-style: wavy !important;
         text-decoration-color: #60a5fa !important;
         text-decoration-thickness: from-font !important;
-        text-underline-position: under;
-        text-underline-offset: 0.35em;
+        text-underline-offset: 0.12em;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
@@ -198,6 +195,8 @@
       .ag-live-highlight-backdrop .ai-grammar-idiom {
         color: rgba(0, 0, 0, 0.02) !important;
         -webkit-text-fill-color: rgba(0, 0, 0, 0.02) !important;
+        text-underline-position: under;
+        text-underline-offset: 0.35em;
       }
       .ai-grammar-tooltip {
         position: fixed;
@@ -361,6 +360,12 @@
       .ag-message-overlay {
         color: rgba(0, 0, 0, 0.02) !important;
         -webkit-text-fill-color: rgba(0, 0, 0, 0.02) !important;
+      }
+      .ag-message-overlay .ai-grammar-error,
+      .ag-message-overlay .ai-grammar-improvement,
+      .ag-message-overlay .ai-grammar-idiom {
+        text-underline-position: under;
+        text-underline-offset: 0.35em;
       }
     `;
     document.head.appendChild(style);
