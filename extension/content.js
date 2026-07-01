@@ -672,6 +672,9 @@
       fontVariant: cs.fontVariant,
       fontStretch: cs.fontStretch,
       fontKerning: cs.fontKerning,
+      fontFeatureSettings: cs.fontFeatureSettings,
+      fontVariationSettings: cs.fontVariationSettings,
+      fontOpticalSizing: cs.fontOpticalSizing,
       textRendering: cs.textRendering,
       textTransform: cs.textTransform,
       direction: cs.direction,
@@ -679,10 +682,17 @@
       letterSpacing: cs.letterSpacing,
       wordSpacing: cs.wordSpacing,
       textAlign: cs.textAlign,
+      textIndent: cs.textIndent,
       whiteSpace: cs.whiteSpace,
       overflowWrap: cs.overflowWrap,
       wordBreak: cs.wordBreak,
       wordWrap: cs.wordWrap,
+      tabSize: cs.tabSize,
+      hyphens: cs.hyphens,
+      textWrapMode: cs.textWrapMode,
+      textWrapStyle: cs.textWrapStyle,
+      writingMode: cs.writingMode,
+      unicodeBidi: cs.unicodeBidi,
       color: 'rgba(0, 0, 0, 0.02)',
       WebkitTextFillColor: 'rgba(0, 0, 0, 0.02)',
       background: 'transparent',
@@ -697,39 +707,66 @@
     document.body.appendChild(overlay);
 
     // --- Position & track ---
-    function getTextStartRect(containerRect) {
+    function getMappedTextBounds(containerRect) {
       // Fallback to the old container-content origin for empty containers or
       // text nodes that do not produce a measurable client rect.
       const fallback = {
         left: containerRect.left + borderLeft + (parseFloat(cs.paddingLeft) || 0),
         top: containerRect.top + borderTop + (parseFloat(cs.paddingTop) || 0),
+        width: Math.max(0, containerRect.width - borderLeft - borderRight - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0)),
       };
 
+      const textNodes = [];
       const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
         acceptNode(node) {
           if (node.parentElement && isIgnored(node.parentElement)) {
             return NodeFilter.FILTER_REJECT;
           }
-          return node.textContent.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+          return NodeFilter.FILTER_ACCEPT;
         },
       });
 
-      const firstTextNode = walker.nextNode();
-      if (!firstTextNode) return fallback;
+      let node, offset = 0;
+      while ((node = walker.nextNode())) {
+        textNodes.push({ node, start: offset, end: offset + node.textContent.length });
+        offset += node.textContent.length;
+      }
+      if (!textNodes.length || !fullText) return fallback;
+
+      const rawText = textNodes.map(tn => tn.node.textContent).join('');
+      const mappedStart = rawText.indexOf(fullText);
+      if (mappedStart === -1) return fallback;
+
+      const mappedEnd = mappedStart + fullText.length;
+      const startTextNode = textNodes.find(tn => mappedStart >= tn.start && mappedStart < tn.end);
+      const endTextNode = textNodes.find(tn => mappedEnd > tn.start && mappedEnd <= tn.end);
+      if (!startTextNode || !endTextNode) return fallback;
 
       const range = document.createRange();
       try {
-        range.setStart(firstTextNode, 0);
-        range.setEnd(firstTextNode, Math.min(1, firstTextNode.textContent.length));
-        const textRect = range.getBoundingClientRect();
-        if (textRect.width || textRect.height) {
-          return { left: textRect.left, top: textRect.top };
+        const startOffset = mappedStart - startTextNode.start;
+        range.setStart(startTextNode.node, startOffset);
+        range.setEnd(startTextNode.node, startOffset + 1);
+        const startRect = range.getClientRects()[0];
+        if (!startRect || (!startRect.width && !startRect.height)) return fallback;
+
+        const endOffset = mappedEnd - endTextNode.start;
+        range.setStart(endTextNode.node, endOffset - 1);
+        range.setEnd(endTextNode.node, endOffset);
+        const endRects = range.getClientRects();
+        const endRect = endRects[endRects.length - 1];
+        if (!endRect || (!endRect.width && !endRect.height)) {
+          return { left: startRect.left, top: startRect.top, width: fallback.width };
         }
+
+        return {
+          left: startRect.left,
+          top: startRect.top,
+          width: Math.max(0, endRect.right - startRect.left),
+        };
       } finally {
         range.detach();
       }
-
-      return fallback;
     }
 
     function reposition() {
@@ -738,12 +775,12 @@
         return;
       }
       const r = container.getBoundingClientRect();
-      const textStart = getTextStartRect(r);
+      const textBounds = getMappedTextBounds(r);
       // transform:translate uses subpixel positioning — critical for
       // alignment at non-100% zoom where integer-pixel top/left can
       // drift 0.5-1 px off the real text.
-      overlay.style.transform = `translate(${textStart.left}px, ${textStart.top}px)`;
-      overlay.style.width = (r.left + r.width - borderRight - textStart.left) + 'px';
+      overlay.style.transform = `translate(${textBounds.left}px, ${textBounds.top}px)`;
+      overlay.style.width = textBounds.width + 'px';
     }
 
     reposition();
