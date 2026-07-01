@@ -1244,6 +1244,8 @@
           skipLiveCheck = true;
           applyFixCDP(text).then(success => {
             if (success) {
+              clearLiveDraftHighlights();
+              hideTooltip();
               showBadge('✓ Fixed!', false, 3000);
             } else {
               // Fallback: copy to clipboard for manual paste
