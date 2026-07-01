@@ -1265,17 +1265,27 @@
   // CDP Fixer integration — automated clear+retype on WhatsApp Lexical
   // -----------------------------------------------------------------------
 
-  async function applyFixCDP(text) {
-    try {
-      const resp = await chrome.runtime.sendMessage({
-        type: 'grammar:apply-fix',
-        text,
-      });
-      return resp && resp.ok === true;
-    } catch {
-      // Background may not be ready — fall back to clipboard
-      return false;
-    }
+  function applyFixCDP(text) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (val) => { if (!settled) { settled = true; resolve(val); } };
+      
+      // Timeout: if service worker doesn't respond in 5s, fall back to clipboard
+      const timer = setTimeout(() => done(false), 5000);
+      
+      try {
+        chrome.runtime.sendMessage(
+          { type: 'grammar:apply-fix', text },
+          (resp) => {
+            clearTimeout(timer);
+            done(resp && resp.ok === true);
+          }
+        );
+      } catch {
+        clearTimeout(timer);
+        done(false);
+      }
+    });
   }
 
   // -----------------------------------------------------------------------
