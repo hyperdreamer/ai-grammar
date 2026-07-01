@@ -1,21 +1,11 @@
-"""Test two-event apply-fix on contentEditable with Lexical-like beforeinput handler."""
+"""Test Codex ClipboardEvent approach."""
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-PROFILE = Path(__file__).resolve().parent / "whatsapp_profile"
-EXT = Path(__file__).resolve().parent.parent / "extension"
-
 with sync_playwright() as p:
-    ctx = p.chromium.launch_persistent_context(
-        user_data_dir=str(PROFILE),
-        headless=True,
-        args=[f"--load-extension={EXT}"],
-        viewport={"width": 800, "height": 600},
-    )
+    ctx = p.chromium.launch(headless=True)
     page = ctx.new_page()
     
-    # Simulate a Lexical-like editor: contentEditable that hooks beforeinput
-    # and manages content changes internally (preventing direct DOM writes)
     page.set_content("""
     <div id="editor" contenteditable="true" style="border:2px solid red; padding:10px; min-height:50px; font:16px sans-serif">
         He go work everyday buy bus.
@@ -24,78 +14,64 @@ with sync_playwright() as p:
     <script>
     const log = document.getElementById('log');
     const editor = document.getElementById('editor');
-    
-    // Simulate Lexical: intercept beforeinput and manage content internally
     let lexState = 'He go work everyday buy bus.';
-    
-    editor.addEventListener('beforeinput', (e) => {
-        log.textContent += 'beforeinput: ' + e.inputType + ' data=' + (e.data||'null') + '\\n';
-        
-        if (e.inputType === 'deleteContentBackward') {
-            // Lexical would clear its state
-            lexState = '';
-            log.textContent += '  → Lexical cleared state\\n';
-        } else if (e.inputType === 'insertText') {
-            // Lexical would insert the text
-            lexState = e.data || '';
-            log.textContent += '  → Lexical set state: ' + lexState + '\\n';
-        }
+    editor.addEventListener('paste', (e) => {
+        log.textContent += 'paste event fired\\n';
+        const text = e.clipboardData?.getData('text/plain') || '';
+        log.textContent += '  text: ' + text.substring(0,50) + '\\n';
+        lexState = text;
+        document.execCommand('insertText', false, text);
+        e.preventDefault();
     });
-    
     editor.addEventListener('input', (e) => {
-        log.textContent += 'input: ' + e.inputType + ' data=' + (e.data||'null') + '\\n';
+        log.textContent += 'input: ' + e.inputType + '\\n';
     });
     </script>
     """)
     page.wait_for_timeout(500)
     
-    # Simulate apply-fix: select all, dispatch delete+insert events, write textContent
-    result = page.evaluate("""
-    (() => {
+    # Load the actual replaceContentEditableText function from the file
+    with open('/data/home/guest/Development/ai/ai-grammar/extension/content.js') as f:
+        content_js = f.read()
+    
+    # Extract the three functions (selectEditableContents, createTextClipboardData, replaceContentEditableText)
+    import re
+    fn_code = ""
+    for fn_name in ['selectEditableContents', 'createTextClipboardData', 'replaceContentEditableText']:
+        # Find function definition and extract until matching brace
+        match = re.search(r'function ' + fn_name + r'\(.*?\) \{', content_js)
+        if match:
+            start = match.start()
+            depth = 0
+            i = start
+            in_func = False
+            while i < len(content_js):
+                if content_js[i] == '{':
+                    depth += 1
+                    in_func = True
+                elif content_js[i] == '}':
+                    depth -= 1
+                    if in_func and depth == 0:
+                        fn_code += content_js[start:i+1] + '\n\n'
+                        break
+                i += 1
+    
+    # Run the replace function
+    result = page.evaluate("""({code}) => {
+        eval(code);
         const ta = document.getElementById('editor');
-        ta.focus();
-        
-        // Select all
-        const range = document.createRange();
-        range.selectNodeContents(ta);
-        const sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-        
-        // Delete
-        ta.dispatchEvent(new InputEvent('beforeinput', {
-            bubbles: true, cancelable: true,
-            inputType: 'deleteContentBackward', data: null,
-        }));
-        ta.textContent = '';
-        ta.dispatchEvent(new InputEvent('input', {
-            bubbles: true,
-            inputType: 'deleteContentBackward', data: null,
-        }));
-        
-        // Insert
-        ta.dispatchEvent(new InputEvent('beforeinput', {
-            bubbles: true, cancelable: true,
-            inputType: 'insertText', data: 'He goes to work every day by bus.',
-        }));
-        ta.textContent = 'He goes to work every day by bus.';
-        ta.dispatchEvent(new InputEvent('input', {
-            bubbles: true,
-            inputType: 'insertText', data: 'He goes to work every day by bus.',
-        }));
-        
+        replaceContentEditableText(ta, 'He goes to work every day by bus.');
         return ta.textContent || ta.innerText || '';
-    })()
-    """)
+    }""", {"code": fn_code})
     
     log = page.text_content("#log")
     print("Event log:")
     print(log)
     print(f"Final text: '{result}'")
     
-    if result == 'He goes to work every day by bus.' and result.count('He goes') == 1:
-        print("✓ Clean replacement — no duplication!")
+    if result == 'He goes to work every day by bus.':
+        print("✓ Clean replacement!")
     else:
-        print(f"✗ Failed — got: '{result}'")
+        print(f"✗ Failed — {result.count('He goes')} copies")
     
     ctx.close()

@@ -1176,6 +1176,76 @@
     return div.innerHTML;
   }
 
+  function selectEditableContents(el) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function createTextClipboardData(text) {
+    let dataTransfer = null;
+    try {
+      dataTransfer = new DataTransfer();
+      dataTransfer.setData('text/plain', text);
+      dataTransfer.setData('text/html', escapeHtml(text).replace(/\n/g, '<br>'));
+    } catch (_err) {
+      dataTransfer = {
+        types: ['text/plain', 'text/html'],
+        getData(type) {
+          if (type === 'text/plain' || type === 'Text') return text;
+          if (type === 'text/html') return escapeHtml(text).replace(/\n/g, '<br>');
+          return '';
+        },
+        setData() {},
+        clearData() {},
+        files: [],
+        items: [],
+      };
+    }
+    return dataTransfer;
+  }
+
+  function replaceContentEditableText(el, text) {
+    el.focus();
+    selectEditableContents(el);
+
+    // WhatsApp uses Lexical, which owns editor state and reverts direct
+    // textContent writes. Its paste handler does update editor state, and
+    // with the whole root selected the paste becomes a replacement.
+    const clipboardData = createTextClipboardData(text);
+    let pasteEvent;
+    try {
+      pasteEvent = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      });
+    } catch (_err) {
+      pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+    }
+
+    if (!pasteEvent.clipboardData) {
+      Object.defineProperty(pasteEvent, 'clipboardData', {
+        configurable: true,
+        enumerable: true,
+        value: clipboardData,
+      });
+    }
+
+    const pasteHandled = !el.dispatchEvent(pasteEvent);
+    if (!pasteHandled) {
+      document.execCommand('insertText', false, text);
+    }
+
+    el.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      inputType: 'insertReplacementText',
+      data: text,
+    }));
+  }
+
   // -----------------------------------------------------------------------
   // Apply correction
   // -----------------------------------------------------------------------
@@ -1218,38 +1288,12 @@
             data: text,
           }));
         } else if (ta.isContentEditable) {
-          // WhatsApp Lexical hooks beforeinput to manage content changes.
-          // Dispatch two-event sequence: deleteContentBackward to clear,
-          // then insertText with corrected text.
           skipLiveCheck = true;
-          ta.focus();
-          // Select all via Selection API
-          const range = document.createRange();
-          range.selectNodeContents(ta);
-          const sel = window.getSelection();
-          sel.removeAllRanges();
-          sel.addRange(range);
-          // Event 1: delete selected content
-          ta.dispatchEvent(new InputEvent('beforeinput', {
-            bubbles: true, cancelable: true,
-            inputType: 'deleteContentBackward', data: null,
-          }));
-          ta.textContent = '';
-          ta.dispatchEvent(new InputEvent('input', {
-            bubbles: true,
-            inputType: 'deleteContentBackward', data: null,
-          }));
-          // Event 2: insert corrected text
-          ta.dispatchEvent(new InputEvent('beforeinput', {
-            bubbles: true, cancelable: true,
-            inputType: 'insertText', data: text,
-          }));
-          ta.textContent = text;
-          ta.dispatchEvent(new InputEvent('input', {
-            bubbles: true,
-            inputType: 'insertText', data: text,
-          }));
-          skipLiveCheck = false;
+          try {
+            replaceContentEditableText(ta, text);
+          } finally {
+            setTimeout(() => { skipLiveCheck = false; }, 0);
+          }
         }
       }
       hideTooltip();
