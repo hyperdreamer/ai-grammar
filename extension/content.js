@@ -18,7 +18,7 @@
     'SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA', 'INPUT',
     'SVG', 'MATH', 'NOSCRIPT', 'IFRAME', 'CANVAS',
   ]);
-  const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge', 'ai-grammar-ok', 'ag-message-overlay'];
+  const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge', 'ai-grammar-ok', 'ag-message-overlay', 'ag-live-highlight-backdrop'];
   const CHECKED_ATTR = 'data-ai-grammar-checked';
   const isWhatsApp = window.location.hostname === 'web.whatsapp.com';
 
@@ -1560,6 +1560,7 @@
     // Create overlay — positioned exactly over the textarea
     const overlay = document.createElement('div');
     liveHighlightEl = overlay;
+    overlay.className = 'ag-live-highlight-backdrop';
     Object.assign(overlay.style, {
       position: 'fixed', top: rect.top + 'px', left: rect.left + 'px',
       width: rect.width + 'px', height: rect.height + 'px',
@@ -1621,6 +1622,7 @@
     // Create overlay — positioned exactly over the contentEditable
     const overlay = document.createElement('div');
     liveHighlightEl = overlay;
+    overlay.className = 'ag-live-highlight-backdrop';
     Object.assign(overlay.style, {
       position: 'fixed', top: rect.top + 'px', left: rect.left + 'px',
       width: rect.width + 'px', height: rect.height + 'px',
@@ -1634,7 +1636,6 @@
       whiteSpace: cs.whiteSpace || 'pre-wrap',
       overflowWrap: cs.overflowWrap || 'break-word',
       wordBreak: cs.wordBreak || 'break-word',
-      color: 'rgba(0,0,0,0.01)',
       background: 'transparent', overflow: 'hidden',
       padding: cs.padding, boxSizing: 'border-box',
     });
