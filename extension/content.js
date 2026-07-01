@@ -1185,14 +1185,21 @@
     if (!correction) return;
 
     if (errorEl.hasAttribute('data-live-draft')) {
-      const ta = liveHighlightTarget;
-      if (!ta) { hideTooltip(); return; }
+      let ta = liveHighlightTarget;
+      // Fallback: if liveHighlightTarget wasn't set (overlay injected externally
+      // e.g. by test scripts), find the contentEditable from the DOM.
+      if (!ta) {
+        ta = document.querySelector('footer div[contenteditable="true"][role="textbox"]')
+          || document.querySelector('[contenteditable="true"][role="textbox"]')
+          || document.querySelector('[contenteditable="true"]');
+      }
+      if (!ta || !document.contains(ta)) { hideTooltip(); return; }
 
       // Collect all error spans from the live-draft overlay and apply
       // every correction at once.  Sort by start offset descending so
       // replacements don't shift earlier positions.
-      const spans = liveHighlightEl?.querySelectorAll?.(
-        '.ai-grammar-error, .ai-grammar-improvement, .ai-grammar-idiom'
+      const spans = (liveHighlightEl || document).querySelectorAll(
+        '.ai-grammar-error[data-live-draft], .ai-grammar-improvement[data-live-draft], .ai-grammar-idiom[data-live-draft]'
       );
       if (spans?.length) {
         const fixes = Array.from(spans)
