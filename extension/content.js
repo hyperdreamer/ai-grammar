@@ -2003,12 +2003,44 @@
         return;
       }
 
-      // Use overlay-based highlighting — survives React/Vue re-renders
-      // (DOM injection via highlightErrors gets stripped on WhatsApp, Teams, etc.)
+      // Highlight errors.  For non-WhatsApp pages, prefer inline DOM
+      // injection — it gives browser-native underline positioning that is
+      // independent of zoom, font rendering, and overlay-alignment quirks.
+      // Overlay-based highlighting is the fallback for React / Vue pages
+      // where injected spans are stripped by vdom reconciliation.
       isHighlighting = true;
-      const count = isWhatsApp
-        ? highlightWhatsAppOverlay(container, errors, text)
-        : highlightOverlay(container, errors, text);
+      let count;
+      if (isWhatsApp) {
+        count = highlightWhatsAppOverlay(container, errors, text);
+      } else {
+        // Clear previous inline highlights in this container so
+        // repeated checks don't accumulate stale spans that corrupt
+        // offset calculations (IGNORE_CLASSES skips their text).
+        for (const cls of ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom']) {
+          container.querySelectorAll(`.${cls}:not([data-live-draft])`).forEach(span => {
+            const parent = span.parentNode;
+            if (parent) {
+              while (span.firstChild) parent.insertBefore(span.firstChild, span);
+              parent.removeChild(span);
+            }
+          });
+        }
+        // Adjust error offsets from the checked text to the container's
+        // full text so highlightErrors can place spans at the right nodes.
+        const containerText = getTextContent(container);
+        const textOffset = containerText.indexOf(text);
+        if (textOffset >= 0) {
+          const adjustedErrors = errors.map(e => ({
+            ...e,
+            start: Number(e.start) + textOffset,
+            end: Number(e.end) + textOffset,
+          }));
+          count = highlightErrors(container, adjustedErrors, containerText);
+        } else {
+          count = 0;
+        }
+        if (!count) count = highlightOverlay(container, errors, text);
+      }
       isHighlighting = false;
 
       if (count > 0) {
