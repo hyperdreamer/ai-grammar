@@ -300,6 +300,14 @@
         border-radius: 50%;
         animation: ai-gspin 0.8s linear infinite;
       }
+      .ai-grammar-badge .ag-count {
+        background: rgba(255,255,255,0.15);
+        padding: 1px 6px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 600;
+        margin-left: 2px;
+      }
       @keyframes ai-gspin {
         to { transform: rotate(360deg); }
       }
@@ -336,6 +344,9 @@
         .ai-grammar-badge .ag-spinner {
           border-color: #e2e8f0;
           border-top-color: #16a34a;
+        }
+        .ai-grammar-badge .ag-count {
+          background: rgba(0,0,0,0.08);
         }
       }
       .ai-grammar-ok {
@@ -1264,7 +1275,7 @@
             if (success) {
               clearLiveDraftHighlights();
               hideTooltip();
-              showBadge('✓ Fixed!', false, 3000);
+              showResultBadge('✓ Fixed!', 3000);
             } else {
               // Fallback: copy to clipboard for manual paste
               navigator.clipboard.writeText(text).catch(() => {});
@@ -1274,7 +1285,7 @@
               const sel = window.getSelection();
               sel.removeAllRanges();
               sel.addRange(range);
-              showBadge('Copied to clipboard — paste (Ctrl+V) to apply', false, 4000);
+              showResultBadge('Copied to clipboard — paste (Ctrl+V) to apply', 4000);
             }
             skipLiveCheck = false;
           });
@@ -1400,39 +1411,134 @@
   });
 
   // -----------------------------------------------------------------------
-  // Status badge
+  // Status badge — stacked, reference-counted
   // -----------------------------------------------------------------------
 
-  let batchInFlight = 0;  // >0 when ?/check is running multiple checks; badge auto-suppressed
+  // Reference counters: one counter per pending category
+  const badgeCounters = { checking: 0, fixing: 0, polishing: 0 };
 
-  function showBadge(text, isPending = false, durationMs = 4000) {
-    if (batchInFlight > 0) return;  // badge managed by batch orchestrator
-    removeBadge();
-    const badge = document.createElement('div');
-    badge.className = 'ai-grammar-badge';
-    badge.innerHTML = isPending
-      ? `<div class="ag-spinner"></div>${text}`
-      : text;
-    document.body.appendChild(badge);
-    if (!isPending) {
-      setTimeout(removeBadge, durationMs);
+  // Current label text for each category (can be overwritten, e.g. batch progress)
+  const badgeLabels = {
+    checking: 'Checking grammar...',
+    fixing: 'Fixing...',
+    polishing: 'Polishing...'
+  };
+
+  // Which category the DOM badge currently represents (null if none or result badge)
+  let currentBadgeCategory = null;
+
+  // Timer handle for auto-dismissing result badges
+  let resultBadgeTimer = null;
+
+  // Priority: fixing > polishing > checking
+  const BADGE_PRIORITY = { fixing: 3, polishing: 2, checking: 1 };
+
+  function buildBadgeHTML(category) {
+    const label = badgeLabels[category];
+    const count = badgeCounters[category];
+    const countHtml = count > 1 ? `<span class="ag-count">&times; ${count}</span>` : '';
+    return `<div class="ag-spinner"></div>${label}${countHtml}`;
+  }
+
+  // Show a pending badge (with spinner). Increments the category counter.
+  // Replaces the DOM badge only if this category has >= priority than current.
+  function showPendingBadge(category, label) {
+    badgeCounters[category]++;
+    badgeLabels[category] = label;
+    if (resultBadgeTimer) { clearTimeout(resultBadgeTimer); resultBadgeTimer = null; }
+
+    const priority = BADGE_PRIORITY[category];
+    const currentPriority = currentBadgeCategory ? BADGE_PRIORITY[currentBadgeCategory] : 0;
+
+    if (priority >= currentPriority) {
+      const existing = document.querySelector('.ai-grammar-badge');
+      if (existing) existing.remove();
+      currentBadgeCategory = category;
+      const badge = document.createElement('div');
+      badge.className = 'ai-grammar-badge';
+      badge.innerHTML = buildBadgeHTML(category);
+      document.body.appendChild(badge);
     }
   }
 
-  function removeBadge() {
-    if (batchInFlight > 0) return;  // badge managed by batch orchestrator
-    const existing = document.querySelector('.ai-grammar-badge');
-    if (existing) existing.remove();
+  // Update label without changing the counter (used by batch progress)
+  function updatePendingBadgeLabel(category, label) {
+    badgeLabels[category] = label;
+    if (currentBadgeCategory !== category) return;
+    const badge = document.querySelector('.ai-grammar-badge');
+    if (!badge) return;
+    badge.innerHTML = buildBadgeHTML(category);
   }
 
-  function updateBatchBadge(completed, total) {
-    // Only called from ?/check batch orchestrator
+  // Remove one pending operation. Decrements counter.
+  // Only removes DOM badge when counter hits 0 AND this is the current category.
+  // Falls back to next-highest-priority active category if current one exhausted.
+  function removePendingBadge(category) {
+    badgeCounters[category] = Math.max(0, badgeCounters[category] - 1);
+
+    if (currentBadgeCategory === category) {
+      if (badgeCounters[category] <= 0) {
+        currentBadgeCategory = null;
+        let bestCat = null;
+        let bestPrio = 0;
+        for (const [cat, prio] of Object.entries(BADGE_PRIORITY)) {
+          if (badgeCounters[cat] > 0 && prio > bestPrio) {
+            bestCat = cat;
+            bestPrio = prio;
+          }
+        }
+        const existing = document.querySelector('.ai-grammar-badge');
+        if (existing) existing.remove();
+        if (bestCat) {
+          currentBadgeCategory = bestCat;
+          const badge = document.createElement('div');
+          badge.className = 'ai-grammar-badge';
+          badge.innerHTML = buildBadgeHTML(bestCat);
+          document.body.appendChild(badge);
+        }
+      } else {
+        const badge = document.querySelector('.ai-grammar-badge');
+        if (badge) badge.innerHTML = buildBadgeHTML(category);
+      }
+    }
+  }
+
+  // Show a transient result badge (no spinner, no stacking).
+  // Replaces any existing badge immediately. Auto-dismisses after durationMs.
+  // Restores pending badge (if any) after dismissal.
+  function showResultBadge(text, durationMs = 4000) {
+    if (resultBadgeTimer) { clearTimeout(resultBadgeTimer); resultBadgeTimer = null; }
+    const pendingCat = currentBadgeCategory;
     const existing = document.querySelector('.ai-grammar-badge');
     if (existing) existing.remove();
     const badge = document.createElement('div');
     badge.className = 'ai-grammar-badge';
-    badge.innerHTML = `<div class="ag-spinner"></div>Checking ${completed}/${total} text blocks...`;
+    badge.innerHTML = text;
     document.body.appendChild(badge);
+
+    resultBadgeTimer = setTimeout(() => {
+      resultBadgeTimer = null;
+      const b = document.querySelector('.ai-grammar-badge');
+      if (b) b.remove();
+      // Restore pending badge if one is active
+      if (pendingCat && badgeCounters[pendingCat] > 0) {
+        currentBadgeCategory = pendingCat;
+        const pb = document.createElement('div');
+        pb.className = 'ai-grammar-badge';
+        pb.innerHTML = buildBadgeHTML(pendingCat);
+        document.body.appendChild(pb);
+      }
+    }, durationMs);
+  }
+
+  // Batch check progress — participates in the "checking" counter
+  function updateBatchBadge(completed, total) {
+    const label = `Checking ${completed}/${total} text blocks...`;
+    if (badgeCounters.checking > 0) {
+      updatePendingBadgeLabel('checking', label);
+    } else {
+      showPendingBadge('checking', label);
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -1882,7 +1988,7 @@
       // Don't start a grammar check while a command (fix/polish) is running
       if (commandInFlight) return;
       try {
-        showBadge('Checking grammar...', true);
+        showPendingBadge('checking', 'Checking grammar...');
         // Create fresh controller, abort any previous in-flight check
         activeCheckController?.abort();
         activeCheckController = new AbortController();
@@ -1901,9 +2007,9 @@
           signal: activeCheckController.signal,
         });
         const data = await resp.json();
-        removeBadge();
+        removePendingBadge('checking');
         if (!resp.ok) {
-          showBadge('Grammar check failed: ' + (data?.detail || resp.status), false, 5000);
+          showResultBadge('Grammar check failed: ' + (data?.detail || resp.status), 5000);
           return;
         }
         if (data?.errors?.length > 0) {
@@ -1928,7 +2034,7 @@
       removeErrorFloat();
       removeEditableGreenChecks();
       activeCheckController?.abort();
-      if (!commandInFlight) removeBadge();
+      if (!commandInFlight) removePendingBadge('checking');
 
       // Skip placeholder-only text or empty value — and clear highlights
       const raw = ta.value || ta.textContent || '';
@@ -1980,7 +2086,7 @@
 
     const id = ++checkIdCounter;
     removeGreenCheck(container);
-    showBadge('Checking grammar...', true);
+    showPendingBadge('checking', 'Checking grammar...');
 
     // Each post-submit check gets its OWN controller so concurrent checks
     // can run independently. The shared activeCheckController is only for
@@ -2004,10 +2110,10 @@
       });
       const data = await resp.json();
 
-      removeBadge();
+      removePendingBadge('checking');
 
       if (!resp.ok) {
-        showBadge('Grammar check failed: ' + (data?.detail || resp.status), false, 5000);
+        showResultBadge('Grammar check failed: ' + (data?.detail || resp.status), 5000);
         return;
       }
 
@@ -2065,10 +2171,10 @@
         if (breakdown.error) parts.push(`${breakdown.error} error${breakdown.error > 1 ? 's' : ''}`);
         if (breakdown.improvement) parts.push(`${breakdown.improvement} improvement${breakdown.improvement > 1 ? 's' : ''}`);
         if (breakdown.idiom) parts.push(`${breakdown.idiom} idiom${breakdown.idiom > 1 ? 's' : ''}`);
-        showBadge(parts.join(', ') + ' found');
+        showResultBadge(parts.join(', ') + ' found');
       }
     } catch (e) {
-      removeBadge();
+      removePendingBadge('checking');
       if (e.name !== 'AbortError') {
         console.debug('[AI Grammar] Check error:', e);
       }
@@ -2184,7 +2290,7 @@
     const range = sel.getRangeAt(0);
     const text = range.toString().trim();
     if (text.length < minChars) {
-      showBadge('Selection too short to check');
+      showResultBadge('Selection too short to check');
       return;
     }
 
@@ -2294,14 +2400,14 @@
       help: 'Disable grammar checking',
       async run() {
         await chrome.storage.sync.set({ grammarEnabled: false });
-        showBadge('Grammar checker disabled');
+        showResultBadge('Grammar checker disabled');
       },
     },
     on: {
       help: 'Enable grammar checking',
       async run() {
         await chrome.storage.sync.set({ grammarEnabled: true });
-        showBadge('Grammar checker enabled');
+        showResultBadge('Grammar checker enabled');
       },
     },
     lang: {
@@ -2310,19 +2416,19 @@
         const valid = ['auto', 'en', 'zh', 'ja', 'ko', 'fr', 'de', 'es', 'ru', 'pt', 'it', 'ar'];
         const lang = (args || '').toLowerCase();
         if (!valid.includes(lang)) {
-          showBadge(`Unknown language: "${args}". Use: ${valid.join(', ')}`);
+          showResultBadge(`Unknown language: "${args}". Use: ${valid.join(', ')}`);
           return;
         }
         const label = lang === 'auto' ? 'Auto-detect' : lang.toUpperCase();
         await chrome.storage.sync.set({ grammarLanguage: lang });
-        showBadge(`Language set to ${label}`);
+        showResultBadge(`Language set to ${label}`);
       },
     },
     help: {
       help: 'Show available commands',
       run() {
         const lines = Object.entries(COMMANDS).map(([name, cmd]) => `?/${name} — ${cmd.help}`);
-        showBadge(lines.join(' | '), false, 8000);
+        showResultBadge(lines.join(' | '), 8000);
       },
     },
     fix: {
@@ -2332,10 +2438,10 @@
         const cmdIdx = value.lastIndexOf('?/fix');
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
         if (!draft || draft.length < minChars) {
-          showBadge('No text to fix (need at least ' + minChars + ' characters)');
+          showResultBadge('No text to fix (need at least ' + minChars + ' characters)');
           return;
         }
-        showBadge('Fixing...', true);
+        showPendingBadge('fixing', 'Fixing...');
         commandInFlight = true;
         try {
           const settings = await safeGetStorage({
@@ -2352,9 +2458,9 @@
           });
           clearTimeout(timeoutId);
           const data = await resp.json();
-          removeBadge();
+          removePendingBadge('fixing');
           if (!data?.errors?.length) {
-            showBadge('✓ No corrections needed');
+            showResultBadge('✓ No corrections needed');
             return;
           }
           // Apply corrections bottom-up to preserve offsets
@@ -2372,11 +2478,11 @@
             // WhatsApp Lexical blocks direct DOM writes — use CDP keyboard simulation
             applyFixCDP(fixed).then(success => {
               if (success) {
-                showBadge(`✓ Fixed ${sorted.length} issue${sorted.length > 1 ? 's' : ''}`, false, 3000);
+                showResultBadge(`✓ Fixed ${sorted.length} issue${sorted.length > 1 ? 's' : ''}`, 3000);
               } else {
                 // Fallback: copy to clipboard
                 navigator.clipboard.writeText(fixed).catch(() => {});
-                showBadge(`Copied fixed text to clipboard — paste (Ctrl+V) to apply`, false, 4000);
+                showResultBadge(`Copied fixed text to clipboard — paste (Ctrl+V) to apply`, 4000);
               }
               skipLiveCheck = false;
             });
@@ -2392,9 +2498,9 @@
           cancelLiveDraft?.();
           activeCheckController?.abort();
           ta.focus();
-          showBadge(`✓ Fixed ${sorted.length} issue${sorted.length > 1 ? 's' : ''}`);
+          showResultBadge(`✓ Fixed ${sorted.length} issue${sorted.length > 1 ? 's' : ''}`);
         } catch (e) {
-          removeBadge();
+          removePendingBadge('fixing');
           let reason;
           if (e.name === 'AbortError') {
             reason = 'Request timed out or was cancelled';
@@ -2403,7 +2509,7 @@
           } else {
             reason = e.message;
           }
-          showBadge(`Fix failed: ${reason}`);
+          showResultBadge(`Fix failed: ${reason}`);
         } finally {
           commandInFlight = false;
         }
@@ -2416,10 +2522,10 @@
         const cmdIdx = value.lastIndexOf('?/polish');
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
         if (!draft || draft.length < minChars) {
-          showBadge('No text to polish (need at least ' + minChars + ' characters)');
+          showResultBadge('No text to polish (need at least ' + minChars + ' characters)');
           return;
         }
-        showBadge('Polishing...', true);
+        showPendingBadge('polishing', 'Polishing...');
         commandInFlight = true;
         try {
           const settings = await safeGetStorage({
@@ -2436,14 +2542,14 @@
           });
           clearTimeout(timeoutId);
           const data = await resp.json();
-          removeBadge();
+          removePendingBadge('polishing');
           if (!resp.ok) {
-            showBadge(`Polish failed: ${data?.detail || resp.status}`, false, 5000);
+            showResultBadge(`Polish failed: ${data?.detail || resp.status}`, 5000);
             return;
           }
           const polished = data.polished;
           if (!polished || polished === draft) {
-            showBadge('✓ Text already polished');
+            showResultBadge('✓ Text already polished');
             return;
           }
           // Replace textarea content with polished text
@@ -2455,11 +2561,11 @@
             // WhatsApp Lexical blocks direct DOM writes — use CDP keyboard simulation
             applyFixCDP(polished).then(success => {
               if (success) {
-                showBadge('✓ Polished', false, 3000);
+                showResultBadge('✓ Polished', 3000);
               } else {
                 // Fallback: copy to clipboard
                 navigator.clipboard.writeText(polished).catch(() => {});
-                showBadge('Copied polished text to clipboard — paste (Ctrl+V) to apply', false, 4000);
+                showResultBadge('Copied polished text to clipboard — paste (Ctrl+V) to apply', 4000);
               }
               skipLiveCheck = false;
             });
@@ -2475,9 +2581,9 @@
           cancelLiveDraft?.();
           activeCheckController?.abort();
           ta.focus();
-          showBadge('✓ Polished');
+          showResultBadge('✓ Polished');
         } catch (e) {
-          removeBadge();
+          removePendingBadge('polishing');
           let reason;
           if (e.name === 'AbortError') {
             reason = 'Request timed out or was cancelled';
@@ -2486,7 +2592,7 @@
           } else {
             reason = e.message;
           }
-          showBadge(`Polish failed: ${reason}`);
+          showResultBadge(`Polish failed: ${reason}`);
         } finally {
           commandInFlight = false;
         }
@@ -2509,7 +2615,7 @@
 
     const cmd = COMMANDS[cmdName];
     if (!cmd) {
-      showBadge(`Unknown command: ?/${cmdName}. Try ?/help`);
+      showResultBadge(`Unknown command: ?/${cmdName}. Try ?/help`);
       return true;
     }
 
@@ -2521,10 +2627,10 @@
         const cmdIdx = text.lastIndexOf('?/fix');
         const draft = (cmdIdx >= 0 ? text.slice(0, cmdIdx) : text).trim();
         if (!draft || draft.length < minChars) {
-          showBadge('No text to fix (need at least ' + minChars + ' characters)');
+          showResultBadge('No text to fix (need at least ' + minChars + ' characters)');
           return true;
         }
-        showBadge('Fixing...', true);
+        showPendingBadge('fixing', 'Fixing...');
         commandInFlight = true;
         try {
           const settings = await safeGetStorage({
@@ -2541,9 +2647,9 @@
           });
           clearTimeout(timeoutId);
           const data = await resp.json();
-          removeBadge();
+          removePendingBadge('fixing');
           if (!data?.errors?.length) {
-            showBadge('✓ No corrections needed');
+            showResultBadge('✓ No corrections needed');
             return true;
           }
           const sorted = [...data.errors].sort((a, b) => b.start - a.start);
@@ -2552,9 +2658,9 @@
             fixed = fixed.slice(0, err.start) + err.correction + fixed.slice(err.end);
           }
           // Show corrected text as a float notification
-          showBadge(`Corrected: "${fixed.slice(0, 80)}${fixed.length > 80 ? '...' : ''}"`, false, 10000);
+          showResultBadge(`Corrected: "${fixed.slice(0, 80)}${fixed.length > 80 ? '...' : ''}"`, 10000);
         } catch (e) {
-          removeBadge();
+          removePendingBadge('fixing');
           let reason;
           if (e.name === 'AbortError') {
             reason = 'Request timed out or was cancelled';
@@ -2563,7 +2669,7 @@
           } else {
             reason = e.message;
           }
-          showBadge(`Fix failed: ${reason}`);
+          showResultBadge(`Fix failed: ${reason}`);
         } finally {
           commandInFlight = false;
         }
@@ -2572,10 +2678,10 @@
         const cmdIdx = text.lastIndexOf('?/polish');
         const draft = (cmdIdx >= 0 ? text.slice(0, cmdIdx) : text).trim();
         if (!draft || draft.length < minChars) {
-          showBadge('No text to polish (need at least ' + minChars + ' characters)');
+          showResultBadge('No text to polish (need at least ' + minChars + ' characters)');
           return true;
         }
-        showBadge('Polishing...', true);
+        showPendingBadge('polishing', 'Polishing...');
         commandInFlight = true;
         try {
           const settings = await safeGetStorage({
@@ -2592,19 +2698,19 @@
           });
           clearTimeout(timeoutId);
           const data = await resp.json();
-          removeBadge();
+          removePendingBadge('polishing');
           if (!resp.ok) {
-            showBadge(`Polish failed: ${data?.detail || resp.status}`, false, 5000);
+            showResultBadge(`Polish failed: ${data?.detail || resp.status}`, 5000);
             return true;
           }
           const polished = data.polished;
           if (!polished || polished === draft) {
-            showBadge('✓ Text already polished');
+            showResultBadge('✓ Text already polished');
             return true;
           }
-          showBadge(`Polished: "${polished.slice(0, 80)}${polished.length > 80 ? '...' : ''}"`, false, 10000);
+          showResultBadge(`Polished: "${polished.slice(0, 80)}${polished.length > 80 ? '...' : ''}"`, 10000);
         } catch (e) {
-          removeBadge();
+          removePendingBadge('polishing');
           let reason;
           if (e.name === 'AbortError') {
             reason = 'Request timed out or was cancelled';
@@ -2613,7 +2719,7 @@
           } else {
             reason = e.message;
           }
-          showBadge(`Polish failed: ${reason}`);
+          showResultBadge(`Polish failed: ${reason}`);
         } finally {
           commandInFlight = false;
         }
@@ -2621,7 +2727,7 @@
         await cmd.run(args);
       }
     } catch (e) {
-      showBadge(`Command failed: ${e.message}`);
+      showResultBadge(`Command failed: ${e.message}`);
     }
     return true;
   }
@@ -2790,7 +2896,7 @@
     try {
       await COMMANDS[cmdName].run('');
     } catch (err) {
-      showBadge(`Command failed: ${err.message}`);
+      showResultBadge(`Command failed: ${err.message}`);
     }
 
     // Clear the command text from the input
@@ -3069,7 +3175,7 @@
                   await COMMANDS[matched.name].run('');
                 }
               } catch (err) {
-                showBadge(`Command failed: ${err.message}`);
+                showResultBadge(`Command failed: ${err.message}`);
               }
               // Replace the partial prefix with the full command in text (so user sees it resolved)
               // and strip command afterward (skip for fix/polish — they replace content)
@@ -3103,7 +3209,7 @@
               await COMMANDS[cmdName].run(cmdArgs);
             }
           } catch (err) {
-            showBadge(`Command failed: ${err.message}`);
+            showResultBadge(`Command failed: ${err.message}`);
           }
 
           // Strip the command portion, keep text before it
