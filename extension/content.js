@@ -153,7 +153,7 @@
         text-decoration-style: wavy !important;
         text-decoration-color: #dc2626 !important;
         text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.12em;
+        text-underline-offset: 0;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
@@ -167,7 +167,7 @@
         text-decoration-style: wavy !important;
         text-decoration-color: #4ade80 !important;
         text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.12em;
+        text-underline-offset: 0;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
@@ -181,7 +181,7 @@
         text-decoration-style: wavy !important;
         text-decoration-color: #60a5fa !important;
         text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.12em;
+        text-underline-offset: 0;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
@@ -1863,10 +1863,9 @@
     // from the span bottom (driven by line-height, not baseline) and
     // produced underlines that sat too low in the input field.
     //
-    // Separate scheme: inline post-submit uses 0.12em offset (from
-    // the CSS class); live-draft contentEditable uses 0 (baseline) via
-    // inline style override to better match the input field's tighter
-    // line-height / baseline geometry on WhatsApp.
+    // Both inline post-submit and live-draft use offset 0 (baseline).
+    // This positions underlines tightly under the text baseline,
+    // matching the WhatsApp native look.
 
     liveHighlightReposition = () => {
       if (!liveHighlightEl || !document.contains(ce)) return;
