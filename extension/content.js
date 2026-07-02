@@ -1925,10 +1925,20 @@
     let lastInputTime = 0;
     let liveCheckTarget = null;
     let liveDelay = 5000;       // ms, read from storage
+    let liveCheckInFlight = false;
+
+    function abortLiveDraftCheck({ removeBadge = true } = {}) {
+      if (!liveCheckInFlight) return;
+      activeCheckController?.abort();
+      activeCheckController = null;
+      liveCheckInFlight = false;
+      if (removeBadge && !commandInFlight) removePendingBadge('checking');
+    }
 
     // Expose cancel so ?/fix can abort pending live checks
     cancelLiveDraft = () => {
       liveCheckTarget = null;
+      abortLiveDraftCheck();
       removeErrorFloat();
     };
 
@@ -1985,8 +1995,12 @@
       // Don't start a grammar check while a command (fix/polish) is running
       if (commandInFlight) return;
       try {
+        abortLiveDraftCheck();
         showPendingBadge('checking', 'Checking grammar...');
-        // Create fresh controller, abort any previous in-flight check
+        liveCheckInFlight = true;
+        // Create fresh controller, abort any previous in-flight live check.
+        // Post-submit checks use their own local controllers and must not be
+        // cancelled when the user resumes typing a new draft.
         activeCheckController?.abort();
         activeCheckController = new AbortController();
 
@@ -2004,7 +2018,11 @@
           signal: activeCheckController.signal,
         });
         const data = await resp.json();
-        removePendingBadge('checking');
+        if (liveCheckInFlight) {
+          liveCheckInFlight = false;
+          activeCheckController = null;
+          removePendingBadge('checking');
+        }
         if (!resp.ok) {
           showResultBadge('Grammar check failed: ' + (data?.detail || resp.status), 5000);
           return;
@@ -2015,7 +2033,12 @@
           showGreenCheck(ta);
         }
       } catch (err) {
-        console.debug('[AI Grammar] Live check error:', err);
+        if (err.name === 'AbortError') {
+          console.debug('[AI Grammar] Live check aborted');
+        } else {
+          abortLiveDraftCheck();
+          console.debug('[AI Grammar] Live check error:', err);
+        }
       }
     }
 
@@ -2026,12 +2049,11 @@
       // Skip if a fix/polish command is in flight — don't clear its overlay.
       if (skipLiveCheck) return;
 
-      // Clear live draft highlights and abort in-flight checks
+      // Clear live draft highlights and abort any in-flight live-draft check.
       clearLiveDraftHighlights();
       removeErrorFloat();
       removeEditableGreenChecks();
-      activeCheckController?.abort();
-      if (!commandInFlight) removePendingBadge('checking');
+      abortLiveDraftCheck();
 
       // Skip placeholder-only text or empty value — and clear highlights
       const raw = ta.value || ta.textContent || '';
@@ -2055,7 +2077,7 @@
       clearLiveDraftHighlights();
       removeErrorFloat();
       removeEditableGreenChecks();
-      activeCheckController?.abort();
+      abortLiveDraftCheck();
     }, true);
 
     document.addEventListener('submit', () => {
@@ -2063,7 +2085,7 @@
       clearLiveDraftHighlights();
       removeErrorFloat();
       removeEditableGreenChecks();
-      activeCheckController?.abort();
+      abortLiveDraftCheck();
     }, true);
   }
 
