@@ -602,22 +602,29 @@
   function highlightErrors(container, errors, checkedText = '') {
     if (!errors || errors.length === 0) return 0;
 
-    // Build a flat list of text nodes with their global offsets
-    const textNodes = [];
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    // Build a flat list of text nodes with their global offsets.
+    // Because surroundContents / extractContents detaches the original
+    // text nodes, we must rebuild this list after each successful wrap.
+    const makeWalker = () => document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         if (isIgnored(node.parentElement)) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       },
     });
-    let node, offset = 0;
-    while ((node = walker.nextNode())) {
-      textNodes.push({ node, start: offset, end: offset + node.textContent.length });
-      offset += node.textContent.length;
-    }
-    if (!textNodes.length) return 0;
 
-    const fullText = textNodes.map(tn => tn.node.textContent).join('');
+    function walkTextNodes() {
+      const nodes = [];
+      const w = makeWalker();
+      let n, off = 0;
+      while ((n = w.nextNode())) {
+        nodes.push({ node: n, start: off, end: off + n.textContent.length });
+        off += n.textContent.length;
+      }
+      return { nodes, fullText: nodes.map(tn => tn.node.textContent).join('') };
+    }
+
+    let { nodes: textNodes, fullText } = walkTextNodes();
+    if (!textNodes.length) return 0;
 
     function findRangeByOffsets(start, end) {
       if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > fullText.length) {
@@ -677,17 +684,28 @@
       span.setAttribute('data-type', err.type || 'error');
       span.setAttribute('tabindex', '0');
 
+      let wrapped = false;
       try {
         range.surroundContents(span);
-        highlighted++;
+        wrapped = true;
       } catch {
         try {
           const frag = range.extractContents();
           span.appendChild(frag);
           range.insertNode(span);
-          highlighted++;
+          wrapped = true;
         } catch {
           // Skip ranges that cannot be wrapped safely.
+        }
+      }
+
+      if (wrapped) {
+        highlighted++;
+        // Rebuild text node list — surroundContents/extractContents
+        // detaches the original text nodes, so subsequent errors
+        // need fresh references.
+        if (highlighted < sortedErrors.length) {
+          ({ nodes: textNodes, fullText } = walkTextNodes());
         }
       }
     }
