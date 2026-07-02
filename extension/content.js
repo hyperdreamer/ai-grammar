@@ -1026,17 +1026,12 @@
 
     removeMessageOverlay(waContainer);
 
+    // Use normalized text directly for the overlay — it matches what the
+    // backend checked, so offsets are always correct.  The overlay is 99.99%
+    // transparent (only the wavy underlines are visible), so invisible
+    // characters (ZWJ, bidi markers) stripped from the overlay produce no
+    // visual difference while eliminating the fragile visibleSlice mapping.
     const overlayText = fullText || info.text;
-    const useRawMap = overlayText === info.text && info.normalizedToRaw.length === info.text.length;
-
-    function visibleSlice(start, end) {
-      if (!useRawMap) return overlayText.slice(start, end);
-      const rawStart = info.normalizedToRaw[start] ?? info.rawText.length;
-      const rawEnd = end >= info.text.length
-        ? ((info.normalizedToRaw[info.normalizedToRaw.length - 1] ?? info.rawText.length - 1) + 1)
-        : (info.normalizedToRaw[end] ?? info.rawText.length);
-      return stripWhatsAppTextArtifacts(info.rawText.slice(rawStart, rawEnd));
-    }
 
     let html = '';
     let pos = 0;
@@ -1048,7 +1043,7 @@
       const e = Math.min(overlayText.length, Number(err.end));
       if (s < pos || s >= e) continue;
 
-      html += escapeHtml(visibleSlice(pos, s));
+      html += escapeHtml(overlayText.slice(pos, s));
 
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' :
                   err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
@@ -1056,11 +1051,11 @@
           data-correction="${escapeHtml(err.correction || '')}"
           data-explanation="${escapeHtml(err.explanation || '')}"
           data-error="${escapeHtml(err.error || '')}"
-          data-type="${err.type || 'error'}" tabindex="0">${escapeHtml(visibleSlice(s, e))}</span>`;
+          data-type="${err.type || 'error'}" tabindex="0">${escapeHtml(overlayText.slice(s, e))}</span>`;
       pos = e;
       rendered++;
     }
-    html += escapeHtml(visibleSlice(pos, overlayText.length));
+    html += escapeHtml(overlayText.slice(pos));
 
     if (!rendered) return 0;
 
