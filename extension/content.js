@@ -61,6 +61,12 @@
   // WhatsApp Web, Teams, etc. — DOM injection gets stripped by vdom reconcilation)
   const messageOverlays = new Map(); // container → { overlay, cleanup }
 
+  // In-memory cache of grammar-check results per conversation.
+  // Used to re-apply underlines when switching back to a previously-checked
+  // chat without re-running the API check.  Capped at 12 entries (LRU eviction).
+  const checkedResults = new Map(); // conversationKey → { errors, text, timestamp }
+  const MAX_CACHED_RESULTS = 12;
+
   // AbortController for in-flight grammar checks — aborted when user resumes typing
   let activeCheckController = null;
 
@@ -201,6 +207,176 @@
     if (nextKey === activeConversationKey) return;
 
     clearConversationScopedState();
+
+    // Re-apply cached grammar-check highlights when switching back to
+    // a previously-checked conversation (no API call needed).
+    if (checkedResults.has(nextKey)) {
+      reapplyCachedHighlights(nextKey);
+    }
+  }
+
+  /**
+   * Find the current chat's text input element.
+   * On WhatsApp: the contenteditable div in the footer.
+   * On generic pages: any visible textarea or contenteditable element
+   * that is not inside a dialog or popup.
+   */
+  function findCurrentChatInput() {
+    if (isWhatsApp) {
+      const footer = document.querySelector('footer');
+      if (footer && document.contains(footer)) {
+        const editable = footer.querySelector('div[role="textbox"][contenteditable="true"]');
+        if (editable && document.contains(editable)) return editable;
+      }
+      // Fallback: any contenteditable textbox not in a dialog/popup
+      const textboxes = document.querySelectorAll('div[role="textbox"][contenteditable="true"]');
+      for (const tb of textboxes) {
+        if (!tb.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) return tb;
+      }
+      return null;
+    }
+    // Generic pages
+    for (const ta of document.querySelectorAll('textarea')) {
+      if (ta.offsetParent !== null && document.contains(ta)) return ta;
+    }
+    for (const ed of document.querySelectorAll('[contenteditable="true"]')) {
+      if (ed.offsetParent !== null && document.contains(ed)) return ed;
+    }
+    return null;
+  }
+
+  // Tracks the current re-application sequence to cancel stale retries
+  // when the user switches chats again before re-application completes.
+  let reapplySeq = 0;
+
+  function evictOldestCache() {
+    if (checkedResults.size <= MAX_CACHED_RESULTS) return;
+    let oldestKey = null;
+    let oldestTime = Infinity;
+    for (const [key, entry] of checkedResults) {
+      if (entry.timestamp < oldestTime) {
+        oldestTime = entry.timestamp;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey) checkedResults.delete(oldestKey);
+  }
+
+  /**
+   * Re-apply cached grammar-check highlights for a conversation.
+   * Used when switching back to a previously-checked chat — no API call.
+   * Retries at 0 ms, 200 ms, and 500 ms in case the DOM isn't ready yet.
+   */
+  function reapplyCachedHighlights(conversationKey, attempt = 0) {
+    if (attempt === 0) reapplySeq++;
+    const mySeq = reapplySeq;
+
+    function tryApply() {
+      // Abort if superseded by a newer re-application or the user switched away
+      if (mySeq !== reapplySeq) return;
+      if (getConversationKey() !== conversationKey) return;
+
+      const cached = checkedResults.get(conversationKey);
+      if (!cached) return;
+
+      const textarea = findCurrentChatInput();
+      if (!textarea || !document.contains(textarea)) {
+        scheduleReapplyRetry(conversationKey, attempt);
+        return;
+      }
+
+      const messageList = findMessageList(textarea);
+      if (!messageList) {
+        scheduleReapplyRetry(conversationKey, attempt);
+        return;
+      }
+
+      if (isWhatsApp) {
+        // Find message-out bubbles and match by text content
+        const bubbles = messageList.querySelectorAll('div.message-out');
+        for (const bubble of bubbles) {
+          const bubbleText = getWhatsAppMessageText(bubble);
+          if (!bubbleText) continue;
+          if (bubbleText === cached.text ||
+              bubbleText.includes(cached.text) ||
+              cached.text.includes(bubbleText)) {
+            highlightWhatsAppOverlay(bubble, cached.errors, bubbleText);
+            return;
+          }
+        }
+      } else {
+        // Generic pages: look for previously-checked blocks or text match
+        const blocks = messageList.querySelectorAll(`[${CHECKED_ATTR}]`);
+        for (const block of blocks) {
+          const blockText = getTextContent(block);
+          if (!blockText) continue;
+          if (blockText === cached.text || blockText.includes(cached.text)) {
+            highlightOverlay(block, cached.errors, cached.text);
+            return;
+          }
+        }
+        // Fallback: search block-level descendants for text match
+        const children = messageList.querySelectorAll('div, p, section, article, li, blockquote');
+        for (const child of children) {
+          const childText = getTextContent(child);
+          if (!childText || childText.length < cached.text.length) continue;
+          if (childText.includes(cached.text)) {
+            highlightOverlay(child, cached.errors, cached.text);
+            return;
+          }
+        }
+      }
+
+      // No matching element found yet — retry
+      scheduleReapplyRetry(conversationKey, attempt);
+    }
+
+    if (attempt === 0) {
+      tryApply();
+    } else {
+      setTimeout(tryApply, [200, 500][attempt - 1]);
+    }
+  }
+
+  function scheduleReapplyRetry(conversationKey, attempt) {
+    if (attempt >= 2) return; // Three attempts total: 0, 1, 2
+    const delays = [200, 500];
+    setTimeout(() => reapplyCachedHighlights(conversationKey, attempt + 1), delays[attempt]);
+  }
+
+  /**
+   * Walk up from the textarea to find the chat's message-list container.
+   * Strategy: find an ancestor whose children include 2+ elements with the
+   * same tag name — the hallmark of a chat message list (repeated message
+   * blocks).  Falls back to the great-grandparent of the input.
+   */
+  function findMessageList(textarea) {
+    if (!textarea || !document.contains(textarea)) return null;
+
+    let el = textarea.parentElement;
+    let depth = 0;
+    const MAX_DEPTH = 12;
+
+    while (el && el !== document.body && depth < MAX_DEPTH) {
+      const children = Array.from(el.children);
+      if (children.length >= 2) {
+        // Count how many children share each tag name
+        const tagCounts = {};
+        for (const child of children) {
+          const tag = child.tagName;
+          tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+        }
+        // Repeated tag → this looks like a list (messages, posts, etc.)
+        if (Object.values(tagCounts).some(c => c >= 2)) {
+          return el;
+        }
+      }
+      el = el.parentElement;
+      depth++;
+    }
+
+    // Fallback: input → toolbar → form → main-message-area (common pattern)
+    return textarea.parentElement?.parentElement?.parentElement || null;
   }
 
   function isWhatsAppChatListClick(target) {
@@ -2228,7 +2404,16 @@
 
       removePendingBadge('checking');
 
-      if (conversationKey !== getConversationKey() || !document.contains(container)) {
+      // Container was removed from the DOM — nothing to paint on.
+      if (!document.contains(container)) return;
+
+      // Check completed for a conversation the user has already left.
+      // Cache the result so underlines can be re-applied when switching back.
+      if (conversationKey !== getConversationKey()) {
+        if (resp.ok && data?.errors) {
+          checkedResults.set(conversationKey, { errors: data.errors, text, timestamp: Date.now() });
+          evictOldestCache();
+        }
         return;
       }
 
@@ -2283,6 +2468,13 @@
         if (!count) count = highlightOverlay(container, errors, text);
       }
       isHighlighting = false;
+
+      // Cache the result so underlines can be re-applied when switching
+      // back to this conversation without re-running the API check.
+      if (errors && errors.length > 0) {
+        checkedResults.set(conversationKey, { errors, text, timestamp: Date.now() });
+        evictOldestCache();
+      }
 
       if (count > 0) {
         const breakdown = { error: 0, improvement: 0, idiom: 0 };
@@ -3068,6 +3260,10 @@
       lastUserText = captured;
       lastUserTextTime = Date.now();
 
+      // Clear cached results for this conversation — new text is being
+      // submitted so the old underlines are stale.
+      checkedResults.delete(conversationKey);
+
       // Capture the message-list container via structural proximity.
       // This lets the MutationObserver match the user's message by
       // container membership instead of fragile text/CSS heuristics.
@@ -3098,41 +3294,6 @@
         if (captured) return captured;
       }
       return '';
-    }
-
-    /**
-     * Walk up from the textarea to find the chat's message-list container.
-     * Strategy: find an ancestor whose children include 2+ elements with the
-     * same tag name — the hallmark of a chat message list (repeated message
-     * blocks).  Falls back to the great-grandparent of the input.
-     */
-    function findMessageList(textarea) {
-      if (!textarea || !document.contains(textarea)) return null;
-
-      let el = textarea.parentElement;
-      let depth = 0;
-      const MAX_DEPTH = 12;
-
-      while (el && el !== document.body && depth < MAX_DEPTH) {
-        const children = Array.from(el.children);
-        if (children.length >= 2) {
-          // Count how many children share each tag name
-          const tagCounts = {};
-          for (const child of children) {
-            const tag = child.tagName;
-            tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-          }
-          // Repeated tag → this looks like a list (messages, posts, etc.)
-          if (Object.values(tagCounts).some(c => c >= 2)) {
-            return el;
-          }
-        }
-        el = el.parentElement;
-        depth++;
-      }
-
-      // Fallback: input → toolbar → form → main-message-area (common pattern)
-      return textarea.parentElement?.parentElement?.parentElement || null;
     }
 
     // Capture text when the user submits a form (e.g., chat send)
