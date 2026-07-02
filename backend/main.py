@@ -316,7 +316,7 @@ async def _call_ai(text: str, language: str, config: AIConfig, max_tokens: int |
         pool=timeout_cfg.pool,
     )
 
-    deadline = 30  # grammar checks are fast, no need for long timeout
+    deadline = timeout_cfg.read + 5  # buffer so httpx fires first
     headers = {
         "Authorization": f"Bearer {config.api_key}",
         "Content-Type": "application/json",
@@ -556,7 +556,8 @@ async def polish_text(request: CheckRequest) -> Response:
         body_data["max_tokens"] = request.max_tokens
 
     try:
-        result = await _do_ai_call(body_data, headers, timeout, config, deadline=45)
+        deadline = config.timeout.read + 5  # buffer so httpx fires first
+        result = await _do_ai_call(body_data, headers, timeout, config, deadline=deadline)
     except HTTPException:
         raise
     except Exception as exc:
