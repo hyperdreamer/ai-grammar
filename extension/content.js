@@ -174,20 +174,16 @@
     }
   }
 
-  function handleConversationMaybeChanged() {
-    const nextKey = getConversationKey();
-    if (!activeConversationKey) {
-      activeConversationKey = nextKey;
-      return;
-    }
-    if (nextKey === activeConversationKey) return;
-
-    activeConversationKey = nextKey;
+  function clearConversationScopedState({ updateKey = true } = {}) {
+    if (updateKey) activeConversationKey = getConversationKey();
     clearLiveDraftHighlights();
     hideTooltip();
     removeErrorFloat();
     removeEditableGreenChecks();
     removePendingBadge('checking');
+    for (const container of [...messageOverlays.keys()]) {
+      removeMessageOverlay(container);
+    }
     activeCheckController?.abort();
     activeCheckController = null;
     cancelLiveDraft?.();
@@ -196,8 +192,32 @@
     pendingChecks.clear();
   }
 
-  function scheduleConversationCheck() {
+  function handleConversationMaybeChanged() {
+    const nextKey = getConversationKey();
+    if (!activeConversationKey) {
+      activeConversationKey = nextKey;
+      return;
+    }
+    if (nextKey === activeConversationKey) return;
+
+    clearConversationScopedState();
+  }
+
+  function isWhatsAppChatListClick(target) {
+    if (!isWhatsApp || !target?.closest) return false;
+    const row = target.closest('[role="listitem"], [aria-selected], [aria-current], [data-testid="cell-frame-container"]');
+    if (!row) return false;
+    // The left chat list lives outside the active conversation pane; clicking
+    // one of its rows switches chats without a reliable route/hash change.
+    return !row.closest('footer') && !row.closest('main') && !row.closest('header');
+  }
+
+  function scheduleConversationCheck(event) {
+    if (event?.type === 'click' && isWhatsAppChatListClick(event.target)) {
+      clearConversationScopedState({ updateKey: false });
+    }
     setTimeout(handleConversationMaybeChanged, 100);
+    setTimeout(handleConversationMaybeChanged, 500);
   }
 
   // -----------------------------------------------------------------------
