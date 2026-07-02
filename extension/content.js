@@ -211,7 +211,10 @@
     // Re-apply cached grammar-check highlights when switching back to
     // a previously-checked conversation (no API call needed).
     if (checkedResults.has(nextKey)) {
+      console.debug('[AI Grammar] switching back to cached key %s', nextKey.slice(-30));
       reapplyCachedHighlights(nextKey);
+    } else {
+      console.debug('[AI Grammar] no cache for key %s (have %d entries: %s)', nextKey.slice(-30), checkedResults.size, [...checkedResults.keys()].map(k => k.slice(-30)).join(', '));
     }
   }
 
@@ -270,23 +273,27 @@
   function reapplyCachedHighlights(conversationKey, attempt = 0) {
     if (attempt === 0) reapplySeq++;
     const mySeq = reapplySeq;
+    console.debug('[AI Grammar] reapply attempt %d key %s seq %d', attempt, conversationKey.slice(-30), mySeq);
 
     function tryApply() {
       // Abort if superseded by a newer re-application or the user switched away
-      if (mySeq !== reapplySeq) return;
-      if (getConversationKey() !== conversationKey) return;
+      if (mySeq !== reapplySeq) { console.debug('[AI Grammar] reapply seq stale'); return; }
+      const currentKey = getConversationKey();
+      if (currentKey !== conversationKey) { console.debug('[AI Grammar] reapply key mismatch current=%s', currentKey.slice(-30)); return; }
 
       const cached = checkedResults.get(conversationKey);
-      if (!cached) return;
+      if (!cached) { console.debug('[AI Grammar] reapply no cache'); return; }
 
       const textarea = findCurrentChatInput();
       if (!textarea || !document.contains(textarea)) {
+        console.debug('[AI Grammar] reapply no input');
         scheduleReapplyRetry(conversationKey, attempt);
         return;
       }
 
       const messageList = findMessageList(textarea);
       if (!messageList) {
+        console.debug('[AI Grammar] reapply no messageList');
         scheduleReapplyRetry(conversationKey, attempt);
         return;
       }
@@ -294,16 +301,19 @@
       if (isWhatsApp) {
         // Find message-out bubbles and match by text content
         const bubbles = messageList.querySelectorAll('div.message-out');
+        console.debug('[AI Grammar] reapply found %d bubbles', bubbles.length);
         for (const bubble of bubbles) {
           const bubbleText = getWhatsAppMessageText(bubble);
           if (!bubbleText) continue;
           if (bubbleText === cached.text ||
               bubbleText.includes(cached.text) ||
               cached.text.includes(bubbleText)) {
+            console.debug('[AI Grammar] reapply matched bubble');
             highlightWhatsAppOverlay(bubble, cached.errors, bubbleText);
             return;
           }
         }
+        console.debug('[AI Grammar] reapply no matching bubble found');
       } else {
         // Generic pages: look for previously-checked blocks or text match
         const blocks = messageList.querySelectorAll(`[${CHECKED_ATTR}]`);
@@ -339,8 +349,8 @@
   }
 
   function scheduleReapplyRetry(conversationKey, attempt) {
-    if (attempt >= 2) return; // Three attempts total: 0, 1, 2
-    const delays = [200, 500];
+    if (attempt >= 5) return; // Six attempts total: 0..5
+    const delays = [100, 300, 700, 1200, 2000];
     setTimeout(() => reapplyCachedHighlights(conversationKey, attempt + 1), delays[attempt]);
   }
 
@@ -390,6 +400,7 @@
 
   function scheduleConversationCheck(event) {
     if (event?.type === 'click' && isWhatsAppChatListClick(event.target)) {
+      console.debug('[AI Grammar] WhatsApp chat switch click detected');
       clearConversationScopedState({ updateKey: false });
     }
     setTimeout(handleConversationMaybeChanged, 100);
@@ -2413,6 +2424,7 @@
         if (resp.ok && data?.errors) {
           checkedResults.set(conversationKey, { errors: data.errors, text, timestamp: Date.now() });
           evictOldestCache();
+          console.debug('[AI Grammar] cached stale result key %s errors=%d', conversationKey.slice(-30), data.errors.length);
         }
         return;
       }
@@ -2474,6 +2486,7 @@
       if (errors && errors.length > 0) {
         checkedResults.set(conversationKey, { errors, text, timestamp: Date.now() });
         evictOldestCache();
+        console.debug('[AI Grammar] cached result key %s errors=%d', conversationKey.slice(-30), errors.length);
       }
 
       if (count > 0) {
@@ -3262,6 +3275,7 @@
 
       // Clear cached results for this conversation — new text is being
       // submitted so the old underlines are stale.
+      console.debug('[AI Grammar] cache cleared for new submit key %s', conversationKey.slice(-30));
       checkedResults.delete(conversationKey);
 
       // Capture the message-list container via structural proximity.
