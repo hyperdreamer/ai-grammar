@@ -1742,28 +1742,25 @@
       if (s < pos || s >= e) continue;
       html += escapeHtml(text.slice(pos, s));
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
-      html += '<span class="' + cls + ' ag-live-error" style="pointer-events:auto;cursor:pointer" data-correction="' + escapeHtml(err.correction||'') + '" data-explanation="' + escapeHtml(err.explanation||'') + '" data-error="' + escapeHtml(err.error||'') + '" data-type="' + (err.type||'error') + '" data-live-draft="1" data-start="' + s + '" data-end="' + e + '" tabindex="0">' + escapeHtml(text.slice(s, e)) + '</span>';
+      html += '<span class="' + cls + ' ag-live-error" style="pointer-events:auto;cursor:pointer;text-underline-offset:0.06em" data-correction="' + escapeHtml(err.correction||'') + '" data-explanation="' + escapeHtml(err.explanation||'') + '" data-error="' + escapeHtml(err.error||'') + '" data-type="' + (err.type||'error') + '" data-live-draft="1" data-start="' + s + '" data-end="' + e + '" tabindex="0">' + escapeHtml(text.slice(s, e)) + '</span>';
       pos = e;
     }
     html += escapeHtml(text.slice(pos));
     overlay.innerHTML = html;
     document.body.appendChild(overlay);
 
-    // Replace text-decoration with SVG background-image underlines.
-    // text-decoration is unreliable on near-transparent text (Chromium
-    // may skip paint even with explicit text-decoration-color).
-    // SVG backgrounds render independently of text color.
-    const svgRed = "url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%224%22 viewBox=%220 0 10 4%22%3E%3Cpath d=%22M0,3 Q2.5,0 5,3 Q7.5,6 10,3%22 fill=%22none%22 stroke=%22%23dc2626%22 stroke-width=%221.3%22 stroke-linecap=%22round%22/%3E%3C/svg%3E')";
-    const svgGreen = "url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%224%22 viewBox=%220 0 10 4%22%3E%3Cpath d=%22M0,3 Q2.5,0 5,3 Q7.5,6 10,3%22 fill=%22none%22 stroke=%22%234ade80%22 stroke-width=%221.3%22 stroke-linecap=%22round%22/%3E%3C/svg%3E')";
-    const svgBlue = "url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%224%22 viewBox=%220 0 10 4%22%3E%3Cpath d=%22M0,3 Q2.5,0 5,3 Q7.5,6 10,3%22 fill=%22none%22 stroke=%22%2360a5fa%22 stroke-width=%221.3%22 stroke-linecap=%22round%22/%3E%3C/svg%3E')";
-    overlay.querySelectorAll('.ag-live-error').forEach(span => {
-      span.style.setProperty('text-decoration-line', 'none', 'important');
-      const type = span.getAttribute('data-type') || 'error';
-      span.style.backgroundImage = type === 'improvement' ? svgGreen : type === 'idiom' ? svgBlue : svgRed;
-      span.style.backgroundRepeat = 'repeat-x';
-      span.style.backgroundPositionY = 'bottom 2px';
-      span.style.backgroundSize = '10px 5px';
-    });
+    // Live-draft (manual check) underlines for contentEditable: use
+    // CSS text-decoration (from .ai-grammar-error etc.) with the same
+    // rgba(0,0,0,0.02) near-transparent-text trick as the inline
+    // post-submit overlays.  This positions underlines relative to the
+    // text baseline — the SVG background-image approach positioned
+    // from the span bottom (driven by line-height, not baseline) and
+    // produced underlines that sat too low in the input field.
+    //
+    // Separate scheme: inline post-submit uses 0.12em offset (from
+    // the CSS class); live-draft contentEditable uses 0.06em via
+    // inline style override to better match the input field's tighter
+    // line-height / baseline geometry on WhatsApp.
 
     liveHighlightReposition = () => {
       if (!liveHighlightEl || !document.contains(ce)) return;
