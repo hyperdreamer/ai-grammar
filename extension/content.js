@@ -753,7 +753,7 @@
 
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' :
                   err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
-      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer"
+      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer;text-underline-offset:-0.2em"
           data-correction="${escapeHtml(err.correction || '')}"
           data-explanation="${escapeHtml(err.explanation || '')}"
           data-error="${escapeHtml(err.error || '')}"
@@ -960,7 +960,7 @@
 
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' :
                   err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
-      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer"
+      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer;text-underline-offset:-0.2em"
           data-correction="${escapeHtml(err.correction || '')}"
           data-explanation="${escapeHtml(err.explanation || '')}"
           data-error="${escapeHtml(err.error || '')}"
@@ -1773,7 +1773,7 @@
       if (s < pos || s >= e) continue;
       html += escapeHtml(text.slice(pos, s));
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
-      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer" data-correction="${escapeHtml(err.correction||'')}" data-explanation="${escapeHtml(err.explanation||'')}" data-error="${escapeHtml(err.error||'')}" data-type="${err.type||'error'}" data-live-draft="1" data-start="${s}" data-end="${e}" tabindex="0">${escapeHtml(text.slice(s, e))}</span>`;
+      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer;text-underline-offset:-0.2em" data-correction="${escapeHtml(err.correction||'')}" data-explanation="${escapeHtml(err.explanation||'')}" data-error="${escapeHtml(err.error||'')}" data-type="${err.type||'error'}" data-live-draft="1" data-start="${s}" data-end="${e}" tabindex="0">${escapeHtml(text.slice(s, e))}</span>`;
       pos = e;
     }
     html += escapeHtml(text.slice(pos));
