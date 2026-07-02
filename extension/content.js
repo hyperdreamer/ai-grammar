@@ -1742,7 +1742,7 @@
       if (s < pos || s >= e) continue;
       html += escapeHtml(text.slice(pos, s));
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
-      html += '<span class="' + cls + ' ag-live-error" style="pointer-events:auto;cursor:pointer;text-underline-offset:0.06em" data-correction="' + escapeHtml(err.correction||'') + '" data-explanation="' + escapeHtml(err.explanation||'') + '" data-error="' + escapeHtml(err.error||'') + '" data-type="' + (err.type||'error') + '" data-live-draft="1" data-start="' + s + '" data-end="' + e + '" tabindex="0">' + escapeHtml(text.slice(s, e)) + '</span>';
+      html += '<span class="' + cls + ' ag-live-error" style="pointer-events:auto;cursor:pointer;text-underline-offset:0.04em" data-correction="' + escapeHtml(err.correction||'') + '" data-explanation="' + escapeHtml(err.explanation||'') + '" data-error="' + escapeHtml(err.error||'') + '" data-type="' + (err.type||'error') + '" data-live-draft="1" data-start="' + s + '" data-end="' + e + '" tabindex="0">' + escapeHtml(text.slice(s, e)) + '</span>';
       pos = e;
     }
     html += escapeHtml(text.slice(pos));
@@ -1758,7 +1758,7 @@
     // produced underlines that sat too low in the input field.
     //
     // Separate scheme: inline post-submit uses 0.12em offset (from
-    // the CSS class); live-draft contentEditable uses 0.06em via
+    // the CSS class); live-draft contentEditable uses 0.04em via
     // inline style override to better match the input field's tighter
     // line-height / baseline geometry on WhatsApp.
 
