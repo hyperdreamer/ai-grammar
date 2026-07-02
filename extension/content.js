@@ -40,7 +40,7 @@
   // -----------------------------------------------------------------------
 
   let checkIdCounter = 0;
-  let pendingChecks = new Map();       // id → { container, text }
+  let pendingChecks = new Map();       // container → { text, conversationKey }
   let checkedElements = new WeakSet(); // elements already checked
   let debounceTimer = null;
   let isHighlighting = false;
@@ -109,7 +109,8 @@
   // selectors or text matching.  60s TTL is safe because checks are
   // scoped to one container — false positives are structurally impossible.
   const SUBMISSION_TTL_MS = 60000;
-  let pendingSubmission = null;        // { text, messageList, time }
+  let pendingSubmission = null;        // { text, messageList, time, conversationKey }
+  let activeConversationKey = '';
 
   const USER_MESSAGE_SELECTOR = [
     '.user-msg',
@@ -127,6 +128,77 @@
     '[class*="sent"]',
     '[data-tid*="self"]',
   ].join(', ');
+
+  // -----------------------------------------------------------------------
+  // Conversation tracking
+  // -----------------------------------------------------------------------
+
+  function compactText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function firstText(selectors) {
+    for (const selector of selectors) {
+      try {
+        const el = document.querySelector(selector);
+        const value = compactText(el?.getAttribute?.('title') || el?.getAttribute?.('aria-label') || el?.textContent);
+        if (value) return value;
+      } catch {
+        // Ignore unsupported selectors on unusual pages.
+      }
+    }
+    return '';
+  }
+
+  function getConversationKey() {
+    try {
+      const urlKey = `${location.origin}${location.pathname}${location.search}${location.hash}`;
+      if (isWhatsApp) {
+        const headerTitle = firstText([
+          'header [title]',
+          'header [aria-label]',
+          'header span[dir="auto"]',
+          '[data-testid="conversation-info-header"] [title]',
+        ]);
+        const selectedChat = firstText([
+          '[aria-selected="true"] [title]',
+          '[aria-current="true"] [title]',
+          '[data-testid="cell-frame-container"][aria-selected="true"] [title]',
+        ]);
+        return `whatsapp:${urlKey}:${headerTitle || selectedChat || 'unknown'}`;
+      }
+
+      return `generic:${urlKey}`;
+    } catch {
+      return `${location.origin}${location.pathname}${location.search}${location.hash}`;
+    }
+  }
+
+  function handleConversationMaybeChanged() {
+    const nextKey = getConversationKey();
+    if (!activeConversationKey) {
+      activeConversationKey = nextKey;
+      return;
+    }
+    if (nextKey === activeConversationKey) return;
+
+    activeConversationKey = nextKey;
+    clearLiveDraftHighlights();
+    hideTooltip();
+    removeErrorFloat();
+    removeEditableGreenChecks();
+    removePendingBadge('checking');
+    activeCheckController?.abort();
+    activeCheckController = null;
+    cancelLiveDraft?.();
+    lastUserText = '';
+    pendingSubmission = null;
+    pendingChecks.clear();
+  }
+
+  function scheduleConversationCheck() {
+    setTimeout(handleConversationMaybeChanged, 100);
+  }
 
   // -----------------------------------------------------------------------
   // CSS injection
@@ -1988,10 +2060,10 @@
       const text = (ta.value || ta.textContent || '').trim();
       if (text.length < minChars) return;
 
-      checkLiveDraft(ta, text);
+      checkLiveDraft(ta, text, getConversationKey());
     }, 500);
 
-    async function checkLiveDraft(ta, text) {
+    async function checkLiveDraft(ta, text, conversationKey = getConversationKey()) {
       // Don't start a grammar check while a command (fix/polish) is running
       if (commandInFlight) return;
       try {
@@ -2022,6 +2094,9 @@
           liveCheckInFlight = false;
           activeCheckController = null;
           removePendingBadge('checking');
+        }
+        if (conversationKey !== getConversationKey() || !document.contains(ta)) {
+          return;
         }
         if (!resp.ok) {
           showResultBadge('Grammar check failed: ' + (data?.detail || resp.status), 5000);
@@ -2093,7 +2168,9 @@
   // Check pipeline (post-submit grammar checking)
   // -----------------------------------------------------------------------
 
-  async function checkText(text, container) {
+  async function checkText(text, container, conversationKey = getConversationKey()) {
+    if (conversationKey !== getConversationKey() || !document.contains(container)) return;
+
     if (isWhatsApp) {
       const waContainer = findWhatsAppMessageContainer(container) || container;
       const waText = getWhatsAppMessageText(waContainer);
@@ -2130,6 +2207,10 @@
       const data = await resp.json();
 
       removePendingBadge('checking');
+
+      if (conversationKey !== getConversationKey() || !document.contains(container)) {
+        return;
+      }
 
       if (!resp.ok) {
         showResultBadge('Grammar check failed: ' + (data?.detail || resp.status), 5000);
@@ -2211,6 +2292,9 @@
     if (pendingSubmission && Date.now() - pendingSubmission.time > SUBMISSION_TTL_MS) {
       pendingSubmission = null;
     }
+    if (pendingSubmission && pendingSubmission.conversationKey !== getConversationKey()) {
+      pendingSubmission = null;
+    }
 
     const newBlocks = findNewTextBlocks(mutations);
     if (newBlocks.length === 0) return;
@@ -2242,7 +2326,8 @@
       }
 
       if (matched) {
-        pendingChecks.set(block, text);
+        const conversationKey = pendingSubmission?.conversationKey || getConversationKey();
+        pendingChecks.set(block, { text, conversationKey });
         checkedElements.add(block);
         block.setAttribute(CHECKED_ATTR, '');
       }
@@ -2270,9 +2355,12 @@
     // match them if we left the submission open).
     pendingSubmission = null;
 
-    for (const [container, text] of entries) {
+    for (const [container, item] of entries) {
+      const text = typeof item === 'string' ? item : item.text;
+      const conversationKey = typeof item === 'string' ? getConversationKey() : item.conversationKey;
       if (!document.contains(container)) continue;
-      checkText(text, container);
+      if (conversationKey !== getConversationKey()) continue;
+      checkText(text, container, conversationKey);
     }
   }
 
@@ -2934,6 +3022,13 @@
 
   function init() {
     injectStyles();
+    activeConversationKey = getConversationKey();
+    window.addEventListener('hashchange', handleConversationMaybeChanged);
+    window.addEventListener('popstate', handleConversationMaybeChanged);
+    document.addEventListener('click', scheduleConversationCheck, true);
+    document.addEventListener('focusin', scheduleConversationCheck, true);
+    document.addEventListener('input', scheduleConversationCheck, true);
+    setInterval(handleConversationMaybeChanged, 1000);
 
     // Auto-check on submit is disabled — grammar checks are now
     // manual-only via keyboard shortcut (Ctrl+Shift+L) on selected text.
@@ -2948,6 +3043,8 @@
         await handleCommand(captured);
         return;
       }
+      const conversationKey = getConversationKey();
+      activeConversationKey = conversationKey;
       lastUserText = captured;
       lastUserTextTime = Date.now();
 
@@ -2957,7 +3054,7 @@
       if (textarea && document.contains(textarea)) {
         const messageList = findMessageList(textarea);
         if (messageList) {
-          pendingSubmission = { text: captured, messageList, time: Date.now() };
+          pendingSubmission = { text: captured, messageList, time: Date.now(), conversationKey };
         }
       }
     }
