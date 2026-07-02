@@ -153,7 +153,7 @@
         text-decoration-style: wavy !important;
         text-decoration-color: #dc2626 !important;
         text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.4em;
+        text-underline-offset: -0.2em;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
@@ -167,7 +167,7 @@
         text-decoration-style: wavy !important;
         text-decoration-color: #4ade80 !important;
         text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.4em;
+        text-underline-offset: -0.2em;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
@@ -181,7 +181,7 @@
         text-decoration-style: wavy !important;
         text-decoration-color: #60a5fa !important;
         text-decoration-thickness: from-font !important;
-        text-underline-offset: 0.4em;
+        text-underline-offset: -0.2em;
         text-decoration-skip-ink: none;
         -webkit-text-decoration-skip: none;
         cursor: pointer;
@@ -1848,7 +1848,7 @@
       if (s < pos || s >= e) continue;
       html += escapeHtml(text.slice(pos, s));
       const cls = err.type === 'improvement' ? 'ai-grammar-improvement' : err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
-      html += '<span class="' + cls + ' ag-live-error" style="pointer-events:auto;cursor:pointer;text-underline-offset:0" data-correction="' + escapeHtml(err.correction||'') + '" data-explanation="' + escapeHtml(err.explanation||'') + '" data-error="' + escapeHtml(err.error||'') + '" data-type="' + (err.type||'error') + '" data-live-draft="1" data-start="' + s + '" data-end="' + e + '" tabindex="0">' + escapeHtml(text.slice(s, e)) + '</span>';
+      html += '<span class="' + cls + ' ag-live-error" style="pointer-events:auto;cursor:pointer;text-underline-offset:-0.2em" data-correction="' + escapeHtml(err.correction||'') + '" data-explanation="' + escapeHtml(err.explanation||'') + '" data-error="' + escapeHtml(err.error||'') + '" data-type="' + (err.type||'error') + '" data-live-draft="1" data-start="' + s + '" data-end="' + e + '" tabindex="0">' + escapeHtml(text.slice(s, e)) + '</span>';
       pos = e;
     }
     html += escapeHtml(text.slice(pos));
@@ -1863,7 +1863,7 @@
     // from the span bottom (driven by line-height, not baseline) and
     // produced underlines that sat too low in the input field.
     //
-    // Inline post-submit: 0.4em; live-draft: 0 (baseline).
+    // Both inline and live-draft: -0.2em (above baseline).
 
     liveHighlightReposition = () => {
       if (!liveHighlightEl || !document.contains(ce)) return;
