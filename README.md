@@ -32,7 +32,7 @@ backend/            # FastAPI server
    - 🟢 **Green** — improvements (awkward phrasing, wordiness)
    - 🔵 **Blue** — idioms (more natural expressions)
 9. **Hover or click** on highlighted text to see the correction in a tooltip.
-10. **Chat-scoped** — switching conversations clears highlights from the old chat so results stay with the chat they belong to.
+10. **Chat-scoped** — switching conversations clears highlights from the old chat so results stay with the chat they belong to. On WhatsApp Web, grammar checks are automatically scoped to the active chat using message container detection.
 
 ## Setup
 
@@ -99,7 +99,7 @@ Type `?/` in any text input to open the **command palette** — a popup menu lis
 
 The palette opens when you type `?/`. Arrow keys navigate, Enter selects, Escape closes. Type more to filter (e.g., `?/o` filters to `?/off` and `?/on`). Prefix shortcuts auto-execute when only one match remains (e.g., `?/pol` → `?/polish`).
 
-Commands work on all text inputs — `<textarea>`, `<input>`, and `contentEditable` fields (including WhatsApp Web, Teams, and other rich-text editors). On WhatsApp Web, `?/fix` and `?/polish` use Chrome DevTools Protocol keyboard simulation to work around WhatsApp's Lexical editor.
+Commands work on all text inputs — `<textarea>`, `<input>`, and `contentEditable` fields (including WhatsApp Web, Teams, and other rich-text editors). On WhatsApp Web, `?/fix` and `?/polish` use a fast single-call CDP `Input.insertText` with a synthetic `beforeinput` fallback for Lexical editor compatibility.
 
 ## Configuration
 
@@ -151,5 +151,5 @@ Smaller models work well because grammar checking is a focused task with a struc
 ## Limitations
 
 - **Text only** — checks text content, not images or other media
-- **Plain text areas only** — rich text editors (Google Docs, Notion) may not work reliably
+- **Rich text editors** — WhatsApp Web, Teams, and contentEditable fields are fully supported via CDP integration
 - **Text length** — maximum 50,000 characters per check (configurable in backend)
