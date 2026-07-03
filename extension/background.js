@@ -180,44 +180,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // Apply fix via CDP — keyboard simulation for Lexical editors (WhatsApp)
 // ---------------------------------------------------------------------------
 
-// Character → CDP key event mapping
-const CHAR_KEY_MAP = {
-  ' ':  { key: ' ', code: 'Space', vk: 32, mod: 0 },
-  '.':  { key: '.', code: 'Period', vk: 190, mod: 0 },
-  ',':  { key: ',', code: 'Comma', vk: 188, mod: 0 },
-  '!':  { key: '!', code: 'Digit1', vk: 49, mod: 1 },
-  '?':  { key: '?', code: 'Slash', vk: 191, mod: 1 },
-  "'":  { key: "'", code: 'Quote', vk: 222, mod: 0 },
-  '"':  { key: '"', code: 'Quote', vk: 222, mod: 1 },
-  '-':  { key: '-', code: 'Minus', vk: 189, mod: 0 },
-  ':':  { key: ':', code: 'Semicolon', vk: 186, mod: 1 },
-  ';':  { key: ';', code: 'Semicolon', vk: 186, mod: 0 },
-  '(':  { key: '(', code: 'Digit9', vk: 57, mod: 1 },
-  ')':  { key: ')', code: 'Digit0', vk: 48, mod: 1 },
-  '\n': { key: 'Enter', code: 'Enter', vk: 13, mod: 0 },
-};
-
-function charToKeyInfo(c) {
-  if (CHAR_KEY_MAP[c]) return CHAR_KEY_MAP[c];
-  if (c >= 'A' && c <= 'Z') return { key: c.toLowerCase(), code: 'Key' + c, vk: c.charCodeAt(0), mod: 1 };
-  if (c >= 'a' && c <= 'z') return { key: c, code: 'Key' + c.toUpperCase(), vk: c.toUpperCase().charCodeAt(0), mod: 0 };
-  if (c >= '0' && c <= '9') return { key: c, code: 'Digit' + c, vk: c.charCodeAt(0), mod: 0 };
-  return { key: c, code: 'Key' + c.toUpperCase(), vk: c.charCodeAt(0) || 0, mod: 0 };
-}
-
-function dispatchKey(params) {
-  return new Promise((resolve) => {
-    chrome.debugger.sendCommand({ tabId: params._tabId }, 'Input.dispatchKeyEvent', {
-      type: params.type,
-      key: params.key,
-      code: params.code,
-      modifiers: params.modifiers || 0,
-      windowsVirtualKeyCode: params.windowsVirtualKeyCode || 0,
-      text: params.text,
-    }, resolve);
-  });
-}
-
 async function handleApplyFix(text, tabId) {
   if (!text || !tabId) return { ok: false, error: 'Missing text or tabId' };
 
@@ -230,60 +192,36 @@ async function handleApplyFix(text, tabId) {
       });
     });
 
-    // Enable Runtime for JS evaluation
-    await new Promise(resolve => {
-      chrome.debugger.sendCommand({ tabId }, 'Runtime.enable', {}, resolve);
-    });
-
     // Focus the contentEditable via JS
     const focusResult = await new Promise(resolve => {
       chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
-        expression: `
-          (() => {
-            const el = document.querySelector('div[contenteditable="true"][role="textbox"]');
-            if (el) { el.focus(); return true; }
-            const el2 = document.querySelector('footer div[contenteditable="true"]');
-            if (el2) { el2.focus(); return true; }
-            return false;
-          })()
-        `,
+        expression: `(() => {
+          const el = document.querySelector('div[contenteditable="true"][role="textbox"]')
+                  || document.querySelector('footer div[contenteditable="true"]');
+          if (el) { el.focus(); return true; }
+          return false;
+        })()`,
         returnByValue: true,
       }, resolve);
     });
 
-    const focused = focusResult?.result?.value;
-    if (!focused) {
+    if (!focusResult?.result?.value) {
       await detachDebugger(tabId);
       return { ok: false, error: 'Could not focus WhatsApp input' };
     }
 
-    // Helper to dispatch a keyDown+keyUp pair
-    const _tabId = tabId;
-    const pressKey = async (key, code, vk, mod, txt) => {
-      const base = { _tabId, key, code, modifiers: mod || 0, windowsVirtualKeyCode: vk || 0, text: txt };
-      await dispatchKey({ ...base, type: 'keyDown' });
-      await sleep(2);
-      await dispatchKey({ ...base, type: 'keyUp' });
-    };
-
-    // Ctrl+A (select all)
-    await dispatchKey({ _tabId, type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
-    await sleep(5);
-    await dispatchKey({ _tabId, type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
+    // Ctrl+A — select all text so Input.insertText replaces it
+    await sendKey(tabId, 'keyDown', 'a', 'KeyA', 2, 65, '');
+    await sleep(10);
+    await sendKey(tabId, 'keyUp', 'a', 'KeyA', 2, 65, '');
     await sleep(10);
 
-    // Backspace (delete)
-    await pressKey('Backspace', 'Backspace', 8, 0, '');
-    await sleep(15);
+    // Input.insertText dispatches keyDown/keyUp for each character
+    // internally — a single CDP call instead of the old N*2 loop
+    await new Promise(resolve => {
+      chrome.debugger.sendCommand({ tabId }, 'Input.insertText', { text }, resolve);
+    });
 
-    // Type each character
-    for (const c of text) {
-      const info = charToKeyInfo(c);
-      await pressKey(info.key, info.code, info.vk, info.mod, c);
-      await sleep(5);  // fast — Lexical handles 5ms gaps reliably
-    }
-
-    // Detach
     await detachDebugger(tabId);
     return { ok: true };
 
@@ -291,6 +229,19 @@ async function handleApplyFix(text, tabId) {
     await detachDebugger(tabId).catch(() => {});
     return { ok: false, error: e.message };
   }
+}
+
+function sendKey(tabId, type, key, code, mod, vk, text) {
+  return new Promise(resolve => {
+    chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+      type,
+      key,
+      code,
+      modifiers: mod || 0,
+      windowsVirtualKeyCode: vk || 0,
+      text: text || '',
+    }, resolve);
+  });
 }
 
 function sleep(ms) {
