@@ -39,6 +39,7 @@
   // MutationObserver for SPA navigation (editor appears / disappears)
   let domObserver = null;
   let ckeWatchInterval = null;
+  let changeDataUnbind = null;
 
   // ── Logging ───────────────────────────────────────────────────────────
   const log = (...args) => console.debug('[AI Grammar Teams]', ...args);
