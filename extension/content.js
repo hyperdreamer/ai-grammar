@@ -1684,7 +1684,114 @@
 
   let greenCheckTimers = new Map();  // container → timer (for cleanup)
 
-  function showGreenCheck(container) {
+  /**
+   * Find the bounding rect of the last visible text character in a container,
+   * skipping ignored elements (timestamps, edit indicators, etc.).
+   * When `text` is provided, finds the end of that specific text within the
+   * container — critical when the container holds more than just the checked
+   * text (e.g. timestamps, decorations, broader wrappers).
+   * Falls back to container bottom-right corner if anything fails.
+   */
+  function getLastCharRect(container, text) {
+    const containerRect = container.getBoundingClientRect();
+    const fallback = {
+      right: containerRect.right - 4,
+      top: containerRect.bottom - 24,
+      height: 20,
+    };
+
+    try {
+      // Walk text nodes, collecting those not inside ignored elements.
+      const textNodes = [];
+      const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          if (node.parentElement && isIgnored(node.parentElement)) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      });
+
+      let node;
+      while ((node = walker.nextNode())) {
+        textNodes.push(node);
+      }
+
+      if (!textNodes.length) return fallback;
+
+      // When a specific text is provided, find its end position in the
+      // concatenated node text — same approach as getMappedTextBounds.
+      let targetEnd = null;
+      let targetNode = null;
+
+      if (text) {
+        const rawText = textNodes.map(tn => tn.textContent).join('');
+        const idx = rawText.indexOf(text);
+        if (idx === -1) return fallback;
+
+        const endOffset = idx + text.length;
+        // Find which node contains the end of the target text
+        let offset = 0;
+        for (const tn of textNodes) {
+          const nodeEnd = offset + tn.textContent.length;
+          if (endOffset > offset && endOffset <= nodeEnd) {
+            targetNode = tn;
+            targetEnd = endOffset - offset;
+            break;
+          }
+          offset = nodeEnd;
+        }
+        if (!targetNode || targetEnd == null) return fallback;
+      }
+
+      if (targetNode) {
+        // Position at the last character of the target text
+        const charIdx = Math.max(0, targetEnd - 1);
+        const range = document.createRange();
+        range.setStart(targetNode, charIdx);
+        range.setEnd(targetNode, targetEnd);
+        const rect = range.getClientRects()[0];
+        range.detach();
+
+        if (rect && (rect.width > 0 || rect.height > 0)) {
+          return { right: rect.right, top: rect.top, height: rect.height };
+        }
+        return fallback;
+      }
+
+      // No specific text — find the last text node with non-whitespace content.
+      let lastNode = null;
+      for (let i = textNodes.length - 1; i >= 0; i--) {
+        if (textNodes[i].textContent.trim()) {
+          lastNode = textNodes[i];
+          break;
+        }
+      }
+      if (!lastNode) return fallback;
+
+      const nodeText = lastNode.textContent;
+      // Find last non-whitespace character position.
+      let lastCharIdx = nodeText.length - 1;
+      while (lastCharIdx >= 0 && /\s/.test(nodeText[lastCharIdx])) {
+        lastCharIdx--;
+      }
+      if (lastCharIdx < 0) return fallback;
+
+      const range = document.createRange();
+      range.setStart(lastNode, lastCharIdx);
+      range.setEnd(lastNode, lastCharIdx + 1);
+      const rect = range.getClientRects()[0];
+      range.detach();
+
+      if (!rect || (!rect.width && !rect.height)) return fallback;
+
+      return { right: rect.right, top: rect.top, height: rect.height };
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function showGreenCheck(container, checkedText) {
     if (!container) return;
     if (!document.contains(container)) return;
     removeGreenCheck(container);
@@ -1698,17 +1805,33 @@
     check.className = 'ai-grammar-ok-ta';
     check.textContent = '✓';
     check.setAttribute('data-ag-ok-for', '');
+
     const rect = container.getBoundingClientRect();
-    check.style.top = (isEditable ? rect.top + 4 : rect.bottom - 24) + 'px';
-    check.style.left = (rect.right - 28) + 'px';
+    if (isEditable) {
+      // Textareas: anchor to top-right of the container (can't walk text nodes).
+      check.style.top = (rect.top + 4) + 'px';
+      check.style.left = (rect.right - 28) + 'px';
+    } else {
+      // Post-submit messages: position right after the last character of the
+      // checked text (not the entire container which may hold timestamps etc.).
+      const endRect = getLastCharRect(container, checkedText);
+      check.style.top = endRect.top + 'px';
+      check.style.left = (endRect.right + 6) + 'px';  // 6px gap after last char
+    }
     document.body.appendChild(check);
 
     // Reposition on scroll/resize
     const reposition = () => {
       if (!document.contains(check)) return;
       const r = container.getBoundingClientRect();
-      check.style.top = (isEditable ? r.top + 4 : r.bottom - 24) + 'px';
-      check.style.left = (r.right - 28) + 'px';
+      if (isEditable) {
+        check.style.top = (r.top + 4) + 'px';
+        check.style.left = (r.right - 28) + 'px';
+      } else {
+        const endR = getLastCharRect(container, checkedText);
+        check.style.top = endR.top + 'px';
+        check.style.left = (endR.right + 6) + 'px';
+      }
     };
     window.addEventListener('resize', reposition);
     window.addEventListener('scroll', reposition, true);
@@ -2170,7 +2293,7 @@
         if (data?.errors?.length > 0) {
           highlightLiveDraft(ta, data.errors);
         } else {
-          showGreenCheck(ta);
+          showGreenCheck(ta, text);
         }
       } catch (err) {
         if (err.name === 'AbortError') {
@@ -2285,7 +2408,7 @@
       if (!data?.errors) return;
       const errors = data.errors;
       if (errors.length === 0) {
-        showGreenCheck(container);
+        showGreenCheck(container, text);
         return;
       }
 
