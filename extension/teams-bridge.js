@@ -812,17 +812,17 @@
       if (scanCount <= 5 || scanCount % 10 === 0) {
         log('scan #' + scanCount + ' editorElement=' + !!editorElement + ' findCKEditorElement=' + !!findCKEditorElement());
       }
-      if (editorElement) {
-        clearInterval(ckeWatchInterval);
-        ckeWatchInterval = null;
-        return;
-      }
-      const found = findCKEditorElement();
-      if (found) {
-        try {
-          tryAttach(found);
-        } catch(e) {
-          log('scan error in tryAttach:', e.message);
+      // Keep scanning even after attachment — React may reconcile the
+      // CKEditor away and the DOM observer's return→break may miss
+      // re-additions within the same mutation batch.
+      if (!editorElement) {
+        const found = findCKEditorElement();
+        if (found) {
+          try {
+            tryAttach(found);
+          } catch(e) {
+            log('scan error in tryAttach:', e.message);
+          }
         }
       }
     }, 500);
