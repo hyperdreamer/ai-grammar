@@ -1137,9 +1137,13 @@
       }
 
       const textRect = info.textEl.getBoundingClientRect();
+      // Position at the text element's origin but do NOT set an explicit
+      // width — inline elements return single-line rects, and forcing that
+      // width onto a block element causes premature line-wrapping which
+      // shifts underline positions.
+      const bubbleRect = waContainer.getBoundingClientRect();
       overlay.style.transform = `translate(${textRect.left}px, ${textRect.top}px)`;
-      overlay.style.width = textRect.width + 'px';
-      overlay.style.minHeight = textRect.height + 'px';
+      overlay.style.maxWidth = bubbleRect.width + 'px';
     }
 
     reposition();
