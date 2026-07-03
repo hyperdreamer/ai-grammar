@@ -1371,28 +1371,30 @@
             data: text,
           }));
         } else if (ta.isContentEditable) {
-          // WhatsApp Lexical blocks all DOM writes.
-          // Try CDP fixer first (keyboard simulation via DevTools Protocol),
-          // fall back to clipboard copy if unavailable.
-          skipLiveCheck = true;
-          applyFixCDP(text).then(success => {
-            if (success) {
-              clearLiveDraftHighlights();
-              hideTooltip();
-              showResultBadge('✓ Fixed!', 3000);
-            } else {
-              // Fallback: copy to clipboard for manual paste
-              navigator.clipboard.writeText(text).catch(() => {});
-              ta.focus();
-              const range = document.createRange();
-              range.selectNodeContents(ta);
-              const sel = window.getSelection();
-              sel.removeAllRanges();
-              sel.addRange(range);
-              showResultBadge('Copied to clipboard — paste (Ctrl+V) to apply', 4000);
-            }
-            skipLiveCheck = false;
-          });
+          if (tryBeforeInput(text, ta)) {
+            clearLiveDraftHighlights();
+            showResultBadge('✓ Fixed!', 3000);
+          } else {
+            // beforeinput didn't work — fall back to CDP keyboard simulation
+            skipLiveCheck = true;
+            applyFixCDP(text).then(success => {
+              if (success) {
+                clearLiveDraftHighlights();
+                hideTooltip();
+                showResultBadge('✓ Fixed!', 3000);
+              } else {
+                navigator.clipboard.writeText(text).catch(() => {});
+                ta.focus();
+                const range = document.createRange();
+                range.selectNodeContents(ta);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+                showResultBadge('Copied to clipboard — paste (Ctrl+V) to apply', 4000);
+              }
+              skipLiveCheck = false;
+            });
+          }
         }
       }
       hideTooltip();
@@ -1410,8 +1412,39 @@
   }
 
   // -----------------------------------------------------------------------
-  // CDP Fixer integration — automated clear+retype on WhatsApp Lexical
+  // Apply fix — try beforeinput event first, CDP fallback for Lexical
   // -----------------------------------------------------------------------
+
+  /**
+   * Try dispatching a beforeinput event with insertReplacementText.
+   * Lexical editors process this event type natively without checking
+   * isTrusted, so this works without CDP or debugger on many editors.
+   * Returns true if the text was successfully inserted.
+   */
+  function tryBeforeInput(text, ta) {
+    try {
+      ta.focus();
+      // Set selection to cover all existing content
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(ta);
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      ta.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertReplacementText',
+        data: text,
+      }));
+
+      // Verify text was inserted
+      const current = (ta.textContent || ta.innerText || '').replace(/\u200B/g, '');
+      return current.includes(text.replace(/\u200B/g, ''));
+    } catch {
+      return false;
+    }
+  }
 
   function applyFixCDP(text) {
     return new Promise((resolve) => {
@@ -2614,20 +2647,23 @@
             ta.value = fixed;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
           } else if (isWhatsApp) {
-            // WhatsApp Lexical blocks direct DOM writes — use CDP keyboard simulation
-            applyFixCDP(fixed).then(success => {
-              if (success) {
-                showResultBadge(`✓ Fixed ${sorted.length} issue${sorted.length > 1 ? 's' : ''}`, 3000);
-              } else {
-                // Fallback: copy to clipboard
-                navigator.clipboard.writeText(fixed).catch(() => {});
-                showResultBadge(`Copied fixed text to clipboard — paste (Ctrl+V) to apply`, 4000);
-              }
-              skipLiveCheck = false;
-            });
-            cancelLiveDraft?.();
-            activeCheckController?.abort();
-            return;  // badge handled above
+            if (tryBeforeInput(fixed, ta)) {
+              // Success — fall through to common code below
+            } else {
+              // Fall back to CDP keyboard simulation
+              applyFixCDP(fixed).then(success => {
+                if (success) {
+                  showResultBadge(`✓ Fixed ${sorted.length} issue${sorted.length > 1 ? 's' : ''}`, 3000);
+                } else {
+                  navigator.clipboard.writeText(fixed).catch(() => {});
+                  showResultBadge(`Copied fixed text to clipboard — paste (Ctrl+V) to apply`, 4000);
+                }
+                skipLiveCheck = false;
+              });
+              cancelLiveDraft?.();
+              activeCheckController?.abort();
+              return;  // badge handled above
+            }
           } else {
             ta.textContent = fixed;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -2697,20 +2733,23 @@
             ta.value = polished;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
           } else if (isWhatsApp) {
-            // WhatsApp Lexical blocks direct DOM writes — use CDP keyboard simulation
-            applyFixCDP(polished).then(success => {
-              if (success) {
-                showResultBadge('✓ Polished', 3000);
-              } else {
-                // Fallback: copy to clipboard
-                navigator.clipboard.writeText(polished).catch(() => {});
-                showResultBadge('Copied polished text to clipboard — paste (Ctrl+V) to apply', 4000);
-              }
-              skipLiveCheck = false;
-            });
-            cancelLiveDraft?.();
-            activeCheckController?.abort();
-            return;  // badge handled above
+            if (tryBeforeInput(polished, ta)) {
+              // Success — fall through to common code below
+            } else {
+              // Fall back to CDP keyboard simulation
+              applyFixCDP(polished).then(success => {
+                if (success) {
+                  showResultBadge('✓ Polished', 3000);
+                } else {
+                  navigator.clipboard.writeText(polished).catch(() => {});
+                  showResultBadge('Copied polished text to clipboard — paste (Ctrl+V) to apply', 4000);
+                }
+                skipLiveCheck = false;
+              });
+              cancelLiveDraft?.();
+              activeCheckController?.abort();
+              return;  // badge handled above
+            }
           } else {
             ta.textContent = polished;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
