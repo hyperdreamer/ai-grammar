@@ -245,8 +245,10 @@
       }
 
       if (resp.errors?.length > 0) {
+        log('Check complete:', resp.errors.length, 'errors found');
         showErrors(resp.errors);
       } else {
+        log('Check complete: 0 errors');
         dismissErrors();
       }
     } catch (err) {
@@ -274,12 +276,19 @@
 
     const url = `http://${settings.grammarHost}:${settings.grammarPort}/check?_=${Date.now()}`;
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      // Combine external signal with our timeout
+      if (signal) {
+        signal.addEventListener('abort', () => controller.abort());
+      }
       const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, language: settings.grammarLanguage || 'auto' }),
-        signal,
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (!resp.ok) {
         const errBody = await resp.text().catch(() => '');
