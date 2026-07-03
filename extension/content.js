@@ -21,6 +21,7 @@
   const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge', 'ai-grammar-ok', 'ag-message-overlay', 'ag-live-error'];
   const CHECKED_ATTR = 'data-ai-grammar-checked';
   const isWhatsApp = window.location.hostname === 'web.whatsapp.com';
+  const isTeams = /^teams\.(cloud\.)?microsoft(\.com)?$/i.test(location.hostname) || location.hostname === 'teams.live.com';
 
   // Persistent port to background — keeps the service worker alive so
   // apply-fix messages are delivered even after the 30s idle timeout.
@@ -3591,7 +3592,10 @@
     }, true);
 
     // Start live draft checking (checks text as you type after 5s pause)
-    setupLiveDraftCheck();
+    // Skip on Teams — teams-bridge.js handles CKEditor live-draft independently
+    if (!isTeams) {
+      setupLiveDraftCheck();
+    }
 
     console.debug('[AI Grammar] Content script initialized');
   }
