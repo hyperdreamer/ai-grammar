@@ -751,7 +751,7 @@
           // Direct match — element itself is a CKEditor editable
           if (node.matches?.('.ck-editor__editable[contenteditable="true"]')) {
             tryAttach(node);
-            return;
+            break;
           }
           // Descendant match — CKEditor editable is nested inside added node
           const found = node.querySelector?.(
@@ -759,14 +759,14 @@
           );
           if (found) {
             tryAttach(found);
-            return;
+            break;
           }
         }
         for (const node of m.removedNodes) {
           if (node.nodeType !== Node.ELEMENT_NODE) continue;
           if (node === editorElement || node.contains(editorElement)) {
             detachEditor();
-            return;
+            break;
           }
         }
       }
