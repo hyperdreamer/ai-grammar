@@ -180,7 +180,7 @@
     hideTooltip();
     removeErrorFloat();
     removeEditableGreenChecks();
-    removePendingBadge('checking');
+    removeAllBadges();
     for (const container of [...messageOverlays.keys()]) {
       removeMessageOverlay(container);
     }
@@ -367,11 +367,18 @@
         from { opacity: 0; transform: translateY(4px); }
         to   { opacity: 1; transform: translateY(0); }
       }
-      .ai-grammar-badge {
+      .ag-badge-stack {
         position: fixed;
         bottom: 16px;
         right: 16px;
         z-index: 2147483646;
+        display: flex;
+        flex-direction: column-reverse;
+        gap: 8px;
+        pointer-events: none;
+        max-width: 320px;
+      }
+      .ai-grammar-badge {
         background: #1e293b;
         color: #f1f5f9;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -383,6 +390,13 @@
         align-items: center;
         gap: 6px;
         animation: ai-gfadein 0.2s ease;
+        pointer-events: auto;
+        white-space: nowrap;
+        width: fit-content;
+        align-self: flex-end;
+      }
+      .ai-grammar-badge.ag-badge-result {
+        border: 1px solid #4ade80;
       }
       .ai-grammar-badge .ag-spinner {
         width: 12px;
@@ -432,6 +446,9 @@
           background: #ffffff;
           color: #0f172a;
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        .ai-grammar-badge.ag-badge-result {
+          border-color: #16a34a;
         }
         .ai-grammar-badge .ag-spinner {
           border-color: #e2e8f0;
@@ -1548,27 +1565,45 @@
   });
 
   // -----------------------------------------------------------------------
-  // Status badge — stacked, reference-counted
+  // Status badge — stacked vertically like desktop notifications
   // -----------------------------------------------------------------------
 
   // Reference counters: one counter per pending category
   const badgeCounters = { checking: 0, fixing: 0, polishing: 0 };
 
-  // Current label text for each category (can be overwritten, e.g. batch progress)
+  // Current label text for each category
   const badgeLabels = {
     checking: 'Checking grammar...',
     fixing: 'Fixing...',
     polishing: 'Polishing...'
   };
 
-  // Which category the DOM badge currently represents (null if none or result badge)
-  let currentBadgeCategory = null;
+  // Active badge DOM elements, keyed by category or 'result-N' for result badges
+  const activeBadges = new Map();  // key → { el, category, counter? }
 
   // Timer handle for auto-dismissing result badges
   let resultBadgeTimer = null;
 
-  // Priority: fixing > polishing > checking
-  const BADGE_PRIORITY = { fixing: 3, polishing: 2, checking: 1 };
+  // --- Stack container ---
+
+  function ensureBadgeStack() {
+    let stack = document.querySelector('.ag-badge-stack');
+    if (!stack) {
+      stack = document.createElement('div');
+      stack.className = 'ag-badge-stack';
+      document.body.appendChild(stack);
+    }
+    return stack;
+  }
+
+  function removeBadgeStackIfEmpty() {
+    const stack = document.querySelector('.ag-badge-stack');
+    if (stack && stack.children.length === 0) {
+      stack.remove();
+    }
+  }
+
+  // --- Badge management ---
 
   function buildBadgeHTML(category) {
     const label = badgeLabels[category];
@@ -1577,95 +1612,107 @@
     return `<div class="ag-spinner"></div>${label}${countHtml}`;
   }
 
-  // Show a pending badge (with spinner). Increments the category counter.
-  // Replaces the DOM badge only if this category has >= priority than current.
+  // Show a pending badge (with spinner). Each category gets its own badge
+  // in the vertical stack — newer badges appear above older ones.
   function showPendingBadge(category, label) {
     badgeCounters[category]++;
     badgeLabels[category] = label;
     if (resultBadgeTimer) { clearTimeout(resultBadgeTimer); resultBadgeTimer = null; }
 
-    const priority = BADGE_PRIORITY[category];
-    const currentPriority = currentBadgeCategory ? BADGE_PRIORITY[currentBadgeCategory] : 0;
+    const stack = ensureBadgeStack();
+    const key = `pending:${category}`;
 
-    if (priority >= currentPriority) {
-      const existing = document.querySelector('.ai-grammar-badge');
-      if (existing) existing.remove();
-      currentBadgeCategory = category;
+    if (activeBadges.has(key)) {
+      // Update existing badge in place
+      const entry = activeBadges.get(key);
+      entry.el.innerHTML = buildBadgeHTML(category);
+    } else {
+      // Create new badge — appendChild pushes it to the top of the column-reverse stack
       const badge = document.createElement('div');
       badge.className = 'ai-grammar-badge';
+      badge.setAttribute('data-ag-category', category);
       badge.innerHTML = buildBadgeHTML(category);
-      document.body.appendChild(badge);
+      stack.appendChild(badge);
+      activeBadges.set(key, { el: badge, category });
     }
   }
 
   // Update label without changing the counter (used by batch progress)
   function updatePendingBadgeLabel(category, label) {
     badgeLabels[category] = label;
-    if (currentBadgeCategory !== category) return;
-    const badge = document.querySelector('.ai-grammar-badge');
-    if (!badge) return;
-    badge.innerHTML = buildBadgeHTML(category);
+    const key = `pending:${category}`;
+    const entry = activeBadges.get(key);
+    if (!entry) return;
+    entry.el.innerHTML = buildBadgeHTML(category);
   }
 
-  // Remove one pending operation. Decrements counter.
-  // Only removes DOM badge when counter hits 0 AND this is the current category.
-  // Falls back to next-highest-priority active category if current one exhausted.
+  // Remove one pending operation. Removes the badge element when counter hits 0.
   function removePendingBadge(category) {
     badgeCounters[category] = Math.max(0, badgeCounters[category] - 1);
 
-    if (currentBadgeCategory === category) {
-      if (badgeCounters[category] <= 0) {
-        currentBadgeCategory = null;
-        let bestCat = null;
-        let bestPrio = 0;
-        for (const [cat, prio] of Object.entries(BADGE_PRIORITY)) {
-          if (badgeCounters[cat] > 0 && prio > bestPrio) {
-            bestCat = cat;
-            bestPrio = prio;
-          }
-        }
-        const existing = document.querySelector('.ai-grammar-badge');
-        if (existing) existing.remove();
-        if (bestCat) {
-          currentBadgeCategory = bestCat;
-          const badge = document.createElement('div');
-          badge.className = 'ai-grammar-badge';
-          badge.innerHTML = buildBadgeHTML(bestCat);
-          document.body.appendChild(badge);
-        }
-      } else {
-        const badge = document.querySelector('.ai-grammar-badge');
-        if (badge) badge.innerHTML = buildBadgeHTML(category);
+    if (badgeCounters[category] <= 0) {
+      const key = `pending:${category}`;
+      const entry = activeBadges.get(key);
+      if (entry) {
+        entry.el.remove();
+        activeBadges.delete(key);
+      }
+      removeBadgeStackIfEmpty();
+    } else {
+      // Update count display
+      const key = `pending:${category}`;
+      const entry = activeBadges.get(key);
+      if (entry) {
+        entry.el.innerHTML = buildBadgeHTML(category);
       }
     }
   }
 
-  // Show a transient result badge (no spinner, no stacking).
-  // Replaces any existing badge immediately. Auto-dismisses after durationMs.
-  // Restores pending badge (if any) after dismissal.
+  // Show a transient result badge (no spinner). Appears at the top of the stack
+  // alongside any pending badges. Auto-dismisses after durationMs.
   function showResultBadge(text, durationMs = 4000) {
     if (resultBadgeTimer) { clearTimeout(resultBadgeTimer); resultBadgeTimer = null; }
-    const pendingCat = currentBadgeCategory;
-    const existing = document.querySelector('.ai-grammar-badge');
-    if (existing) existing.remove();
+
+    // Remove any existing result badges
+    for (const [key, entry] of activeBadges) {
+      if (key.startsWith('result:')) {
+        entry.el.remove();
+        activeBadges.delete(key);
+      }
+    }
+
+    const stack = ensureBadgeStack();
+    const resultId = `result:${Date.now()}`;
+
     const badge = document.createElement('div');
-    badge.className = 'ai-grammar-badge';
+    badge.className = 'ai-grammar-badge ag-badge-result';
+    badge.setAttribute('data-ag-result', '');
     badge.innerHTML = text;
-    document.body.appendChild(badge);
+    stack.appendChild(badge);
+    activeBadges.set(resultId, { el: badge });
 
     resultBadgeTimer = setTimeout(() => {
       resultBadgeTimer = null;
-      const b = document.querySelector('.ai-grammar-badge');
-      if (b) b.remove();
-      // Restore pending badge if one is active
-      if (pendingCat && badgeCounters[pendingCat] > 0) {
-        currentBadgeCategory = pendingCat;
-        const pb = document.createElement('div');
-        pb.className = 'ai-grammar-badge';
-        pb.innerHTML = buildBadgeHTML(pendingCat);
-        document.body.appendChild(pb);
+      const entry = activeBadges.get(resultId);
+      if (entry) {
+        entry.el.remove();
+        activeBadges.delete(resultId);
       }
+      removeBadgeStackIfEmpty();
     }, durationMs);
+  }
+
+  // Remove all badges (for conversation switch / cleanup)
+  function removeAllBadges() {
+    for (const [key, entry] of activeBadges) {
+      entry.el.remove();
+    }
+    activeBadges.clear();
+    badgeCounters.checking = 0;
+    badgeCounters.fixing = 0;
+    badgeCounters.polishing = 0;
+    const stack = document.querySelector('.ag-badge-stack');
+    if (stack) stack.remove();
   }
 
   // Batch check progress — participates in the "checking" counter
