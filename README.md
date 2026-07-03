@@ -20,17 +20,19 @@ backend/            # FastAPI server
 
 ## How It Works
 
-1. **Select text** on any page (non-editable text like messages, articles, comments).
-2. Press the **keyboard shortcut** (`Ctrl+Shift+L` / `Cmd+Shift+L`) to trigger a grammar check.
-3. The selected text is sent to the **background service worker**.
-4. The background forwards it to the **FastAPI backend** (`POST /check`).
-5. The backend calls an AI model (OpenAI, Anthropic, etc.) with a grammar-checking prompt.
-6. The AI returns structured JSON with error positions and corrections.
-7. Issues are **highlighted inline** with colored wavy underlines:
+1. **Auto-check submitted text** on chat platforms (WhatsApp Web, Teams, etc.) — your messages are checked automatically after sending.
+2. **Live draft checking** — text you're composing in any input is checked after a configurable pause.
+3. Press the **keyboard shortcut** (`Ctrl+Shift+L` / `Cmd+Shift+L`) to manually check selected text.
+4. The text is sent to the **background service worker**.
+5. The background forwards it to the **FastAPI backend** (`POST /check`).
+6. The backend calls an AI model (OpenAI, Anthropic, etc.) with a grammar-checking prompt.
+7. The AI returns structured JSON with error positions and corrections.
+8. Issues are **highlighted inline** with colored wavy underlines:
    - 🔴 **Red** — errors (spelling, grammar, punctuation)
    - 🟢 **Green** — improvements (awkward phrasing, wordiness)
    - 🔵 **Blue** — idioms (more natural expressions)
-8. **Hover or click** on highlighted text to see the correction in a tooltip.
+9. **Hover or click** on highlighted text to see the correction in a tooltip.
+10. **Chat-scoped** — switching conversations clears highlights from the old chat so results stay with the chat they belong to.
 
 ## Setup
 
@@ -148,7 +150,6 @@ Smaller models work well because grammar checking is a focused task with a struc
 
 ## Limitations
 
-- **Manual activation** — grammar checking is triggered by selecting text and pressing the keyboard shortcut
 - **Text only** — checks text content, not images or other media
 - **Plain text areas only** — rich text editors (Google Docs, Notion) may not work reliably
 - **Text length** — maximum 50,000 characters per check (configurable in backend)
