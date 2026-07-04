@@ -95,13 +95,15 @@ export const COMMANDS = {
           grammarHost: '127.0.0.1',
           grammarPort: 8766,
         });
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000);
+        // Store on state so editing cancels this in-flight check
+        state.activeCheckController?.abort();
+        state.activeCheckController = new AbortController();
+        const timeoutId = setTimeout(() => state.activeCheckController.abort(), 30000);
         const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: draft, language: 'auto' }),
-          signal: controller.signal,
+          signal: state.activeCheckController.signal,
         });
         clearTimeout(timeoutId);
         const data = await resp.json();
@@ -129,6 +131,7 @@ export const COMMANDS = {
       } finally {
         removePendingBadge('checking');
         state.commandInFlight = false;
+        state.activeCheckController = null;
         state.skipLiveCheck = true;
         stripCheck(ta);  // dispatches input event synchronously — blocked by skipLiveCheck
         state.skipLiveCheck = false;  // re-enable immediately — next real keystroke clears highlights

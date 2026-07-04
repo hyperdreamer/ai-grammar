@@ -1920,13 +1920,14 @@
             grammarHost: "127.0.0.1",
             grammarPort: 8766
           });
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 3e4);
+          state.activeCheckController?.abort();
+          state.activeCheckController = new AbortController();
+          const timeoutId = setTimeout(() => state.activeCheckController.abort(), 3e4);
           const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: draft, language: "auto" }),
-            signal: controller.signal
+            signal: state.activeCheckController.signal
           });
           clearTimeout(timeoutId);
           const data = await resp.json();
@@ -1952,6 +1953,7 @@
         } finally {
           removePendingBadge("checking");
           state.commandInFlight = false;
+          state.activeCheckController = null;
           state.skipLiveCheck = true;
           stripCheck(ta);
           state.skipLiveCheck = false;
