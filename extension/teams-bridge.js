@@ -160,7 +160,7 @@
   }
 
   // ── Attach / detach editor ────────────────────────────────────────────
-  let editorMo = null;  // retained for cleanup compat
+  let editorMo = null;  // MutationObserver for CKEditor DOM changes
 
   function attachEditor(element) {
     if (editorElement === element) return; // already attached
@@ -169,18 +169,22 @@
     editorElement = element;
     log('CKEditor attached');
 
-    // Listen for 'input' events — CKEditor 5 fires these on user typing.
-    // More reliable than MutationObserver (CKEditor's async DOM updates
-    // may not trigger MO reliably).
-    element.addEventListener('input', onEditorChange, true);
-    log('CKEditor input listener active');
+    // Use MutationObserver — CKEditor 5 prevents beforeinput (calling
+    // preventDefault), so the browser never fires the native 'input' event.
+    // DOM mutations are the only reliable cross-world signal.
+    editorMo = new MutationObserver(() => {
+      onEditorChange();
+    });
+    editorMo.observe(element, {
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    log('CKEditor MutationObserver active');
   }
 
   function detachEditor() {
     dismissErrors();
-    if (editorElement) {
-      editorElement.removeEventListener('input', onEditorChange, true);
-    }
     if (editorMo) {
       editorMo.disconnect();
       editorMo = null;
