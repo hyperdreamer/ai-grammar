@@ -730,48 +730,30 @@
     panel.id = PANEL_ID;
     setPanelStyles(panel);
 
+    // Shared panel CSS (header, items, footer, clean body)
     const styleEl = document.createElement('style');
-    styleEl.textContent = [
-      '#' + PANEL_ID + ' .agf-clean-body {',
-      '  display: flex; align-items: center; gap: 12px;',
-      '  padding: 14px 16px;',
-      '}',
-      '#' + PANEL_ID + ' .agf-clean-check {',
-      '  width: 28px; height: 28px; border-radius: 50%;',
-      '  background: #16a34a; color: #fff;',
-      '  display: flex; align-items: center; justify-content: center;',
-      '  font-size: 16px; flex-shrink: 0;',
-      '}',
-      '#' + PANEL_ID + ' .agf-clean-text {',
-      '  font-size: 14px; font-weight: 600; color: inherit;',
-      '}',
-      '#' + PANEL_ID + ' .agf-clean-polish {',
-      '  margin-left: auto; background: #7c3aed; color: #fff;',
-      '  border: none; border-radius: 8px; padding: 6px 14px;',
-      '  font-size: 13px; font-weight: 600; cursor: pointer;',
-      '  font-family: inherit; white-space: nowrap;',
-      '}',
-      '#' + PANEL_ID + ' .agf-clean-polish:hover { background: #6d28d9; }',
-      '@media (prefers-color-scheme: light) {',
-      '  #' + PANEL_ID + ' .agf-clean-polish {',
-      '    background: #7c3aed; color: #ffffff;',
-      '  }',
-      '}',
-    ].join('\\n');
+    styleEl.textContent = getPanelCSS();
     panel.appendChild(styleEl);
 
+    // Header — same structure as error panel
+    const header = document.createElement('div');
+    header.className = 'agf-header';
+
+    const headerSpan = document.createElement('span');
+    headerSpan.textContent = '✅ No errors found';
+    header.appendChild(headerSpan);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'agf-close';
+    closeBtn.textContent = '✕';
+    closeBtn.addEventListener('click', dismissErrors);
+    header.appendChild(closeBtn);
+
+    panel.appendChild(header);
+
+    // Body — centered Polish button
     const body = document.createElement('div');
     body.className = 'agf-clean-body';
-
-    const checkEl = document.createElement('div');
-    checkEl.className = 'agf-clean-check';
-    checkEl.textContent = '✓';
-    body.appendChild(checkEl);
-
-    const textEl = document.createElement('span');
-    textEl.className = 'agf-clean-text';
-    textEl.textContent = 'No errors found';
-    body.appendChild(textEl);
 
     const polishBtn = document.createElement('button');
     polishBtn.className = 'agf-clean-polish';
@@ -783,6 +765,8 @@
     body.appendChild(polishBtn);
 
     panel.appendChild(body);
+
+    // Position and lifecycle
     floatEl = panel;
     document.body.appendChild(panel);
 
@@ -1010,6 +994,17 @@
         '  font-family: inherit;',
         '}',
         '#' + PANEL_ID + ' .agf-polish:hover { background: #6d28d9; }',
+        // Clean panel (no errors)
+        '#' + PANEL_ID + ' .agf-clean-body {',
+        '  padding: 16px; display: flex; justify-content: center;',
+        '}',
+        '#' + PANEL_ID + ' .agf-clean-polish {',
+        '  background: #7c3aed; color: #fff;',
+        '  border: none; border-radius: 8px; padding: 8px 24px;',
+        '  font-size: 13px; font-weight: 600; cursor: pointer;',
+        '  font-family: inherit;',
+        '}',
+        '#' + PANEL_ID + ' .agf-clean-polish:hover { background: #6d28d9; }',
         // Light mode overrides
         '@media (prefers-color-scheme: light) {',
         '  #' + PANEL_ID + ' {',
@@ -1037,6 +1032,9 @@
         '    background: #7c3aed; color: #ffffff;',
         '  }',
         '  #' + PANEL_ID + ' .agf-polish:hover { background: #6d28d9; }',
+        '  #' + PANEL_ID + ' .agf-clean-polish {',
+        '    background: #7c3aed; color: #ffffff;',
+        '  }',
         '}',
       ].join('\n')
     );
