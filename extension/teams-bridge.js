@@ -812,20 +812,25 @@
 
     ckeWatchInterval = setInterval(() => {
       scanCount++;
+      const found = findCKEditorElement();
       debugEl.textContent = JSON.stringify({
         scan: scanCount,
         time: Date.now(),
         editorElement: !!editorElement,
-        ckFound: !!findCKEditorElement(),
+        editorInDoc: !!(editorElement && document.contains(editorElement)),
+        editorId: editorElement?.id || null,
+        ckFound: !!found,
+        ckFoundId: found?.id || null,
+        sameElement: !!(editorElement && found && editorElement === found),
       });
       if (scanCount <= 5 || scanCount % 10 === 0) {
-        log('scan #' + scanCount + ' editorElement=' + !!editorElement + ' findCKEditorElement=' + !!findCKEditorElement());
+        log('scan #' + scanCount + ' editorElement=' + !!editorElement + ' same=' + (editorElement === found) + ' eId=' + (editorElement?.id || 'null') + ' ckId=' + (found?.id || 'null'));
       }
       // Keep scanning even after attachment — React may reconcile the
       // CKEditor away and the DOM observer's return→break may miss
       // re-additions within the same mutation batch.
-      if (!editorElement || !document.contains(editorElement)) {
-        const found = findCKEditorElement();
+      // Also re-attach if editorElement is stale (not in doc or different from DOM).
+      if (!editorElement || !document.contains(editorElement) || editorElement !== found) {
         if (found) {
           try {
             tryAttach(found);
