@@ -1878,6 +1878,83 @@
         showResultBadge(lines.join(" | "), 8e3);
       }
     },
+    check: {
+      help: "Manual grammar check for live-draft text",
+      async run(_args, ta) {
+        function stripCheck(input) {
+          const val = input.value || input.textContent || "";
+          const idx = val.lastIndexOf("?/check");
+          const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + 7) : val).trimEnd();
+          if (input.tagName === "TEXTAREA") {
+            input.value = cleaned;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+          } else {
+            input.textContent = cleaned;
+          }
+        }
+        const isWhatsApp = location.hostname === "web.whatsapp.com";
+        if (isWhatsApp || isTeams) {
+          showResultBadge("?/check is not available on this site");
+          stripCheck(ta);
+          return;
+        }
+        const value = ta.value || ta.textContent || "";
+        const cmdIdx = value.lastIndexOf("?/check");
+        const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
+        if (!draft || draft.length < state.minChars) {
+          showResultBadge("Too short (min " + state.minChars + " chars)");
+          stripCheck(ta);
+          return;
+        }
+        showPendingBadge("checking", "Checking grammar...");
+        state.commandInFlight = true;
+        state.cancelLiveDraft?.();
+        state.activeCheckController?.abort();
+        try {
+          const settings = await safeGetStorage({
+            grammarHost: "127.0.0.1",
+            grammarPort: 8766
+          });
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3e4);
+          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: draft, language: "auto" }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          const data = await resp.json();
+          if (!resp.ok) {
+            showResultBadge("Grammar check failed: " + (data?.detail || resp.status), 5e3);
+            return;
+          }
+          if (data?.errors?.length > 0) {
+            highlightLiveDraft(ta, data.errors);
+          } else {
+            showGreenCheck(ta, draft);
+          }
+        } catch (e) {
+          let reason;
+          if (e.name === "AbortError") {
+            reason = "Request timed out";
+          } else if (e.message?.includes("Extension context invalidated")) {
+            reason = "Extension reloaded \u2014 please reload this page";
+          } else {
+            reason = e.message;
+          }
+          showResultBadge("Check failed: " + reason);
+        } finally {
+          removePendingBadge("checking");
+          state.commandInFlight = false;
+          state.skipLiveCheck = true;
+          stripCheck(ta);
+          setTimeout(() => {
+            state.skipLiveCheck = false;
+          }, 100);
+        }
+      }
+    },
     fix: {
       help: "Auto-correct the text you typed (everything before ?/fix)",
       async run(_args, ta) {
@@ -2052,7 +2129,7 @@
       return true;
     }
     try {
-      if ((cmdName === "fix" || cmdName === "polish") && ta) {
+      if ((cmdName === "fix" || cmdName === "polish" || cmdName === "check") && ta) {
         await cmd.run(args, ta);
       } else if (cmdName === "fix") {
         const cmdIdx = text.lastIndexOf("?/fix");
@@ -2506,7 +2583,7 @@
       const text = (ta.value || ta.textContent || "").trim();
       clearTimeout(commandDebounce);
       commandDebounce = null;
-      if (/\?\/\b(fix|polish)\b\s*$/.test(text)) {
+      if (/\?\/\b(fix|polish|check)\b\s*$/.test(text)) {
         e.preventDefault();
         e.stopPropagation();
       }
@@ -2539,7 +2616,7 @@
               const fullCmd = matched.full;
               if (!currentValue.includes(cmdText)) return;
               try {
-                if (matched.name === "fix" || matched.name === "polish") {
+                if (matched.name === "fix" || matched.name === "polish" || matched.name === "check") {
                   await COMMANDS[matched.name].run("", ta);
                 } else {
                   await COMMANDS[matched.name].run("");
@@ -2547,7 +2624,7 @@
               } catch (err) {
                 showResultBadge(`Command failed: ${err.message}`);
               }
-              if (matched.name !== "fix" && matched.name !== "polish") {
+              if (matched.name !== "fix" && matched.name !== "polish" && matched.name !== "check") {
                 const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || "").lastIndexOf(cmdText);
                 const val = ta.value || ta.textContent || "";
                 const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
@@ -2568,7 +2645,7 @@
           const currentValue = ta.value || ta.textContent || "";
           if (!currentValue.includes(cmdText)) return;
           try {
-            if (cmdName === "fix" || cmdName === "polish") {
+            if (cmdName === "fix" || cmdName === "polish" || cmdName === "check") {
               await COMMANDS[cmdName].run(cmdArgs, ta);
             } else {
               await COMMANDS[cmdName].run(cmdArgs);
@@ -2576,7 +2653,7 @@
           } catch (err) {
             showResultBadge(`Command failed: ${err.message}`);
           }
-          if (cmdName !== "fix" && cmdName !== "polish") {
+          if (cmdName !== "fix" && cmdName !== "polish" && cmdName !== "check") {
             const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || "").lastIndexOf(cmdText);
             const val = ta.value || ta.textContent || "";
             const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();

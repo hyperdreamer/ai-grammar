@@ -85,6 +85,10 @@ export const COMMANDS = {
 
       showPendingBadge('checking', 'Checking grammar...');
       state.commandInFlight = true;
+      // Cancel any pending live-draft auto-check so it doesn't
+      // overwrite the ?/check results when it later completes.
+      state.cancelLiveDraft?.();
+      state.activeCheckController?.abort();
 
       try {
         const settings = await safeGetStorage({
