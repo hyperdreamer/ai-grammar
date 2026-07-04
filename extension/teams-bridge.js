@@ -209,6 +209,7 @@
     if (!editorElement) return;
     lastEditTime = Date.now();
     liveTarget = editorElement;
+    if (lastEditTime % 5000 < 100) log('onEditorChange: idle timer reset');
   }
 
   // ── Grammar check pipeline ────────────────────────────────────────────
