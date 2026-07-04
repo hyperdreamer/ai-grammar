@@ -848,7 +848,11 @@
     // Color — CSS rules via style element
     const styleEl = document.createElement('style');
     styleEl.textContent = [
-      '#' + COMMAND_BAR_ID + ' { background: #1e293b; color: #e2e8f0; }',
+      '#' + COMMAND_BAR_ID + ' {',
+      '  background: rgba(30,41,59,0.82); backdrop-filter: blur(10px);',
+      '  -webkit-backdrop-filter: blur(10px);',
+      '  color: #e2e8f0;',
+      '}',
       '#' + COMMAND_BAR_ID + ' .ag-cmd-btn {',
       '  background: #334155; color: #e2e8f0; border: none;',
       '  border-radius: 6px; padding: 5px 12px;',
@@ -860,8 +864,11 @@
       '#' + COMMAND_BAR_ID + ' .ag-cmd-polish:hover { background: #6d28d9; }',
       '#' + COMMAND_BAR_ID + ' .ag-cmd-fix:hover { background: #2563eb; }',
       '@media (prefers-color-scheme: light) {',
-      '  #' + COMMAND_BAR_ID + ' { background: #ffffff; color: #334155;',
-      '    box-shadow: 0 4px 16px rgba(0,0,0,0.1); }',
+      '  #' + COMMAND_BAR_ID + ' {',
+      '    background: rgba(255,255,255,0.82); backdrop-filter: blur(10px);',
+      '    -webkit-backdrop-filter: blur(10px);',
+      '    color: #334155; box-shadow: 0 4px 16px rgba(0,0,0,0.1);',
+      '  }',
       '  #' + COMMAND_BAR_ID + ' .ag-cmd-btn {',
       '    background: #e2e8f0; color: #334155;',
       '  }',
