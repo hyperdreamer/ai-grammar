@@ -20,8 +20,11 @@
   ]);
   const IGNORE_CLASSES = ['ai-grammar-error', 'ai-grammar-improvement', 'ai-grammar-idiom', 'ai-grammar-tooltip', 'ai-grammar-badge', 'ai-grammar-ok', 'ag-message-overlay', 'ag-live-error'];
   const CHECKED_ATTR = 'data-ai-grammar-checked';
-  const isWhatsApp = window.location.hostname === 'web.whatsapp.com';
   const isTeams = /^teams\.(cloud\.)?microsoft(\.com)?$/i.test(location.hostname) || location.hostname === 'teams.live.com';
+  // Check if WhatsApp bridge is loaded on this page.
+  // When present, WhatsApp-specific logic (text normalisation, overlay rendering,
+  // chat-switch detection) is delegated to window.__aiWhatsApp.
+  function getWhatsAppBridge() { return window.__aiWhatsApp || null; }
 
   // Persistent port to background — keeps the service worker alive so
   // apply-fix messages are delivered even after the 30s idle timeout.
@@ -120,9 +123,6 @@
     '[data-testid*="user"]',
     '[class*="user"][class*="msg"]',
     '[class*="user"][class*="message"]',
-    // WhatsApp Web outgoing messages
-    '.message-out',
-    '[data-pre-plain-text]',
     // Microsoft Teams self/sent messages
     '[class*="self"]',
     '[class*="outgoing"]',
@@ -134,39 +134,14 @@
   // Conversation tracking
   // -----------------------------------------------------------------------
 
-  function compactText(value) {
-    return String(value || '').replace(/\s+/g, ' ').trim();
-  }
-
-  function firstText(selectors) {
-    for (const selector of selectors) {
-      try {
-        const el = document.querySelector(selector);
-        const value = compactText(el?.getAttribute?.('title') || el?.getAttribute?.('aria-label') || el?.textContent);
-        if (value) return value;
-      } catch {
-        // Ignore unsupported selectors on unusual pages.
-      }
-    }
-    return '';
-  }
-
   function getConversationKey() {
     try {
       const urlKey = `${location.origin}${location.pathname}${location.search}${location.hash}`;
-      if (isWhatsApp) {
-        const headerTitle = firstText([
-          'header [title]',
-          'header [aria-label]',
-          'header span[dir="auto"]',
-          '[data-testid="conversation-info-header"] [title]',
-        ]);
-        const selectedChat = firstText([
-          '[aria-selected="true"] [title]',
-          '[aria-current="true"] [title]',
-          '[data-testid="cell-frame-container"][aria-selected="true"] [title]',
-        ]);
-        return `whatsapp:${urlKey}:${headerTitle || selectedChat || 'unknown'}`;
+
+      // Delegate to WhatsApp bridge for WhatsApp-specific key generation
+      const wa = getWhatsAppBridge();
+      if (wa) {
+        return wa.getConversationKey();
       }
 
       return `generic:${urlKey}`;
@@ -204,17 +179,10 @@
     clearConversationScopedState();
   }
 
-  function isWhatsAppChatListClick(target) {
-    if (!isWhatsApp || !target?.closest) return false;
-    const row = target.closest('[role="listitem"], [aria-selected], [aria-current], [data-testid="cell-frame-container"]');
-    if (!row) return false;
-    // The left chat list lives outside the active conversation pane; clicking
-    // one of its rows switches chats without a reliable route/hash change.
-    return !row.closest('footer') && !row.closest('main') && !row.closest('header');
-  }
-
   function scheduleConversationCheck(event) {
-    if (event?.type === 'click' && isWhatsAppChatListClick(event.target)) {
+    // WhatsApp bridge handles chat-list click detection
+    const wa = getWhatsAppBridge();
+    if (event?.type === 'click' && wa?.isChatListClick(event.target)) {
       clearConversationScopedState({ updateKey: false });
     }
     setTimeout(handleConversationMaybeChanged, 100);
@@ -550,81 +518,6 @@
   function cleanMessageText(raw) {
     // Strip trailing time pattern: "11:39", "11:39 PM", "11:39 AM"
     return raw.replace(/[\s.]*\d{1,2}:\d{2}(\s*[APap][Mm])?\s*$/, '').trim();
-  }
-
-  function normalizeWhatsAppTextWithMap(raw) {
-    const text = raw || '';
-    let normalized = '';
-    const normalizedToRaw = [];
-
-    for (let i = 0; i < text.length; i++) {
-      const code = text.charCodeAt(i);
-
-      // Drop bidi/zero-width markers and variation selectors WhatsApp can
-      // place in message text. Keep a map so backend offsets still locate
-      // the corresponding visible overlay characters.
-      if (
-        code === 0x00ad ||
-        code === 0x034f ||
-        code === 0x061c ||
-        (code >= 0x200b && code <= 0x200f) ||
-        (code >= 0x202a && code <= 0x202e) ||
-        (code >= 0x2060 && code <= 0x206f) ||
-        (code >= 0xfe00 && code <= 0xfe0f) ||
-        code === 0xfeff
-      ) {
-        continue;
-      }
-
-      normalizedToRaw.push(i);
-      normalized += text[i];
-    }
-
-    normalized = normalized.replace(/\u00a0/g, ' ');
-    const first = normalized.search(/\S/);
-    if (first === -1) return { text: '', normalizedToRaw: [] };
-    const lastMatch = normalized.match(/\S\s*$/);
-    const last = lastMatch ? lastMatch.index + 1 : normalized.length;
-
-    return {
-      text: normalized.slice(first, last),
-      normalizedToRaw: normalizedToRaw.slice(first, last),
-    };
-  }
-
-  function stripWhatsAppTextArtifacts(raw) {
-    return (raw || '')
-      .replace(/[\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufe00-\ufe0f\ufeff]/g, '')
-      .replace(/\u00a0/g, ' ');
-  }
-
-  function getWhatsAppTextElement(container) {
-    if (!container?.querySelector) return null;
-    const copyable = container.matches?.('.copyable-text')
-      ? container
-      : container.querySelector('.copyable-text');
-    if (!copyable) return null;
-    return copyable.querySelector('span.selectable-text') || copyable;
-  }
-
-  function getWhatsAppMessageInfo(container) {
-    const textEl = getWhatsAppTextElement(container);
-    if (!textEl) return { textEl: null, text: '', rawText: '', normalizedToRaw: [] };
-
-    const rawText = textEl.textContent || '';
-    const normalized = normalizeWhatsAppTextWithMap(rawText);
-    return { textEl, rawText, ...normalized };
-  }
-
-  function getWhatsAppMessageText(container) {
-    return getWhatsAppMessageInfo(container).text;
-  }
-
-  function findWhatsAppMessageContainer(el) {
-    let node = el;
-    if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
-    if (!node?.closest) return null;
-    return node.closest('div.message-out, div.message-in');
   }
 
   function isTextBlock(el) {
@@ -1033,157 +926,6 @@
 
     messageOverlays.set(container, { overlay, cleanup });
     return errors.length;
-  }
-
-  function highlightWhatsAppOverlay(container, errors, fullText) {
-    if (!errors?.length) return 0;
-
-    const waContainer = findWhatsAppMessageContainer(container) || container;
-    const info = getWhatsAppMessageInfo(waContainer);
-    if (!info.textEl || !info.text) return 0;
-
-    removeMessageOverlay(waContainer);
-
-    // The normalized text matches what the backend saw; use it for all
-    // transparent (non-error) positions so offsets are always correct.
-    // For error spans, map through visibleSlice to show WhatsApp-visible
-    // text.  This avoids the trailing-edge bug where normalizedToRaw is
-    // short because the normalized text trimmed trailing whitespace/timestamp.
-    const overlayText = fullText || info.text;
-    const useRawMap = overlayText === info.text && info.normalizedToRaw.length === info.text.length;
-
-    function visibleSlice(start, end) {
-      if (!useRawMap) return overlayText.slice(start, end);
-      const rawStart = info.normalizedToRaw[start] ?? info.rawText.length;
-      const rawEnd = end >= info.text.length
-        ? ((info.normalizedToRaw[info.normalizedToRaw.length - 1] ?? info.rawText.length - 1) + 1)
-        : (info.normalizedToRaw[end] ?? info.rawText.length);
-      return stripWhatsAppTextArtifacts(info.rawText.slice(rawStart, rawEnd));
-    }
-
-    let html = '';
-    let pos = 0;
-    let rendered = 0;
-    const sorted = [...errors].sort((a, b) => Number(a.start) - Number(b.start));
-
-    for (const err of sorted) {
-      const s = Math.max(0, Number(err.start));
-      const e = Math.min(overlayText.length, Number(err.end));
-      if (s < pos || s >= e) continue;
-
-      // Transparent text between errors: use overlayText directly.
-      html += escapeHtml(overlayText.slice(pos, s));
-
-      // Error span: use visibleSlice for WhatsApp-visible rendering.
-      const cls = err.type === 'improvement' ? 'ai-grammar-improvement' :
-                  err.type === 'idiom' ? 'ai-grammar-idiom' : 'ai-grammar-error';
-      html += `<span class="${cls}" style="pointer-events:auto;cursor:pointer;text-underline-offset:0"
-          data-correction="${escapeHtml(err.correction || '')}"
-          data-explanation="${escapeHtml(err.explanation || '')}"
-          data-error="${escapeHtml(err.error || '')}"
-          data-type="${err.type || 'error'}" tabindex="0">${escapeHtml(visibleSlice(s, e))}</span>`;
-      pos = e;
-      rendered++;
-    }
-    // Trailing transparent text: use overlayText directly.
-    html += escapeHtml(overlayText.slice(pos));
-
-    if (!rendered) return 0;
-
-    const overlay = document.createElement('div');
-    overlay.className = 'ag-message-overlay';
-    overlay.setAttribute('data-ag-overlay', '');
-    overlay.setAttribute('data-ag-whatsapp-overlay', '');
-    overlay.innerHTML = html;
-
-    const styleSource = info.textEl.querySelector?.('span[dir]') || info.textEl;
-    const cs = window.getComputedStyle(styleSource);
-    const dirEl = styleSource.closest?.('[dir]');
-    const explicitDir = dirEl?.getAttribute('dir');
-    const direction = explicitDir === 'rtl' || explicitDir === 'ltr' ? explicitDir : cs.direction;
-
-    Object.assign(overlay.style, {
-      position: 'fixed',
-      top: '0',
-      left: '0',
-      zIndex: '2147483644',
-      pointerEvents: 'none',
-      font: cs.font,
-      fontSize: cs.fontSize,
-      fontFamily: cs.fontFamily,
-      fontWeight: cs.fontWeight,
-      fontStyle: cs.fontStyle,
-      fontVariant: cs.fontVariant,
-      fontStretch: cs.fontStretch,
-      fontKerning: cs.fontKerning,
-      fontFeatureSettings: cs.fontFeatureSettings,
-      fontVariationSettings: cs.fontVariationSettings,
-      fontOpticalSizing: cs.fontOpticalSizing,
-      textRendering: cs.textRendering,
-      textTransform: cs.textTransform,
-      direction,
-      lineHeight: cs.lineHeight,
-      letterSpacing: cs.letterSpacing,
-      wordSpacing: cs.wordSpacing,
-      textAlign: cs.textAlign,
-      textIndent: cs.textIndent,
-      whiteSpace: cs.whiteSpace,
-      overflowWrap: cs.overflowWrap,
-      wordBreak: cs.wordBreak,
-      wordWrap: cs.wordWrap,
-      tabSize: cs.tabSize,
-      hyphens: cs.hyphens,
-      textWrapMode: cs.textWrapMode,
-      textWrapStyle: cs.textWrapStyle,
-      writingMode: cs.writingMode,
-      unicodeBidi: cs.unicodeBidi,
-      color: 'rgba(0, 0, 0, 0.02)',
-      WebkitTextFillColor: 'rgba(0, 0, 0, 0.02)',
-      background: 'transparent',
-      padding: '0',
-      margin: '0',
-      boxSizing: 'border-box',
-      overflow: 'hidden',
-    });
-
-    document.body.appendChild(overlay);
-
-    function reposition() {
-      if (!document.contains(waContainer) || !document.contains(info.textEl)) {
-        removeMessageOverlay(waContainer);
-        return;
-      }
-
-      const textRect = info.textEl.getBoundingClientRect();
-      // Position at the text element's origin but do NOT set an explicit
-      // width — inline elements return single-line rects, and forcing that
-      // width onto a block element causes premature line-wrapping which
-      // shifts underline positions.
-      const bubbleRect = waContainer.getBoundingClientRect();
-      overlay.style.transform = `translate(${textRect.left}px, ${textRect.top}px)`;
-      overlay.style.maxWidth = bubbleRect.width + 'px';
-    }
-
-    reposition();
-
-    window.addEventListener('resize', reposition);
-    window.addEventListener('scroll', reposition, true);
-
-    const poll = setInterval(() => {
-      if (!document.contains(waContainer) || !document.contains(info.textEl)) {
-        removeMessageOverlay(waContainer);
-      }
-    }, 2000);
-
-    const cleanup = () => {
-      window.removeEventListener('resize', reposition);
-      window.removeEventListener('scroll', reposition, true);
-      clearInterval(poll);
-      if (document.contains(overlay)) overlay.remove();
-    };
-
-    messageOverlays.set(waContainer, { overlay, cleanup });
-    return rendered;
   }
 
   function removeMessageOverlay(container) {
@@ -2042,7 +1784,7 @@
       // use the overlay approach only there.  Other contentEditable
       // inputs (test pages, plain sites) get the floating panel which
       // doesn't risk making real text invisible.
-      if (isWhatsApp) {
+      if (getWhatsAppBridge()) {
         highlightLiveDraftContentEditable(ta, errors);
       } else {
         showErrorFloat(errors, ta);
@@ -2407,9 +2149,11 @@
   async function checkText(text, container, conversationKey = getConversationKey()) {
     if (conversationKey !== getConversationKey() || !document.contains(container)) return;
 
-    if (isWhatsApp) {
-      const waContainer = findWhatsAppMessageContainer(container) || container;
-      const waText = getWhatsAppMessageText(waContainer);
+    // Delegate WhatsApp-specific text extraction to the bridge
+    const wa = getWhatsAppBridge();
+    if (wa) {
+      const waContainer = wa.findMessageContainer(container) || container;
+      const waText = wa.getMessageText(waContainer);
       if (waContainer && waText) {
         container = waContainer;
         text = waText;
@@ -2467,8 +2211,11 @@
       // where injected spans are stripped by vdom reconciliation.
       isHighlighting = true;
       let count;
-      if (isWhatsApp) {
-        count = highlightWhatsAppOverlay(container, errors, text);
+      // Delegate WhatsApp overlay rendering to the bridge.
+      // The bridge handles bidi/zero-width character normalisation
+      // that the generic overlay cannot.
+      if (wa) {
+        count = wa.renderOverlay(container, errors, text);
       } else {
         // Clear previous inline highlights in this container so
         // repeated checks don't accumulate stale spans that corrupt
@@ -2555,6 +2302,12 @@
         matched = true;
       }
 
+      // 2b) WhatsApp-specific message detection (delegated to bridge)
+      const wa = getWhatsAppBridge();
+      if (!matched && wa?.isWhatsAppUserMessage(block)) {
+        matched = true;
+      }
+
       // 3) TEXT MATCHING (last resort — TTL-limited)
       if (!matched && isUserText(text)) {
         matched = true;
@@ -2637,10 +2390,12 @@
       return;
     }
 
-    if (isWhatsApp) {
-      const waContainer = findWhatsAppMessageContainer(range.commonAncestorContainer);
+    // Delegate WhatsApp-specific message detection to the bridge
+    const selWhatsApp = getWhatsAppBridge();
+    if (selWhatsApp) {
+      const waContainer = selWhatsApp.findMessageContainer(range.commonAncestorContainer);
       if (waContainer) {
-        const waText = getWhatsAppMessageText(waContainer);
+        const waText = selWhatsApp.getMessageText(waContainer);
         if (waText.length >= minChars) {
           checkText(waText, waContainer);
           return;
@@ -2657,7 +2412,7 @@
       container = container.parentElement;
     }
     if (!container) {
-      if (isWhatsApp) {
+      if (selWhatsApp) {
         checkText(text, document.body);
         return;
       }
@@ -2817,7 +2572,11 @@
           if (ta.tagName === 'TEXTAREA') {
             ta.value = fixed;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
-          } else if (isWhatsApp) {
+          } else {
+            // contentEditable — use beforeinput for all editors.
+            // Lexical (WhatsApp), CKEditor (Teams), and other rich-text
+            // editors all process beforeinput natively.  Falls back to
+            // CDP keyboard simulation when beforeinput is not handled.
             if (tryBeforeInput(fixed, ta)) {
               // Success — fall through to common code below
             } else {
@@ -2835,9 +2594,6 @@
               activeCheckController?.abort();
               return;  // badge handled above
             }
-          } else {
-            ta.textContent = fixed;
-            ta.dispatchEvent(new Event('input', { bubbles: true }));
           }
           skipLiveCheck = false;
           // Cancel pending live draft check — text is already corrected
@@ -2903,7 +2659,11 @@
           if (ta.tagName === 'TEXTAREA') {
             ta.value = polished;
             ta.dispatchEvent(new Event('input', { bubbles: true }));
-          } else if (isWhatsApp) {
+          } else {
+            // contentEditable — use beforeinput for all editors.
+            // Lexical (WhatsApp), CKEditor (Teams), and other rich-text
+            // editors all process beforeinput natively.  Falls back to
+            // CDP keyboard simulation when beforeinput is not handled.
             if (tryBeforeInput(polished, ta)) {
               // Success — fall through to common code below
             } else {
@@ -2921,9 +2681,6 @@
               activeCheckController?.abort();
               return;  // badge handled above
             }
-          } else {
-            ta.textContent = polished;
-            ta.dispatchEvent(new Event('input', { bubbles: true }));
           }
           skipLiveCheck = false;
           // Cancel pending live draft check — text is already polished
@@ -3267,6 +3024,10 @@
     activeConversationKey = getConversationKey();
     window.addEventListener('hashchange', handleConversationMaybeChanged);
     window.addEventListener('popstate', handleConversationMaybeChanged);
+    // WhatsApp bridge dispatches this on chat-list clicks (SPA navigation)
+    window.addEventListener('ai-grammar:whatsapp-chat-switch', () => {
+      handleConversationMaybeChanged();
+    });
     document.addEventListener('click', scheduleConversationCheck, true);
     document.addEventListener('focusin', scheduleConversationCheck, true);
     document.addEventListener('input', scheduleConversationCheck, true);
