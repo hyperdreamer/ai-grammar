@@ -14,7 +14,10 @@
     "http://localhost:*/*",
     "http://127.0.0.1:*/*",
     "http://[::1]:*/*",
-    "https://localhost:*/*"
+    "https://localhost:*/*",
+    "https://teams.cloud.microsoft/*",
+    "https://teams.microsoft.com/*",
+    "https://teams.live.com/*"
   ],
   "icons": {
     "16": "icons/icon16.png",
