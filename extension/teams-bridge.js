@@ -463,7 +463,10 @@
       const resp = await callGrammarCheck(text, abortController.signal);
 
       // Superseded by a newer check or editor detached?
-      if (myGen !== checkGeneration) return;
+      if (myGen !== checkGeneration) {
+        removePendingBadge('checking');
+        return;
+      }
       abortController = null;
 
       // Editor still present?
@@ -489,7 +492,10 @@
       }
     } catch (err) {
       // Superseded — ignore all errors (including AbortError)
-      if (myGen !== checkGeneration) return;
+      if (myGen !== checkGeneration) {
+        removePendingBadge('checking');
+        return;
+      }
       abortController = null;
       if (err.name !== 'AbortError') {
         removePendingBadge('checking');
