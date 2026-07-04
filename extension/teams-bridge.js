@@ -45,7 +45,7 @@
   let ckeBridgeMsgHandler = null; // postMessage handler from main-world CKEditor bridge
 
   // ── Progress badges (vertical stack, bottom-right) ────────────────────
-  const badgeCounters = { checking: 0, fixing: 0 };
+  const badgeCounters = { checking: 0, fixing: 0, polishing: 0 };
   const badgeLabels = { checking: 'Checking grammar…', fixing: 'Fixing…', polishing: 'Polishing…' };
   const activeBadges = new Map();
   let resultBadgeTimer = null;
