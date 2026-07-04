@@ -307,30 +307,39 @@
 
   // ── Idle-timer poll ───────────────────────────────────────────────────
   let pollIntervalId = null;
+  let lastKnownText = '';  // track text content for change detection
 
   function startPolling() {
     if (pollIntervalId) return;
     pollIntervalId = setInterval(() => {
-      // Clear state if editor text was emptied externally
-      if (liveTarget === editorElement && editorElement && document.contains(editorElement)) {
-        const text = editorGetPlainText();
-        if (!text) {
-          dismissErrors();
-          liveTarget = null;
-        }
-      }
-
-      if (!liveTarget || liveTarget !== editorElement) return;
-      if (!document.contains(editorElement)) {
+      if (!editorElement || !document.contains(editorElement)) {
         liveTarget = null;
         return;
       }
+
+      const currentText = editorGetPlainText();
+
+      // Detect text changes by comparing content — more reliable than
+      // MutationObserver with CKEditor 5's async rendering pipeline.
+      if (currentText !== lastKnownText) {
+        lastKnownText = currentText;
+        liveTarget = editorElement;
+        lastEditTime = Date.now();
+      }
+
+      // Clear state if editor text was emptied externally
+      if (liveTarget === editorElement && !currentText) {
+        dismissErrors();
+        liveTarget = null;
+      }
+
+      if (!liveTarget || liveTarget !== editorElement) return;
 
       const elapsed = Date.now() - lastEditTime;
       if (elapsed < checkDelay) return;
 
       // Capture what we need before resetting state
-      const text = editorGetPlainText();
+      const text = currentText;
       liveTarget = null; // prevent re-triggering while check is in flight
 
       if (text.length < minChars) {
