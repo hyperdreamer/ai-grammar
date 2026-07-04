@@ -334,6 +334,14 @@ export function setupLiveDraftCheck() {
     } catch (err) {
       if (err.name === 'AbortError') {
         console.debug('[AI Grammar] Live check aborted');
+        // Clean up state that the normal success path would handle.
+        // Always remove the badge — commands use different categories
+        // ('fixing', 'polishing') so there's no conflict.
+        if (liveCheckInFlight) {
+          liveCheckInFlight = false;
+          state.activeCheckController = null;
+          removePendingBadge('checking');
+        }
       } else {
         abortLiveDraftCheck();
         console.debug('[AI Grammar] Live check error:', err);

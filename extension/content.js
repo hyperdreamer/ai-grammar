@@ -883,6 +883,11 @@
       } catch (err) {
         if (err.name === "AbortError") {
           console.debug("[AI Grammar] Live check aborted");
+          if (liveCheckInFlight) {
+            liveCheckInFlight = false;
+            state.activeCheckController = null;
+            removePendingBadge("checking");
+          }
         } else {
           abortLiveDraftCheck();
           console.debug("[AI Grammar] Live check error:", err);
