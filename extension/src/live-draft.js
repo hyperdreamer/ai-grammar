@@ -318,6 +318,9 @@ export function setupLiveDraftCheck() {
         liveCheckInFlight = false;
         state.activeCheckController = null;
         removePendingBadge('checking');
+      } else {
+        // Aborted by user editing — don't apply stale results
+        return;
       }
       if (conversationKey !== getConversationKey() || !document.contains(ta)) {
         return;

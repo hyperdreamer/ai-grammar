@@ -867,6 +867,8 @@
           liveCheckInFlight = false;
           state.activeCheckController = null;
           removePendingBadge("checking");
+        } else {
+          return;
         }
         if (conversationKey !== getConversationKey() || !document.contains(ta)) {
           return;
