@@ -5,19 +5,45 @@ Chrome extension that detects grammar and spelling errors in submitted text usin
 ## Architecture
 
 ```
-extension/          # Chrome Extension (Manifest V3)
-  manifest.json     # Permissions, content scripts, keyboard shortcut
-  background.js     # Service worker — backend communication, state management
-  content.js        # Content script — text detection, highlighting, tooltips
-  teams-bridge.js   # Teams CKEditor live-draft module (command bar, error panels)
-  popup.html        # Settings popup (enable/disable, language, host/port)
-  popup.js          # Popup logic
-backend/            # FastAPI server
-  main.py           # /check and /polish endpoints — AI grammar correction
-  config.yaml       # Active config (gitignored)
-  config.example.yaml  # Documented example
-  requirements.txt
+extension/           # Chrome Extension (Manifest V3)
+  manifest.json      # Permissions, content scripts, keyboard shortcut
+  background.js      # Service worker — backend communication, state management
+  content.js         # Bundled content script (built from src/)
+  src/               # Source modules (bundled into content.js by esbuild)
+    content.js       # Entry point — IIFE wrapper + init()
+    state.js         # Constants, mutable state object, shared utilities
+    styles.js        # CSS injection (underlines, tooltips, overlays)
+    dom-utils.js     # DOM helpers (text extraction, block detection)
+    highlight.js     # Error highlighting (DOM + overlay strategies)
+    tooltip.js       # Floating tooltip with smart positioning
+    apply-correction.js  # Correction injection (beforeinput → CDP fallback)
+    indicators.js    # Badges, green checks, error floats
+    live-draft.js    # Live draft highlights + debounced checking
+    check-text.js    # Grammar check pipeline (API call + dispatch)
+    mutation-observer.js  # DOM mutation → detect new messages
+    commands.js      # ?/fix, ?/polish, command palette
+    selection-check.js    # Manual selection → grammar check
+    conversation.js  # Conversation key tracking, scoped state
+    events.js        # Tooltip/correction event delegation
+  teams-bridge.js    # Teams CKEditor live-draft module
+  popup.html         # Settings popup
+  popup.js           # Popup logic
+  package.json       # Build config (esbuild)
+backend/             # FastAPI server
+  ...
 ```
+
+### Building the extension
+
+The source modules under `extension/src/` are bundled into `extension/content.js` by [esbuild](https://esbuild.github.io/):
+
+```bash
+cd extension
+npm install
+npm run build      # esbuild src/content.js --bundle --outfile=content.js --format=iife
+```
+
+This produces a single-file IIFE content script compatible with Chrome MV3. Edit source files in `src/`, then rebuild.
 
 ## How It Works
 

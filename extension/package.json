@@ -1,0 +1,12 @@
+{
+  "name": "ai-grammar-extension",
+  "version": "5.0.0",
+  "private": true,
+  "description": "AI Grammar Checker Chrome Extension — build system for content.js",
+  "scripts": {
+    "build": "esbuild src/content.js --bundle --outfile=content.js --format=iife"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
