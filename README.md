@@ -1,6 +1,6 @@
 # AI Grammar Checker
 
-Chrome extension that detects grammar and spelling errors in submitted text using AI. Highlights errors inline and shows corrections in a tooltip.
+Chrome extension that detects grammar and spelling errors in submitted text using AI. Highlights errors inline and shows corrections in a tooltip. On Microsoft Teams, uses a popup panel with per-error fixes and a floating command bar for quick actions.
 
 ## Architecture
 
@@ -9,10 +9,11 @@ extension/          # Chrome Extension (Manifest V3)
   manifest.json     # Permissions, content scripts, keyboard shortcut
   background.js     # Service worker — backend communication, state management
   content.js        # Content script — text detection, highlighting, tooltips
+  teams-bridge.js   # Teams CKEditor live-draft module (command bar, error panels)
   popup.html        # Settings popup (enable/disable, language, host/port)
   popup.js          # Popup logic
 backend/            # FastAPI server
-  main.py           # /check endpoint — AI grammar correction
+  main.py           # /check and /polish endpoints — AI grammar correction
   config.yaml       # Active config (gitignored)
   config.example.yaml  # Documented example
   requirements.txt
@@ -99,7 +100,27 @@ Type `?/` in any text input to open the **command palette** — a popup menu lis
 
 The palette opens when you type `?/`. Arrow keys navigate, Enter selects, Escape closes. Type more to filter (e.g., `?/o` filters to `?/off` and `?/on`). Prefix shortcuts auto-execute when only one match remains (e.g., `?/pol` → `?/polish`).
 
-Commands work on all text inputs — `<textarea>`, `<input>`, and `contentEditable` fields (including WhatsApp Web, Teams, and other rich-text editors). On WhatsApp Web, `?/fix` and `?/polish` use a fast single-call CDP `Input.insertText` with a synthetic `beforeinput` fallback for Lexical editor compatibility.
+Commands work on textareas and standard `contentEditable` fields. On WhatsApp Web, `?/fix` and `?/polish` use a fast single-call CDP `Input.insertText` with a synthetic `beforeinput` fallback for Lexical editor compatibility. **On Microsoft Teams**, `?/` commands are not available — a floating command bar with clickable buttons replaces them (see below).
+
+### Microsoft Teams
+
+Teams uses CKEditor 5 for its message input, which prevents standard DOM-based text manipulation. The extension uses a dedicated `teams-bridge.js` module that hooks into CKEditor's internal `change:data` event for live-draft grammar checking.
+
+**Floating command bar** — a frosted-glass bar appears above the editor when you have text:
+
+| Button | Action |
+|--------|--------|
+| ✨ Polish | Improve the draft for clarity and naturalness |
+| 🔧 Fix | Auto-correct all grammar errors in place |
+| 🔍 Check | Force an immediate grammar check |
+
+The bar auto-hides when you start typing or clear the text.
+
+**Error panel** — when errors are found, a popup panel shows each error with its correction, a per-item "Apply" button, and an "Apply all fixes" button to correct everything at once.
+
+**Clean panel** — when no errors are found, a compact panel confirms "✅ No errors found". Both panels auto-dismiss when you continue typing.
+
+**Theme** — all panels and the command bar follow the OS light/dark preference via `prefers-color-scheme`.
 
 ## Configuration
 
@@ -151,5 +172,5 @@ Smaller models work well because grammar checking is a focused task with a struc
 ## Limitations
 
 - **Text only** — checks text content, not images or other media
-- **Rich text editors** — WhatsApp Web, Teams, and contentEditable fields are fully supported via CDP integration
+- **Rich text editors** — WhatsApp Web and contentEditable fields are fully supported via CDP integration. Microsoft Teams uses a dedicated CKEditor bridge with a popup panel and command bar (no inline underlines or `?/` commands)
 - **Text length** — maximum 50,000 characters per check (configurable in backend)
