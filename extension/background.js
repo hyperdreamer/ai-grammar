@@ -280,8 +280,51 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             setTimeout(poll, POLL_MS);
           }
         })();
+
+        // Also expose an apply-fix helper for the content script
+        window.__agCKEApply = function(text) {
+          const el = document.querySelector('.ck-editor__editable[contenteditable="true"]');
+          const instance = el && el.ckeditorInstance;
+          if (!instance) return false;
+          instance.model.change(writer => {
+            const root = instance.model.document.getRoot();
+            writer.remove(writer.createRangeIn(root));
+            const p = writer.createElement('paragraph');
+            writer.append(p, root);
+            writer.appendText(text, {}, p);
+          });
+          return true;
+        };
       }
     }).then(() => sendResponse({ok: true})).catch(e => sendResponse({ok: false, error: e.message}));
-    return true; // keep channel open for async response
+    return true;
+  }
+  
+  if (msg.type === 'ag-cke-apply' && sender.tab?.id) {
+    chrome.scripting.executeScript({
+      target: { tabId: sender.tab.id },
+      world: 'MAIN',
+      func: (correctedText) => {
+        if (window.__agCKEApply) {
+          return window.__agCKEApply(correctedText);
+        }
+        // Fallback: access instance directly
+        const el = document.querySelector('.ck-editor__editable[contenteditable="true"]');
+        const inst = el && el.ckeditorInstance;
+        if (!inst) return false;
+        inst.model.change(writer => {
+          const root = inst.model.document.getRoot();
+          writer.remove(writer.createRangeIn(root));
+          const p = writer.createElement('paragraph');
+          writer.append(p, root);
+          writer.appendText(correctedText, {}, p);
+        });
+        return true;
+      },
+      args: [msg.text]
+    }).then((results) => {
+      sendResponse({ok: true, applied: results?.[0]?.result === true});
+    }).catch(e => sendResponse({ok: false, error: e.message}));
+    return true;
   }
 });

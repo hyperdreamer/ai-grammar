@@ -818,54 +818,20 @@
   function applyTextToEditor(text) {
     if (!editorElement || !document.contains(editorElement)) return;
 
-    try {
-      const editable = editorElement;
-      editable.focus();
-
-      // Select all existing content
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(editable);
-      sel.removeAllRanges();
-      sel.addRange(range);
-
-      // Dispatch beforeinput — CKEditor's typing feature handles this.
-      // CKEditor 5 checks dataTransfer first, then falls back to data.
-      const event = new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'insertReplacementText',
-        data: text,
-      });
-      // Also set dataTransfer for CKEditor compatibility
-      try {
-        const dt = new DataTransfer();
-        dt.setData('text/plain', text);
-        Object.defineProperty(event, 'dataTransfer', { value: dt });
-      } catch { /* DataTransfer not available */ }
-      editable.dispatchEvent(event);
-
-      // Verify the fix was applied
-      const currentText = editorGetPlainText();
-      if (!currentText.includes(text.replace(/​/g, ''))) {
-        // beforeinput didn't work — try execCommand fallback, then clipboard
-        try {
-          editable.focus();
-          document.execCommand('selectAll', false, null);
-          document.execCommand('insertText', false, text);
-          const retryText = editorGetPlainText();
-          if (retryText.includes(text.replace(/​/g, ''))) {
-            dismissErrors();
-            return;
-          }
-        } catch { /* ignore */ }
-        fallbackClipboardCopy(text);
-      } else {
-        dismissErrors();
+    // Use the background worker to apply text via CKEditor's API in the
+    // MAIN world.  beforeinput and execCommand are unreliable with CKEditor 5
+    // because it prevents programmatic DOM changes that bypass its model.
+    chrome.runtime.sendMessage(
+      { type: 'ag-cke-apply', text },
+      (response) => {
+        if (response?.ok && response?.applied) {
+          dismissErrors();
+        } else {
+          // Fall back to clipboard copy if bridge not available
+          fallbackClipboardCopy(text);
+        }
       }
-    } catch {
-      fallbackClipboardCopy(text);
-    }
+    );
   }
 
   function fallbackClipboardCopy(text) {
