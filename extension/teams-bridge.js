@@ -840,7 +840,6 @@
     s.gap = '6px';
     s.padding = '6px 10px';
     s.borderRadius = '10px';
-    s.boxShadow = '0 4px 16px rgba(0,0,0,0.25)';
     s.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
     s.fontSize = '12px';
     s.animation = 'agfadein 0.15s ease';
@@ -851,7 +850,7 @@
       '#' + COMMAND_BAR_ID + ' {',
       '  background: rgba(30,41,59,0.82); backdrop-filter: blur(10px);',
       '  -webkit-backdrop-filter: blur(10px);',
-      '  color: #e2e8f0;',
+      '  color: #e2e8f0; box-shadow: 0 4px 16px rgba(0,0,0,0.25);',
       '}',
       '#' + COMMAND_BAR_ID + ' .ag-cmd-btn {',
       '  background: #334155; color: #e2e8f0; border: none;',
