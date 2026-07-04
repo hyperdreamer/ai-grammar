@@ -702,20 +702,36 @@
       sel.removeAllRanges();
       sel.addRange(range);
 
-      // Dispatch beforeinput — CKEditor's typing feature handles this
-      editable.dispatchEvent(
-        new InputEvent('beforeinput', {
-          bubbles: true,
-          cancelable: true,
-          inputType: 'insertReplacementText',
-          data: text,
-        })
-      );
+      // Dispatch beforeinput — CKEditor's typing feature handles this.
+      // CKEditor 5 checks dataTransfer first, then falls back to data.
+      const event = new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertReplacementText',
+        data: text,
+      });
+      // Also set dataTransfer for CKEditor compatibility
+      try {
+        const dt = new DataTransfer();
+        dt.setData('text/plain', text);
+        Object.defineProperty(event, 'dataTransfer', { value: dt });
+      } catch { /* DataTransfer not available */ }
+      editable.dispatchEvent(event);
 
       // Verify the fix was applied
       const currentText = editorGetPlainText();
       if (!currentText.includes(text.replace(/​/g, ''))) {
-        // beforeinput didn't work — fall back to clipboard copy
+        // beforeinput didn't work — try execCommand fallback, then clipboard
+        try {
+          editable.focus();
+          document.execCommand('selectAll', false, null);
+          document.execCommand('insertText', false, text);
+          const retryText = editorGetPlainText();
+          if (retryText.includes(text.replace(/​/g, ''))) {
+            dismissErrors();
+            return;
+          }
+        } catch { /* ignore */ }
         fallbackClipboardCopy(text);
       } else {
         dismissErrors();
