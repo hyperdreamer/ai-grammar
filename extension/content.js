@@ -1954,9 +1954,7 @@
           state.commandInFlight = false;
           state.skipLiveCheck = true;
           stripCheck(ta);
-          setTimeout(() => {
-            state.skipLiveCheck = false;
-          }, 100);
+          state.skipLiveCheck = false;
         }
       }
     },

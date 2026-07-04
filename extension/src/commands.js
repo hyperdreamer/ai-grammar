@@ -130,9 +130,8 @@ export const COMMANDS = {
         removePendingBadge('checking');
         state.commandInFlight = false;
         state.skipLiveCheck = true;
-        stripCheck(ta);
-        // Let the input event settle before re-enabling live check
-        setTimeout(() => { state.skipLiveCheck = false; }, 100);
+        stripCheck(ta);  // dispatches input event synchronously — blocked by skipLiveCheck
+        state.skipLiveCheck = false;  // re-enable immediately — next real keystroke clears highlights
       }
     },
   },
