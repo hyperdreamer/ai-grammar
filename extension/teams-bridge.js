@@ -43,6 +43,109 @@
   let changeDataUnbind = null;
   let ckeBridgeMsgHandler = null; // postMessage handler from main-world CKEditor bridge
 
+  // ── Progress badges (vertical stack, bottom-right) ────────────────────
+  const badgeCounters = { checking: 0, fixing: 0 };
+  const badgeLabels = { checking: 'Checking grammar…', fixing: 'Fixing…' };
+  const activeBadges = new Map();
+  let resultBadgeTimer = null;
+
+  function ensureBadgeStack() {
+    let stack = document.querySelector('.ag-badge-stack');
+    if (!stack) {
+      stack = document.createElement('div');
+      stack.className = 'ag-badge-stack';
+      document.body.appendChild(stack);
+      injectBadgeCSS();
+    }
+    return stack;
+  }
+
+  function injectBadgeCSS() {
+    if (document.getElementById('ag-badge-css')) return;
+    const style = document.createElement('style');
+    style.id = 'ag-badge-css';
+    style.textContent = [
+      '.ag-badge-stack{position:fixed;bottom:16px;right:16px;z-index:2147483645;display:flex;flex-direction:column-reverse;gap:8px;pointer-events:none;max-width:320px}',
+      '.ai-grammar-badge{background:#1e293b;color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;font-size:12px;padding:6px 12px;border-radius:20px;box-shadow:0 2px 8px rgba(0,0,0,0.2);display:flex;align-items:center;gap:6px;animation:ag-fadein 0.2s ease;pointer-events:auto;white-space:nowrap;width:fit-content;align-self:flex-end}',
+      '.ai-grammar-badge.ag-badge-result{border:1px solid #4ade80}',
+      '.ai-grammar-badge .ag-spinner{width:12px;height:12px;border:2px solid #475569;border-top-color:#4ade80;border-radius:50%;animation:ag-spin 0.8s linear infinite}',
+      '.ai-grammar-badge .ag-count{background:rgba(255,255,255,0.15);padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;margin-left:2px}',
+      '.ag-badge-stack .ag-badge-done .ag-spinner{display:none}',
+      '.ag-badge-stack .ag-badge-done{background:#166534;border:1px solid #4ade80}',
+      '.ag-badge-stack .ag-badge-error{background:#7f1d1d;border:1px solid #f87171}',
+      '@keyframes ag-fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}',
+      '@keyframes ag-spin{to{transform:rotate(360deg)}}',
+      '@media(prefers-color-scheme:light){',
+      '.ai-grammar-badge{background:#fff;color:#0f172a;box-shadow:0 2px 8px rgba(0,0,0,0.1)}',
+      '.ai-grammar-badge .ag-spinner{border-color:#e2e8f0;border-top-color:#16a34a}',
+      '.ai-grammar-badge .ag-count{background:rgba(0,0,0,0.08);color:#475569}',
+      '.ag-badge-stack .ag-badge-done{background:#dcfce7;border-color:#4ade80}',
+      '.ag-badge-stack .ag-badge-error{background:#fee2e2;border-color:#f87171}',
+      '}',
+    ].join('\n');
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function buildBadgeHTML(category) {
+    const label = badgeLabels[category];
+    const count = badgeCounters[category];
+    const countHtml = count > 1 ? '<span class=\"ag-count\">× ' + count + '</span>' : '';
+    return '<div class=\"ag-spinner\"></div>' + label + countHtml;
+  }
+
+  function showPendingBadge(category, label) {
+    badgeCounters[category]++;
+    badgeLabels[category] = label;
+    if (resultBadgeTimer) { clearTimeout(resultBadgeTimer); resultBadgeTimer = null; }
+    const stack = ensureBadgeStack();
+    const key = 'pending:' + category;
+    if (activeBadges.has(key)) {
+      activeBadges.get(key).el.innerHTML = buildBadgeHTML(category);
+    } else {
+      const badge = document.createElement('div');
+      badge.className = 'ai-grammar-badge';
+      badge.setAttribute('data-ag-category', category);
+      badge.innerHTML = buildBadgeHTML(category);
+      stack.appendChild(badge);
+      activeBadges.set(key, { el: badge, category });
+    }
+  }
+
+  function removePendingBadge(category) {
+    badgeCounters[category] = Math.max(0, badgeCounters[category] - 1);
+    if (badgeCounters[category] <= 0) {
+      const key = 'pending:' + category;
+      const entry = activeBadges.get(key);
+      if (entry) { entry.el.remove(); activeBadges.delete(key); }
+      const stack = document.querySelector('.ag-badge-stack');
+      if (stack && stack.children.length === 0) stack.remove();
+    } else {
+      const key = 'pending:' + category;
+      const entry = activeBadges.get(key);
+      if (entry) entry.el.innerHTML = buildBadgeHTML(category);
+    }
+  }
+
+  function showResultBadge(text, type, durationMs) {
+    if (resultBadgeTimer) { clearTimeout(resultBadgeTimer); resultBadgeTimer = null; }
+    const stack = ensureBadgeStack();
+    // Remove old result badges
+    stack.querySelectorAll('[data-ag-result]').forEach(el => el.remove());
+    const badge = document.createElement('div');
+    badge.className = 'ai-grammar-badge ag-badge-result ' + (type === 'done' ? 'ag-badge-done' : type === 'error' ? 'ag-badge-error' : '');
+    badge.setAttribute('data-ag-result', '');
+    badge.textContent = text;
+    stack.appendChild(badge);
+    if (durationMs > 0) {
+      resultBadgeTimer = setTimeout(() => {
+        badge.remove();
+        resultBadgeTimer = null;
+        const s = document.querySelector('.ag-badge-stack');
+        if (s && s.children.length === 0) s.remove();
+      }, durationMs);
+    }
+  }
+
   // ── Logging ───────────────────────────────────────────────────────────
   const log = (...args) => console.debug('[AI Grammar Teams]', ...args);
 
@@ -330,6 +433,8 @@
     const myGen = ++checkGeneration;
     abortController = new AbortController();
 
+    showPendingBadge('checking', 'Checking grammar…');
+
     try {
       log('Checking grammar:', text.length, 'chars');
       const resp = await callGrammarCheck(text, abortController.signal);
@@ -339,18 +444,24 @@
       abortController = null;
 
       // Editor still present?
-      if (!document.contains(editorElement)) return;
+      if (!document.contains(editorElement)) { removePendingBadge('checking'); return; }
 
       if (!resp.ok) {
+        removePendingBadge('checking');
+        showResultBadge('✗ Check failed', 'error', 4000);
         log('Check failed:', resp.error);
         return;
       }
 
+      removePendingBadge('checking');
+
       if (resp.errors?.length > 0) {
         log('Check complete:', resp.errors.length, 'errors found');
+        showResultBadge(resp.errors.length + ' error' + (resp.errors.length > 1 ? 's' : '') + ' found', 'done', 3000);
         showErrors(resp.errors);
       } else {
         log('Check complete: 0 errors');
+        showResultBadge('✓ No errors', 'done', 3000);
         dismissErrors();
       }
     } catch (err) {
@@ -358,6 +469,8 @@
       if (myGen !== checkGeneration) return;
       abortController = null;
       if (err.name !== 'AbortError') {
+        removePendingBadge('checking');
+        showResultBadge('✗ ' + (err.message || 'Check failed'), 'error', 4000);
         log('Grammar check error:', err);
       }
     }
@@ -818,16 +931,21 @@
   function applyTextToEditor(text) {
     if (!editorElement || !document.contains(editorElement)) return;
 
+    showPendingBadge('fixing', 'Fixing…');
+
     // Use the background worker to apply text via CKEditor's API in the
     // MAIN world.  beforeinput and execCommand are unreliable with CKEditor 5
     // because it prevents programmatic DOM changes that bypass its model.
     chrome.runtime.sendMessage(
       { type: 'ag-cke-apply', text },
       (response) => {
+        removePendingBadge('fixing');
         if (response?.ok && response?.applied) {
+          showResultBadge('✓ Corrected!', 'done', 3000);
           dismissErrors();
         } else {
           // Fall back to clipboard copy if bridge not available
+          showResultBadge('Copied to clipboard', 'done', 3000);
           fallbackClipboardCopy(text);
         }
       }
