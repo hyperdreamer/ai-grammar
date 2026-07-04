@@ -776,21 +776,6 @@
 
     panel.appendChild(header);
 
-    // Body — centered Polish button
-    const body = document.createElement('div');
-    body.className = 'agf-clean-body';
-
-    const polishBtn = document.createElement('button');
-    polishBtn.className = 'agf-clean-polish';
-    polishBtn.textContent = '✨ Polish';
-    polishBtn.addEventListener('click', () => {
-      dismissErrors();
-      polishAndApply();
-    });
-    body.appendChild(polishBtn);
-
-    panel.appendChild(body);
-
     // Position and lifecycle
     floatEl = panel;
     document.body.appendChild(panel);
@@ -984,12 +969,6 @@
     applyAllBtn.textContent = 'Apply all fixes';
     applyAllBtn.addEventListener('click', () => applyAllCorrections(errors));
     footer.appendChild(applyAllBtn);
-
-    const polishBtn = document.createElement('button');
-    polishBtn.className = 'agf-polish';
-    polishBtn.textContent = '✨ Polish';
-    polishBtn.addEventListener('click', () => polishAndApply());
-    footer.appendChild(polishBtn);
     panel.appendChild(footer);
 
     return panel;
@@ -1110,33 +1089,14 @@
         '  padding: 10px 16px; border-top: 1px solid #334155;',
         '  position: sticky; bottom: 0; background: inherit;',
         '  border-radius: 0 0 12px 12px;',
-        '  display: flex; gap: 8px;',
         '}',
         '#' + PANEL_ID + ' .agf-apply-all {',
-        '  flex: 1; background: #2563eb; color: #fff;',
+        '  width: 100%; background: #2563eb; color: #fff;',
         '  border: none; border-radius: 8px; padding: 8px 16px;',
         '  font-size: 13px; font-weight: 600; cursor: pointer;',
         '  font-family: inherit;',
         '}',
         '#' + PANEL_ID + ' .agf-apply-all:hover { background: #1d4ed8; }',
-        '#' + PANEL_ID + ' .agf-polish {',
-        '  flex: 1; background: #7c3aed; color: #fff;',
-        '  border: none; border-radius: 8px; padding: 8px 16px;',
-        '  font-size: 13px; font-weight: 600; cursor: pointer;',
-        '  font-family: inherit;',
-        '}',
-        '#' + PANEL_ID + ' .agf-polish:hover { background: #6d28d9; }',
-        // Clean panel (no errors)
-        '#' + PANEL_ID + ' .agf-clean-body {',
-        '  padding: 16px; display: flex; justify-content: center;',
-        '}',
-        '#' + PANEL_ID + ' .agf-clean-polish {',
-        '  background: #7c3aed; color: #fff;',
-        '  border: none; border-radius: 8px; padding: 8px 24px;',
-        '  font-size: 13px; font-weight: 600; cursor: pointer;',
-        '  font-family: inherit;',
-        '}',
-        '#' + PANEL_ID + ' .agf-clean-polish:hover { background: #6d28d9; }',
         // Light mode overrides
         '@media (prefers-color-scheme: light) {',
         '  #' + PANEL_ID + ' {',
@@ -1159,13 +1119,6 @@
         '  #' + PANEL_ID + ' .agf-apply:hover { background: #cbd5e1; }',
         '  #' + PANEL_ID + ' .agf-footer {',
         '    border-top-color: #e2e8f0;',
-        '  }',
-        '  #' + PANEL_ID + ' .agf-polish {',
-        '    background: #7c3aed; color: #ffffff;',
-        '  }',
-        '  #' + PANEL_ID + ' .agf-polish:hover { background: #6d28d9; }',
-        '  #' + PANEL_ID + ' .agf-clean-polish {',
-        '    background: #7c3aed; color: #ffffff;',
         '  }',
         '}',
       ].join('\n')
