@@ -248,9 +248,9 @@ export function init() {
     clearTimeout(commandDebounce);
     commandDebounce = null;
 
-    // Prevent WhatsApp/chat platforms from sending when a ?/fix or ?/polish
+    // Prevent WhatsApp/chat platforms from sending when a ?/fix, ?/polish, or ?/check
     // command is pending — the Enter triggers our handler, not the platform's send.
-    if (/\?\/\b(fix|polish)\b\s*$/.test(text)) {
+    if (/\?\/\b(fix|polish|check)\b\s*$/.test(text)) {
       e.preventDefault();
       e.stopPropagation();
     }
@@ -294,7 +294,7 @@ export function init() {
             const fullCmd = matched.full;  // e.g., "?/polish"
             if (!currentValue.includes(cmdText)) return;
             try {
-              if (matched.name === 'fix' || matched.name === 'polish') {
+              if (matched.name === 'fix' || matched.name === 'polish' || matched.name === 'check') {
                 await COMMANDS[matched.name].run('', ta);
               } else {
                 await COMMANDS[matched.name].run('');
@@ -303,8 +303,8 @@ export function init() {
               showResultBadge(`Command failed: ${err.message}`);
             }
             // Replace the partial prefix with the full command in text (so user sees it resolved)
-            // and strip command afterward (skip for fix/polish — they replace content)
-            if (matched.name !== 'fix' && matched.name !== 'polish') {
+            // and strip command afterward (skip for fix/polish/check — they handle their own cleanup)
+            if (matched.name !== 'fix' && matched.name !== 'polish' && matched.name !== 'check') {
               const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
               const val = ta.value || ta.textContent || '';
               const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
@@ -328,7 +328,7 @@ export function init() {
         if (!currentValue.includes(cmdText)) return;
 
         try {
-          if (cmdName === 'fix' || cmdName === 'polish') {
+          if (cmdName === 'fix' || cmdName === 'polish' || cmdName === 'check') {
             await COMMANDS[cmdName].run(cmdArgs, ta);
           } else {
             await COMMANDS[cmdName].run(cmdArgs);
@@ -338,8 +338,8 @@ export function init() {
         }
 
         // Strip the command portion, keep text before it
-        // Skip for 'fix' and 'polish' — they already replaced the textarea content
-        if (cmdName !== 'fix' && cmdName !== 'polish') {
+        // Skip for 'fix', 'polish', and 'check' — they handle their own cleanup
+        if (cmdName !== 'fix' && cmdName !== 'polish' && cmdName !== 'check') {
           const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
           const val = ta.value || ta.textContent || '';
           const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();

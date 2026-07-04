@@ -1,10 +1,12 @@
-import { state, safeGetStorage } from './state.js';
+import { state, safeGetStorage, isTeams } from './state.js';
 import {
   showPendingBadge,
   removePendingBadge,
   showResultBadge,
+  showGreenCheck,
 } from './indicators.js';
 import { tryBeforeInput, applyFixCDP } from './apply-correction.js';
+import { highlightLiveDraft } from './live-draft.js';
 
 // -----------------------------------------------------------------------
 // Command system (?/ prefix)
@@ -45,6 +47,89 @@ export const COMMANDS = {
     run() {
       const lines = Object.entries(COMMANDS).map(([name, cmd]) => `?/${name} — ${cmd.help}`);
       showResultBadge(lines.join(' | '), 8000);
+    },
+  },
+  check: {
+    help: 'Manual grammar check for live-draft text',
+    async run(_args, ta) {
+      /** Strip the ?/check command from the input field */
+      function stripCheck(input) {
+        const val = input.value || input.textContent || '';
+        const idx = val.lastIndexOf('?/check');  // '?/check'.length === 7
+        const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + 7) : val).trimEnd();
+        if (input.tagName === 'TEXTAREA') {
+          input.value = cleaned;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+          input.textContent = cleaned;
+        }
+      }
+
+      // GUARD: disabled on WhatsApp and Teams
+      const isWhatsApp = location.hostname === 'web.whatsapp.com';
+      if (isWhatsApp || isTeams) {
+        showResultBadge('?/check is not available on this site');
+        stripCheck(ta);
+        return;
+      }
+
+      const value = ta.value || ta.textContent || '';
+      const cmdIdx = value.lastIndexOf('?/check');
+      const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
+
+      if (!draft || draft.length < state.minChars) {
+        showResultBadge('Too short (min ' + state.minChars + ' chars)');
+        stripCheck(ta);
+        return;
+      }
+
+      showPendingBadge('checking', 'Checking grammar...');
+      state.commandInFlight = true;
+
+      try {
+        const settings = await safeGetStorage({
+          grammarHost: '127.0.0.1',
+          grammarPort: 8766,
+        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
+        const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: draft, language: 'auto' }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        const data = await resp.json();
+
+        if (!resp.ok) {
+          showResultBadge('Grammar check failed: ' + (data?.detail || resp.status), 5000);
+          return;
+        }
+
+        if (data?.errors?.length > 0) {
+          highlightLiveDraft(ta, data.errors);
+        } else {
+          showGreenCheck(ta, draft);
+        }
+      } catch (e) {
+        let reason;
+        if (e.name === 'AbortError') {
+          reason = 'Request timed out';
+        } else if (e.message?.includes('Extension context invalidated')) {
+          reason = 'Extension reloaded — please reload this page';
+        } else {
+          reason = e.message;
+        }
+        showResultBadge('Check failed: ' + reason);
+      } finally {
+        removePendingBadge('checking');
+        state.commandInFlight = false;
+        state.skipLiveCheck = true;
+        stripCheck(ta);
+        // Let the input event settle before re-enabling live check
+        setTimeout(() => { state.skipLiveCheck = false; }, 100);
+      }
     },
   },
   fix: {
@@ -244,7 +329,7 @@ export async function handleCommand(text, ta = null) {
   }
 
   try {
-    if ((cmdName === 'fix' || cmdName === 'polish') && ta) {
+    if ((cmdName === 'fix' || cmdName === 'polish' || cmdName === 'check') && ta) {
       await cmd.run(args, ta);
     } else if (cmdName === 'fix') {
       // Called from submit handler — extract text before ?/fix and apply
