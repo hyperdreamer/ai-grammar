@@ -37,6 +37,8 @@
   let floatDismissTimer = null;
   let contextInvalidated = false;
   let polishAbortController = null; // abort in-flight polish on user edit
+  let commandBarEl = null;          // floating command bar
+  let fixAbortController = null;    // abort in-flight fix on user edit
 
   // MutationObserver for SPA navigation (editor appears / disappears)
   let domObserver = null;
@@ -307,6 +309,7 @@
 
   function detachEditor() {
     dismissErrors();
+    dismissCommandBar();
     if (editorMo) {
       editorMo.disconnect();
       editorMo = null;
@@ -418,9 +421,15 @@
 
     // Dismiss any floating panel (error or clean) on user edit
     dismissErrors();
+    dismissCommandBar();
 
-    // Abort in-flight polish
+    // Abort in-flight polish / fix
     abortPolish();
+    if (fixAbortController) {
+      fixAbortController.abort();
+      fixAbortController = null;
+      removePendingBadge('fixing');
+    }
   }
 
   // ── Grammar check pipeline ────────────────────────────────────────────
@@ -598,13 +607,27 @@
 
         // Dismiss panel + abort polish on any edit (safety net)
         dismissErrors();
+        dismissCommandBar();
         abortPolish();
+        if (fixAbortController) {
+          fixAbortController.abort();
+          fixAbortController = null;
+          removePendingBadge('fixing');
+        }
       }
 
       // Clear state if editor text was emptied externally
       if (liveTarget === editorElement && !currentText) {
         dismissErrors();
+        dismissCommandBar();
         liveTarget = null;
+      }
+
+      // Show/hide command bar based on text state
+      if (!currentText || currentText.length < minChars) {
+        dismissCommandBar();
+      } else if (!floatEl && !commandBarEl && !polishAbortController && !fixAbortController) {
+        showCommandBar();
       }
 
       if (!liveTarget || liveTarget !== editorElement) return;
@@ -670,6 +693,7 @@
 
   function showErrors(errors) {
     dismissErrors();
+    dismissCommandBar();
 
     if (!errors?.length) return;
 
@@ -725,6 +749,7 @@
   // ── Clean panel — shown when no errors found ──────────────────────────
   function showCleanPanel() {
     dismissErrors();
+    dismissCommandBar();
 
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
@@ -805,6 +830,113 @@
     panel.style.left = left + 'px';
     panel.style.bottom = 'auto';
     panel.style.right = 'auto';
+  }
+
+  // ── Floating command bar (Polish / Fix / Check Now) ────────────────────
+  const COMMAND_BAR_ID = 'ag-teams-cmds';
+
+  function showCommandBar() {
+    dismissCommandBar();
+
+    const bar = document.createElement('div');
+    bar.id = COMMAND_BAR_ID;
+
+    // Inline positioning
+    const s = bar.style;
+    s.position = 'fixed';
+    s.zIndex = '2147483645';
+    s.display = 'flex';
+    s.gap = '6px';
+    s.padding = '6px 10px';
+    s.borderRadius = '10px';
+    s.boxShadow = '0 4px 16px rgba(0,0,0,0.25)';
+    s.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    s.fontSize = '12px';
+    s.animation = 'agfadein 0.15s ease';
+
+    // Color — CSS rules via style element
+    const styleEl = document.createElement('style');
+    styleEl.textContent = [
+      '#' + COMMAND_BAR_ID + ' { background: #1e293b; color: #e2e8f0; }',
+      '#' + COMMAND_BAR_ID + ' .ag-cmd-btn {',
+      '  background: #334155; color: #e2e8f0; border: none;',
+      '  border-radius: 6px; padding: 5px 12px;',
+      '  font-size: 12px; font-weight: 500; cursor: pointer;',
+      '  font-family: inherit; white-space: nowrap;',
+      '  transition: background 0.15s;',
+      '}',
+      '#' + COMMAND_BAR_ID + ' .ag-cmd-btn:hover { background: #475569; }',
+      '#' + COMMAND_BAR_ID + ' .ag-cmd-polish:hover { background: #6d28d9; }',
+      '#' + COMMAND_BAR_ID + ' .ag-cmd-fix:hover { background: #2563eb; }',
+      '@media (prefers-color-scheme: light) {',
+      '  #' + COMMAND_BAR_ID + ' { background: #ffffff; color: #334155;',
+      '    box-shadow: 0 4px 16px rgba(0,0,0,0.1); }',
+      '  #' + COMMAND_BAR_ID + ' .ag-cmd-btn {',
+      '    background: #e2e8f0; color: #334155;',
+      '  }',
+      '  #' + COMMAND_BAR_ID + ' .ag-cmd-btn:hover { background: #cbd5e1; }',
+      '  #' + COMMAND_BAR_ID + ' .ag-cmd-polish {',
+      '    background: #7c3aed; color: #fff !important;',
+      '  }',
+      '  #' + COMMAND_BAR_ID + ' .ag-cmd-polish:hover { background: #6d28d9 !important; }',
+      '  #' + COMMAND_BAR_ID + ' .ag-cmd-fix {',
+      '    background: #2563eb; color: #fff !important;',
+      '  }',
+      '  #' + COMMAND_BAR_ID + ' .ag-cmd-fix:hover { background: #1d4ed8 !important; }',
+      '}',
+    ].join('\\n');
+    bar.appendChild(styleEl);
+
+    // Polish button
+    const polishBtn = document.createElement('button');
+    polishBtn.className = 'ag-cmd-btn ag-cmd-polish';
+    polishBtn.textContent = '✨ Polish';
+    polishBtn.addEventListener('click', () => {
+      dismissCommandBar();
+      polishAndApply();
+    });
+    bar.appendChild(polishBtn);
+
+    // Fix button
+    const fixBtn = document.createElement('button');
+    fixBtn.className = 'ag-cmd-btn ag-cmd-fix';
+    fixBtn.textContent = '🔧 Fix';
+    fixBtn.addEventListener('click', () => {
+      dismissCommandBar();
+      fixAndApply();
+    });
+    bar.appendChild(fixBtn);
+
+    // Check Now button
+    const checkBtn = document.createElement('button');
+    checkBtn.className = 'ag-cmd-btn';
+    checkBtn.textContent = '🔍 Check';
+    checkBtn.addEventListener('click', () => {
+      dismissCommandBar();
+      const text = editorGetPlainText();
+      if (text && text.length >= minChars) {
+        runGrammarCheck(text);
+      }
+    });
+    bar.appendChild(checkBtn);
+
+    document.body.appendChild(bar);
+    commandBarEl = bar;
+
+    // Position near the editor
+    if (editorElement && document.contains(editorElement)) {
+      const rect = editorElement.getBoundingClientRect();
+      const barRect = bar.getBoundingClientRect();
+      bar.style.top = Math.max(4, rect.top - barRect.height - 6) + 'px';
+      bar.style.left = Math.max(4, Math.min(rect.right - barRect.width, rect.left)) + 'px';
+    }
+  }
+
+  function dismissCommandBar() {
+    if (commandBarEl) {
+      if (document.contains(commandBarEl)) commandBarEl.remove();
+      commandBarEl = null;
+    }
   }
 
   // ── Build the error panel — Trusted-Types-safe (no innerHTML) ─────────
@@ -929,10 +1061,6 @@
     // Default position — bottom-right
     s.bottom = '16px';
     s.right = '16px';
-
-    // Color scheme (dark default)
-    s.background = '#1e293b';
-    s.color = '#f1f5f9';
   }
 
   // ── Panel CSS (class-based rules injected via <style> element) ────────
@@ -940,6 +1068,10 @@
     return (
       [
         '@keyframes agfadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }',
+        // Dark default color scheme
+        '#' + PANEL_ID + ' {',
+        '  background: #1e293b; color: #f1f5f9;',
+        '}',
         '#' + PANEL_ID + ' .agf-header {',
         '  display: flex; align-items: center; justify-content: space-between;',
         '  padding: 12px 16px; border-bottom: 1px solid #334155;',
@@ -1118,6 +1250,63 @@
       removePendingBadge('polishing');
       if (err.name === 'AbortError') return;
       showResultBadge('✗ Polish failed: ' + (err.message || 'error'), 'error', 4000);
+    }
+  }
+
+  /** Run grammar check and auto-apply all corrections. */
+  async function fixAndApply() {
+    if (!editorElement) return;
+    const text = editorGetPlainText();
+    if (!text || text.length < minChars) {
+      showResultBadge('Text too short to fix', 'error', 3000);
+      return;
+    }
+
+    // Abort any previous fix
+    if (fixAbortController) fixAbortController.abort();
+    fixAbortController = new AbortController();
+
+    showPendingBadge('fixing', 'Fixing…');
+    try {
+      const resp = await callGrammarCheck(text, fixAbortController.signal);
+      removePendingBadge('fixing');
+      fixAbortController = null;
+
+      if (!resp.ok) {
+        showResultBadge('✗ Fix failed: ' + (resp.error || 'unknown'), 'error', 4000);
+        return;
+      }
+      if (resp.aborted) return;
+
+      const errors = resp.errors || [];
+      if (!errors.length) {
+        showResultBadge('✓ No errors to fix');
+        return;
+      }
+
+      // Apply corrections bottom-up
+      let fixed = text;
+      const fixes = errors
+        .map(e => ({
+          start: Math.max(0, Number(e.start) || 0),
+          end: Math.min(fixed.length, Number(e.end) || fixed.length),
+          correction: e.correction || '',
+        }))
+        .filter(f => f.start < f.end && f.correction)
+        .sort((a, b) => b.start - a.start);
+
+      for (const f of fixes) {
+        fixed = fixed.slice(0, f.start) + f.correction + fixed.slice(f.end);
+      }
+
+      applyTextToEditor(fixed);
+      dismissErrors();
+      dismissCommandBar();
+    } catch (err) {
+      fixAbortController = null;
+      removePendingBadge('fixing');
+      if (err.name === 'AbortError') return;
+      showResultBadge('✗ Fix failed: ' + (err.message || 'error'), 'error', 4000);
     }
   }
 
