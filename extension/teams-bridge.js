@@ -236,35 +236,47 @@
   // extension cross-world communication channel.
 
   function injectMainWorldBridge() {
-    const scriptId = 'ag-cke-bridge-script';
-    if (document.getElementById(scriptId)) return; // already injected
+    if (window.__agCKEBridgeInjected) return;
+    window.__agCKEBridgeInjected = true;
 
+    // Use chrome.scripting.executeScript from the background worker
+    // to inject code into the MAIN world.  This bypasses page CSP
+    // (Teams blocks inline scripts and blob URLs).
+    chrome.runtime.sendMessage(
+      { type: 'ag-inject-cke-bridge' },
+      (response) => {
+        if (response?.ok) {
+          log('Main-world CKEditor bridge injected (via background SW)');
+        } else {
+          log('Main-world bridge injection failed:', response?.error || 'unknown');
+          // Fall back to blob URL approach as last resort
+          fallbackBlobInjection();
+        }
+      }
+    );
+  }
+
+  function fallbackBlobInjection() {
+    const scriptId = 'ag-cke-bridge-script-fallback';
+    if (document.getElementById(scriptId)) return;
+    const bridgeCode = (
+      '(function(){' +
+      'if(window.__agCKEBridge)return;window.__agCKEBridge=true;' +
+      'var POLL_MS=500;(function poll(){' +
+      'var el=document.querySelector(\'.ck-editor__editable[contenteditable="true"]\');' +
+      'var instance=el&&el.ckeditorInstance;' +
+      'if(!instance){setTimeout(poll,POLL_MS);return;}' +
+      'try{instance.model.document.on(\'change:data\',function(){' +
+      'try{window.postMessage({source:"ag-cke-bridge",type:"change"},"*");}catch(e){}' +
+      '});}catch(e){setTimeout(poll,POLL_MS);}' +
+      '})();})()'
+    );
+    const blob = new Blob([bridgeCode], { type: 'application/javascript' });
     const script = document.createElement('script');
     script.id = scriptId;
-    script.textContent = `
-(function() {
-  if (window.__agCKEBridge) return;
-  window.__agCKEBridge = true;
-  var POLL_MS = 500;
-  (function poll() {
-    var el = document.querySelector('.ck-editor__editable[contenteditable="true"]');
-    var instance = el && el.ckeditorInstance;
-    if (!instance) { setTimeout(poll, POLL_MS); return; }
-    try {
-      instance.model.document.on('change:data', function() {
-        try {
-          window.postMessage({source:'ag-cke-bridge', type:'change'}, '*');
-        } catch(e) {}
-      });
-    } catch(e) {
-      // Instance not ready yet — retry
-      setTimeout(poll, POLL_MS);
-    }
-  })();
-})();
-`;
+    script.src = URL.createObjectURL(blob);
+    script.onload = () => log('Fallback blob bridge injected');
     (document.head || document.documentElement).appendChild(script);
-    log('Main-world CKEditor bridge injected');
   }
 
   function setupCKEditorBridge() {

@@ -253,3 +253,35 @@ async function detachDebugger(tabId) {
     chrome.debugger.detach({ tabId }, () => resolve());
   });
 }
+
+// ── CKEditor main-world bridge injection ──────────────────────────────
+// teams-bridge.js requests injection so the bridge code runs in the MAIN
+// world (where ckeditorInstance lives) without being blocked by page CSP.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'ag-inject-cke-bridge' && sender.tab?.id) {
+    chrome.scripting.executeScript({
+      target: { tabId: sender.tab.id },
+      world: 'MAIN',
+      func: () => {
+        if (window.__agCKEBridge) return;
+        window.__agCKEBridge = true;
+        const POLL_MS = 500;
+        (function poll() {
+          const el = document.querySelector('.ck-editor__editable[contenteditable="true"]');
+          const instance = el && el.ckeditorInstance;
+          if (!instance) { setTimeout(poll, POLL_MS); return; }
+          try {
+            instance.model.document.on('change:data', function() {
+              try {
+                window.postMessage({source:'ag-cke-bridge', type:'change'}, '*');
+              } catch(e) {}
+            });
+          } catch(e) {
+            setTimeout(poll, POLL_MS);
+          }
+        })();
+      }
+    }).then(() => sendResponse({ok: true})).catch(e => sendResponse({ok: false, error: e.message}));
+    return true; // keep channel open for async response
+  }
+});
