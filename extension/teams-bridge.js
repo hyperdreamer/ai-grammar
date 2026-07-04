@@ -28,6 +28,7 @@
   let editorElement = null; // the .ck-editor__editable DOM element
   let lastEditTime = 0;
   let liveTarget = null;
+  let lastKnownText = ''; // polling fallback — compare text to detect changes
   let checkDelay = CHECK_DELAY_DEFAULT;
   let minChars = MIN_CHARS_DEFAULT;
   let abortController = null;
@@ -40,6 +41,7 @@
   let domObserver = null;
   let ckeWatchInterval = null;
   let changeDataUnbind = null;
+  let ckeBridgeMsgHandler = null; // postMessage handler from main-world CKEditor bridge
 
   // ── Logging ───────────────────────────────────────────────────────────
   const log = (...args) => console.debug('[AI Grammar Teams]', ...args);
@@ -169,9 +171,13 @@
     editorElement = element;
     log('CKEditor attached');
 
-    // Use MutationObserver — CKEditor 5 prevents beforeinput (calling
-    // preventDefault), so the browser never fires the native 'input' event.
-    // DOM mutations are the only reliable cross-world signal.
+    // ── Layer 1: MutationObserver (fast path for some CKEditor configs) ──
+    // CKEditor 5 prevents beforeinput, so the native 'input' event never
+    // fires.  DOM mutations are one possible signal, but CKEditor's own
+    // internal MutationObserver rapidly reverts ViewRenderer-external DOM
+    // changes (https://ckeditor.com/docs/ckeditor5/latest/api/module_engine_view_observer_mutationobserver-MutationObserver.html),
+    // so this observer may not fire reliably in all CKEditor configurations.
+    // Layer 2 (polling fallback) handles the general case.
     editorMo = new MutationObserver(() => {
       onEditorChange();
     });
@@ -181,6 +187,18 @@
       subtree: true,
     });
     log('CKEditor MutationObserver active');
+
+    // ── Layer 2: Main-world CKEditor event bridge ───────────────────────
+    // Injects a tiny script into the MAIN world that listens for CKEditor's
+    // internal model change event and forwards it to the content script via
+    // window.postMessage.  This is more responsive than polling and doesn't
+    // depend on DOM mutation observability.
+    setupCKEditorBridge();
+
+    // ── Initialize polling fallback state ───────────────────────────────
+    lastKnownText = editorGetPlainText() || '';
+    liveTarget = element;
+    lastEditTime = Date.now();
   }
 
   function detachEditor() {
@@ -193,6 +211,7 @@
       try { changeDataUnbind(); } catch { /* ignore */ }
       changeDataUnbind = null;
     }
+    teardownCKEditorBridge();
     // Abort in-flight check
     if (abortController) {
       abortController.abort();
@@ -202,7 +221,73 @@
     editorElement = null;
     liveTarget = null;
     lastEditTime = 0;
+    lastKnownText = '';
     log('CKEditor detached');
+  }
+
+  // ── Main-world CKEditor event bridge ──────────────────────────────────
+  //
+  // CKEditor 5's editable element and its ckeditorInstance live in the
+  // MAIN world.  Content scripts run in an ISOLATED world and cannot
+  // access window.ckeditorInstance directly.  We inject a tiny <script>
+  // into the page (which executes in the MAIN world) that listens for
+  // CKEditor's internal model `change:data` event and forwards it to
+  // the content script via window.postMessage — the standard Chrome
+  // extension cross-world communication channel.
+
+  function injectMainWorldBridge() {
+    const scriptId = 'ag-cke-bridge-script';
+    if (document.getElementById(scriptId)) return; // already injected
+
+    const script = document.createElement('script');
+    script.id = scriptId;
+    script.textContent = `
+(function() {
+  if (window.__agCKEBridge) return;
+  window.__agCKEBridge = true;
+  var POLL_MS = 500;
+  (function poll() {
+    var el = document.querySelector('.ck-editor__editable[contenteditable="true"]');
+    var instance = el && el.ckeditorInstance;
+    if (!instance) { setTimeout(poll, POLL_MS); return; }
+    try {
+      instance.model.document.on('change:data', function() {
+        try {
+          window.postMessage({source:'ag-cke-bridge', type:'change'}, '*');
+        } catch(e) {}
+      });
+    } catch(e) {
+      // Instance not ready yet — retry
+      setTimeout(poll, POLL_MS);
+    }
+  })();
+})();
+`;
+    (document.head || document.documentElement).appendChild(script);
+    log('Main-world CKEditor bridge injected');
+  }
+
+  function setupCKEditorBridge() {
+    teardownCKEditorBridge();
+    ckeBridgeMsgHandler = (event) => {
+      // Only accept messages from our own window (not iframes)
+      if (event.source !== window) return;
+      if (event.data && event.data.source === 'ag-cke-bridge' && event.data.type === 'change') {
+        onEditorChange();
+      }
+    };
+    window.addEventListener('message', ckeBridgeMsgHandler);
+    injectMainWorldBridge();
+  }
+
+  function teardownCKEditorBridge() {
+    if (ckeBridgeMsgHandler) {
+      window.removeEventListener('message', ckeBridgeMsgHandler);
+      ckeBridgeMsgHandler = null;
+    }
+    // Remove the injected bridge script from the page DOM
+    const scriptEl = document.getElementById('ag-cke-bridge-script');
+    if (scriptEl) scriptEl.remove();
   }
 
   // ── Editor change handler ─────────────────────────────────────────────
@@ -210,6 +295,9 @@
     if (!editorElement) return;
     lastEditTime = Date.now();
     liveTarget = editorElement;
+    // Keep polling-fallback state in sync so the idle-poll loop
+    // doesn't redundantly re-detect this same change on the next tick.
+    lastKnownText = editorGetPlainText() || '';
     if (lastEditTime % 5000 < 100) log('onEditorChange: idle timer reset');
   }
 
@@ -307,21 +395,30 @@
 
   // ── Idle-timer poll ───────────────────────────────────────────────────
   let pollIntervalId = null;
-  let lastKnownText = '';  // track text content for change detection
 
+  let pollTickCount = 0;
   function startPolling() {
     if (pollIntervalId) return;
     pollIntervalId = setInterval(() => {
+      pollTickCount++;
       if (!editorElement || !document.contains(editorElement)) {
+        if (pollTickCount <= 3) log('poll tick #' + pollTickCount + ': no editorElement, skipping');
         liveTarget = null;
         return;
       }
 
       const currentText = editorGetPlainText();
 
-      // Detect text changes by comparing content — more reliable than
-      // MutationObserver with CKEditor 5's async rendering pipeline.
+      // Log first few ticks for debugging
+      if (pollTickCount <= 5 || pollTickCount % 20 === 0) {
+        log('poll #' + pollTickCount + ': text="' + currentText.substring(0, 40) + '" len=' + currentText.length + ' lastLen=' + lastKnownText.length);
+      }
+
+      // Detect text changes by comparing content
       if (currentText !== lastKnownText) {
+        if (currentText.length > 0 || lastKnownText.length > 0) {
+          log('poll #' + pollTickCount + ': TEXT CHANGED! old="' + lastKnownText.substring(0, 30) + '" new="' + currentText.substring(0, 30) + '"');
+        }
         lastKnownText = currentText;
         liveTarget = editorElement;
         lastEditTime = Date.now();
@@ -336,13 +433,18 @@
       if (!liveTarget || liveTarget !== editorElement) return;
 
       const elapsed = Date.now() - lastEditTime;
-      if (elapsed < checkDelay) return;
+      if (elapsed < checkDelay) {
+        if (pollTickCount % 10 === 0) log('poll #' + pollTickCount + ': idle=' + Math.round(elapsed/1000) + 's/' + Math.round(checkDelay/1000) + 's');
+        return;
+      }
 
       // Capture what we need before resetting state
       const text = currentText;
       liveTarget = null; // prevent re-triggering while check is in flight
+      log('poll #' + pollTickCount + ': FIRING GRAMMAR CHECK for ' + text.length + ' chars');
 
       if (text.length < minChars) {
+        log('poll #' + pollTickCount + ': text too short (' + text.length + ' < ' + minChars + '), dismissing');
         dismissErrors();
         return;
       }
