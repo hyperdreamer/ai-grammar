@@ -36,6 +36,7 @@
   let floatEl = null;
   let floatDismissTimer = null;
   let contextInvalidated = false;
+  let polishAbortController = null; // abort in-flight polish on user edit
 
   // MutationObserver for SPA navigation (editor appears / disappears)
   let domObserver = null;
@@ -45,7 +46,7 @@
 
   // ── Progress badges (vertical stack, bottom-right) ────────────────────
   const badgeCounters = { checking: 0, fixing: 0 };
-  const badgeLabels = { checking: 'Checking grammar…', fixing: 'Fixing…' };
+  const badgeLabels = { checking: 'Checking grammar…', fixing: 'Fixing…', polishing: 'Polishing…' };
   const activeBadges = new Map();
   let resultBadgeTimer = null;
 
@@ -414,6 +415,12 @@
     // doesn't redundantly re-detect this same change on the next tick.
     lastKnownText = editorGetPlainText() || '';
     if (lastEditTime % 5000 < 100) log('onEditorChange: idle timer reset');
+
+    // Dismiss any floating panel (error or clean) on user edit
+    dismissErrors();
+
+    // Abort in-flight polish
+    abortPolish();
   }
 
   // ── Grammar check pipeline ────────────────────────────────────────────
@@ -424,6 +431,13 @@
    */
   async function runGrammarCheck(text) {
     if (!editorElement || !document.contains(editorElement)) return;
+
+    // Don't start a grammar check while a polish is in flight —
+    // only user editing should terminate the polish.
+    if (polishAbortController) {
+      log('Skipping grammar check — polish in progress');
+      return;
+    }
 
     // Abort any previous in-flight check
     if (abortController) {
@@ -462,7 +476,7 @@
       } else {
         log('Check complete: 0 errors');
         showResultBadge('✓ No errors', 'done', 3000);
-        dismissErrors();
+        showCleanPanel();
       }
     } catch (err) {
       // Superseded — ignore all errors (including AbortError)
@@ -473,6 +487,40 @@
         showResultBadge('✗ ' + (err.message || 'Check failed'), 'error', 4000);
         log('Grammar check error:', err);
       }
+    }
+  }
+
+  /** Call the /polish backend. */
+  async function callPolish(text, signal) {
+    const settings = await safeGetStorage({
+      grammarHost: '127.0.0.1',
+      grammarPort: 8766,
+      grammarEnabled: true,
+    });
+    if (!settings.grammarEnabled) {
+      return { ok: false, error: 'Grammar checker is disabled' };
+    }
+    const url = `http://${settings.grammarHost}:${settings.grammarPort}/polish?_=${Date.now()}`;
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      if (signal) signal.addEventListener('abort', () => controller.abort());
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, language: settings.grammarLanguage || 'auto' }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => '');
+        return { ok: false, error: `Backend error (${resp.status}): ${errBody.slice(0, 200)}` };
+      }
+      const data = await resp.json();
+      return { ok: true, polished: data.polished || '', model: data.model || '' };
+    } catch (e) {
+      if (e.name === 'AbortError') return { ok: true, aborted: true };
+      return { ok: false, error: e.message };
     }
   }
 
@@ -547,6 +595,10 @@
         lastKnownText = currentText;
         liveTarget = editorElement;
         lastEditTime = Date.now();
+
+        // Dismiss panel + abort polish on any edit (safety net)
+        dismissErrors();
+        abortPolish();
       }
 
       // Clear state if editor text was emptied externally
@@ -661,6 +713,96 @@
     }
   }
 
+  /** Abort any in-flight polish operation. */
+  function abortPolish() {
+    if (polishAbortController) {
+      polishAbortController.abort();
+      polishAbortController = null;
+      removePendingBadge('polishing');
+    }
+  }
+
+  // ── Clean panel — shown when no errors found ──────────────────────────
+  function showCleanPanel() {
+    dismissErrors();
+
+    const panel = document.createElement('div');
+    panel.id = PANEL_ID;
+    setPanelStyles(panel);
+
+    const styleEl = document.createElement('style');
+    styleEl.textContent = [
+      '#' + PANEL_ID + ' .agf-clean-body {',
+      '  display: flex; align-items: center; gap: 12px;',
+      '  padding: 14px 16px;',
+      '}',
+      '#' + PANEL_ID + ' .agf-clean-check {',
+      '  width: 28px; height: 28px; border-radius: 50%;',
+      '  background: #16a34a; color: #fff;',
+      '  display: flex; align-items: center; justify-content: center;',
+      '  font-size: 16px; flex-shrink: 0;',
+      '}',
+      '#' + PANEL_ID + ' .agf-clean-text {',
+      '  font-size: 14px; font-weight: 600; color: inherit;',
+      '}',
+      '#' + PANEL_ID + ' .agf-clean-polish {',
+      '  margin-left: auto; background: #7c3aed; color: #fff;',
+      '  border: none; border-radius: 8px; padding: 6px 14px;',
+      '  font-size: 13px; font-weight: 600; cursor: pointer;',
+      '  font-family: inherit; white-space: nowrap;',
+      '}',
+      '#' + PANEL_ID + ' .agf-clean-polish:hover { background: #6d28d9; }',
+      '@media (prefers-color-scheme: light) {',
+      '  #' + PANEL_ID + ' .agf-clean-polish {',
+      '    background: #7c3aed; color: #ffffff;',
+      '  }',
+      '}',
+    ].join('\\n');
+    panel.appendChild(styleEl);
+
+    const body = document.createElement('div');
+    body.className = 'agf-clean-body';
+
+    const checkEl = document.createElement('div');
+    checkEl.className = 'agf-clean-check';
+    checkEl.textContent = '✓';
+    body.appendChild(checkEl);
+
+    const textEl = document.createElement('span');
+    textEl.className = 'agf-clean-text';
+    textEl.textContent = 'No errors found';
+    body.appendChild(textEl);
+
+    const polishBtn = document.createElement('button');
+    polishBtn.className = 'agf-clean-polish';
+    polishBtn.textContent = '✨ Polish';
+    polishBtn.addEventListener('click', () => {
+      dismissErrors();
+      polishAndApply();
+    });
+    body.appendChild(polishBtn);
+
+    panel.appendChild(body);
+    floatEl = panel;
+    document.body.appendChild(panel);
+
+    if (editorElement && document.contains(editorElement)) {
+      positionPanel(panel, editorElement);
+    }
+
+    const reposition = () => {
+      if (!floatEl || !document.contains(floatEl)) return;
+      if (editorElement && document.contains(editorElement)) {
+        positionPanel(floatEl, editorElement);
+      }
+    };
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+    panel._agReposition = reposition;
+
+    floatDismissTimer = setTimeout(dismissErrors, AUTO_DISMISS_MS);
+  }
+
   function positionPanel(panel, anchor) {
     const gap = 8;
     const anchorRect = anchor.getBoundingClientRect();
@@ -726,6 +868,12 @@
     applyAllBtn.textContent = 'Apply all fixes';
     applyAllBtn.addEventListener('click', () => applyAllCorrections(errors));
     footer.appendChild(applyAllBtn);
+
+    const polishBtn = document.createElement('button');
+    polishBtn.className = 'agf-polish';
+    polishBtn.textContent = '✨ Polish';
+    polishBtn.addEventListener('click', () => polishAndApply());
+    footer.appendChild(polishBtn);
     panel.appendChild(footer);
 
     return panel;
@@ -846,14 +994,22 @@
         '  padding: 10px 16px; border-top: 1px solid #334155;',
         '  position: sticky; bottom: 0; background: inherit;',
         '  border-radius: 0 0 12px 12px;',
+        '  display: flex; gap: 8px;',
         '}',
         '#' + PANEL_ID + ' .agf-apply-all {',
-        '  width: 100%; background: #2563eb; color: #fff;',
+        '  flex: 1; background: #2563eb; color: #fff;',
         '  border: none; border-radius: 8px; padding: 8px 16px;',
         '  font-size: 13px; font-weight: 600; cursor: pointer;',
         '  font-family: inherit;',
         '}',
         '#' + PANEL_ID + ' .agf-apply-all:hover { background: #1d4ed8; }',
+        '#' + PANEL_ID + ' .agf-polish {',
+        '  flex: 1; background: #7c3aed; color: #fff;',
+        '  border: none; border-radius: 8px; padding: 8px 16px;',
+        '  font-size: 13px; font-weight: 600; cursor: pointer;',
+        '  font-family: inherit;',
+        '}',
+        '#' + PANEL_ID + ' .agf-polish:hover { background: #6d28d9; }',
         // Light mode overrides
         '@media (prefers-color-scheme: light) {',
         '  #' + PANEL_ID + ' {',
@@ -877,6 +1033,10 @@
         '  #' + PANEL_ID + ' .agf-footer {',
         '    border-top-color: #e2e8f0;',
         '  }',
+        '  #' + PANEL_ID + ' .agf-polish {',
+        '    background: #7c3aed; color: #ffffff;',
+        '  }',
+        '  #' + PANEL_ID + ' .agf-polish:hover { background: #6d28d9; }',
         '}',
       ].join('\n')
     );
@@ -920,6 +1080,47 @@
     }
 
     applyTextToEditor(text);
+  }
+
+  /** Polish the editor text and apply the result. */
+  async function polishAndApply() {
+    if (!editorElement) return;
+    const text = editorGetPlainText();
+    if (!text || text.length < 5) {
+      showResultBadge('Text too short to polish', 'error', 3000);
+      return;
+    }
+
+    // Abort any previous polish
+    abortPolish();
+    polishAbortController = new AbortController();
+
+    showPendingBadge('polishing', 'Polishing…');
+    try {
+      const resp = await callPolish(text, polishAbortController.signal);
+      removePendingBadge('polishing');
+      polishAbortController = null;
+
+      if (!resp.ok) {
+        showResultBadge('✗ Polish failed: ' + (resp.error || 'unknown'), 'error', 4000);
+        return;
+      }
+      if (resp.aborted) return;
+
+      const polished = resp.polished;
+      if (!polished || polished === text) {
+        showResultBadge('✓ Text already polished');
+        return;
+      }
+
+      applyTextToEditor(polished);
+      dismissErrors();
+    } catch (err) {
+      polishAbortController = null;
+      removePendingBadge('polishing');
+      if (err.name === 'AbortError') return;
+      showResultBadge('✗ Polish failed: ' + (err.message || 'error'), 'error', 4000);
+    }
   }
 
   /**
