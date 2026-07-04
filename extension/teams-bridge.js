@@ -824,7 +824,7 @@
       // Keep scanning even after attachment — React may reconcile the
       // CKEditor away and the DOM observer's return→break may miss
       // re-additions within the same mutation batch.
-      if (!editorElement) {
+      if (!editorElement || !document.contains(editorElement)) {
         const found = findCKEditorElement();
         if (found) {
           try {
