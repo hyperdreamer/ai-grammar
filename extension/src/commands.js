@@ -12,6 +12,28 @@ import { highlightLiveDraft } from './live-draft.js';
 // Command system (?/ prefix)
 // -----------------------------------------------------------------------
 
+/**
+ * Strip a command tag (e.g., "?/fix", "?/polish") from the textarea.
+ * Dispatches an input event with skipLiveCheck so the live draft checker
+ * won't fire on the cleaned text.  Also cancels any pending live draft
+ * so the poller doesn't re-check the stripped text later.
+ */
+function stripCommand(cmd, ta) {
+  const val = ta.value || ta.textContent || '';
+  const idx = val.lastIndexOf(cmd);
+  if (idx < 0) return;
+  const cleaned = val.slice(0, idx) + val.slice(idx + cmd.length);
+  state.skipLiveCheck = true;
+  state.cancelLiveDraft?.();
+  if (ta.tagName === 'TEXTAREA') {
+    ta.value = cleaned;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  } else {
+    ta.textContent = cleaned;
+  }
+  state.skipLiveCheck = false;
+}
+
 export const COMMAND_PREFIX = '?/';
 export const COMMANDS = {
   off: {
@@ -46,7 +68,7 @@ export const COMMANDS = {
     help: 'Show available commands',
     run() {
       const lines = Object.entries(COMMANDS).map(([name, cmd]) => `?/${name} — ${cmd.help}`);
-      showResultBadge(lines.join(' | '), 8000);
+      showResultBadge(lines.join('<br>'), 12000);
     },
   },
   check: {
@@ -84,12 +106,14 @@ export const COMMANDS = {
         return;
       }
 
-      showPendingBadge('checking', 'Checking grammar...');
-      state.commandInFlight = true;
-      // Cancel any pending live-draft auto-check so it doesn't
-      // overwrite the ?/check results when it later completes.
+      // Cancel any pending live-draft auto-check BEFORE setting commandInFlight,
+      // so abortLiveDraftCheck() can remove the live draft's pending badge.
+      // If commandInFlight is true, abortLiveDraftCheck skips badge removal.
       state.cancelLiveDraft?.();
       state.activeCheckController?.abort();
+
+      showPendingBadge('checking', 'Checking grammar...');
+      state.commandInFlight = true;
 
       try {
         const settings = await safeGetStorage({
@@ -115,8 +139,16 @@ export const COMMANDS = {
         }
 
         if (data?.errors?.length > 0) {
+          // Strip command text only when results are actually shown.
+          // On failure, the user should still see their ?/check command.
+          state.skipLiveCheck = true;
+          stripCheck(ta);
+          state.skipLiveCheck = false;
           highlightLiveDraft(ta, data.errors);
         } else {
+          state.skipLiveCheck = true;
+          stripCheck(ta);
+          state.skipLiveCheck = false;
           showGreenCheck(ta, draft);
         }
       } catch (e) {
@@ -133,9 +165,6 @@ export const COMMANDS = {
         removePendingBadge('checking');
         state.commandInFlight = false;
         state.activeCheckController = null;
-        state.skipLiveCheck = true;
-        stripCheck(ta);  // dispatches input event synchronously — blocked by skipLiveCheck
-        state.skipLiveCheck = false;  // re-enable immediately — next real keystroke clears highlights
       }
     },
   },
@@ -147,6 +176,7 @@ export const COMMANDS = {
       const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
       if (!draft || draft.length < state.minChars) {
         showResultBadge('No text to fix (need at least ' + state.minChars + ' characters)');
+        stripCommand('?/fix', ta);
         return;
       }
       showPendingBadge('fixing', 'Fixing...');
@@ -169,6 +199,7 @@ export const COMMANDS = {
         removePendingBadge('fixing');
         if (!data?.errors?.length) {
           showResultBadge('✓ No corrections needed');
+          stripCommand('?/fix', ta);
           return;
         }
         // Apply corrections bottom-up to preserve offsets
@@ -235,6 +266,7 @@ export const COMMANDS = {
       const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
       if (!draft || draft.length < state.minChars) {
         showResultBadge('No text to polish (need at least ' + state.minChars + ' characters)');
+        stripCommand('?/polish', ta);
         return;
       }
       showPendingBadge('polishing', 'Polishing...');
@@ -262,6 +294,7 @@ export const COMMANDS = {
         const polished = data.polished;
         if (!polished || polished === draft) {
           showResultBadge('✓ Text already polished');
+          stripCommand('?/polish', ta);
           return;
         }
         // Replace textarea content with polished text

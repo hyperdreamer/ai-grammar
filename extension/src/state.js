@@ -83,6 +83,7 @@ export const state = {
   cancelLiveDraft: null,
   commandInFlight: false,
   skipLiveCheck: false,   // set during fix/polish to prevent re-triggering live draft
+  replacingCommand: false, // set during partial → full command replacement
 
   // Track whether the extension context has been invalidated (MV3 service worker
   // termination / extension reload). Once invalidated, chrome.* APIs throw
@@ -138,11 +139,21 @@ try {
  * Content scripts can outlive the service worker; storage should work
  * independently, but Chrome sometimes throws this error after an
  * extension reload or aggressive SW termination.
+ *
+ * chrome.storage.sync.get() can hang indefinitely in fresh Chromium
+ * profiles (the sync backend never initializes).  We race it against
+ * a 2-second timeout and return the caller's defaults on timeout.
  */
 export async function safeGetStorage(defaults) {
   if (state.contextInvalidated) return defaults;
   try {
-    return await chrome.storage.sync.get(defaults);
+    return await Promise.race([
+      chrome.storage.sync.get(defaults),
+      new Promise(resolve => setTimeout(() => {
+        console.debug('[AI Grammar] chrome.storage.sync.get() timed out, using defaults');
+        resolve(defaults);
+      }, 2000)),
+    ]);
   } catch (e) {
     if (e.message?.includes('Extension context invalidated')) {
       state.contextInvalidated = true;

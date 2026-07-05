@@ -38,7 +38,6 @@ function buildBadgeHTML(category) {
 export function showPendingBadge(category, label) {
   state.badgeCounters[category]++;
   state.badgeLabels[category] = label;
-  if (state.resultBadgeTimer) { clearTimeout(state.resultBadgeTimer); state.resultBadgeTimer = null; }
 
   const stack = ensureBadgeStack();
   const key = `pending:${category}`;

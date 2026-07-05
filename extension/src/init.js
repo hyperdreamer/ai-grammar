@@ -264,6 +264,11 @@ export function init() {
     const ta = e.target;
     if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
 
+    // Skip command detection when the input event was dispatched by our own
+    // partial→full command replacement — prevents double-fire (e.g., ?/c
+    // replaced to ?/check then re-matched as a full command).
+    if (state.replacingCommand) return;
+
     clearTimeout(commandDebounce);
     const value = ta.value || ta.textContent || '';
 
@@ -293,6 +298,28 @@ export function init() {
             const currentValue = ta.value || ta.textContent || '';
             const fullCmd = matched.full;  // e.g., "?/polish"
             if (!currentValue.includes(cmdText)) return;
+
+            // Replace the partial prefix with the full command in the
+            // textarea BEFORE calling the handler — so commands like
+            // ?/check that strip themselves by exact name can find it.
+            if (matched.name === 'fix' || matched.name === 'polish' || matched.name === 'check') {
+              const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
+              const val = ta.value || ta.textContent || '';
+              if (idx >= 0) {
+                const replaced = val.slice(0, idx) + fullCmd + val.slice(idx + cmdText.length);
+                state.skipLiveCheck = true;
+                state.replacingCommand = true;
+                if (ta.tagName === 'TEXTAREA') {
+                  ta.value = replaced;
+                  ta.dispatchEvent(new Event('input', { bubbles: true }));
+                } else {
+                  ta.textContent = replaced;
+                }
+                state.replacingCommand = false;
+                state.skipLiveCheck = false;
+              }
+            }
+
             try {
               if (matched.name === 'fix' || matched.name === 'polish' || matched.name === 'check') {
                 await COMMANDS[matched.name].run('', ta);
@@ -302,8 +329,7 @@ export function init() {
             } catch (err) {
               showResultBadge(`Command failed: ${err.message}`);
             }
-            // Replace the partial prefix with the full command in text (so user sees it resolved)
-            // and strip command afterward (skip for fix/polish/check — they handle their own cleanup)
+            // Strip command afterward (skip for fix/polish/check — they handle their own cleanup)
             if (matched.name !== 'fix' && matched.name !== 'polish' && matched.name !== 'check') {
               const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
               const val = ta.value || ta.textContent || '';

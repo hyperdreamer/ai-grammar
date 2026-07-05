@@ -67,6 +67,8 @@
     commandInFlight: false,
     skipLiveCheck: false,
     // set during fix/polish to prevent re-triggering live draft
+    replacingCommand: false,
+    // set during partial → full command replacement
     // Track whether the extension context has been invalidated (MV3 service worker
     // termination / extension reload). Once invalidated, chrome.* APIs throw
     // "Extension context invalidated" — we fall back to hardcoded defaults.
@@ -110,7 +112,13 @@
   async function safeGetStorage(defaults) {
     if (state.contextInvalidated) return defaults;
     try {
-      return await chrome.storage.sync.get(defaults);
+      return await Promise.race([
+        chrome.storage.sync.get(defaults),
+        new Promise((resolve) => setTimeout(() => {
+          console.debug("[AI Grammar] chrome.storage.sync.get() timed out, using defaults");
+          resolve(defaults);
+        }, 2e3))
+      ]);
     } catch (e) {
       if (e.message?.includes("Extension context invalidated")) {
         state.contextInvalidated = true;
@@ -300,10 +308,6 @@
   function showPendingBadge(category, label) {
     state.badgeCounters[category]++;
     state.badgeLabels[category] = label;
-    if (state.resultBadgeTimer) {
-      clearTimeout(state.resultBadgeTimer);
-      state.resultBadgeTimer = null;
-    }
     const stack = ensureBadgeStack();
     const key = `pending:${category}`;
     if (state.activeBadges.has(key)) {
@@ -1849,6 +1853,21 @@
   }
 
   // src/commands.js
+  function stripCommand(cmd, ta) {
+    const val = ta.value || ta.textContent || "";
+    const idx = val.lastIndexOf(cmd);
+    if (idx < 0) return;
+    const cleaned = val.slice(0, idx) + val.slice(idx + cmd.length);
+    state.skipLiveCheck = true;
+    state.cancelLiveDraft?.();
+    if (ta.tagName === "TEXTAREA") {
+      ta.value = cleaned;
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
+    } else {
+      ta.textContent = cleaned;
+    }
+    state.skipLiveCheck = false;
+  }
   var COMMANDS = {
     off: {
       help: "Disable grammar checking",
@@ -1882,7 +1901,7 @@
       help: "Show available commands",
       run() {
         const lines = Object.entries(COMMANDS).map(([name, cmd]) => `?/${name} \u2014 ${cmd.help}`);
-        showResultBadge(lines.join(" | "), 8e3);
+        showResultBadge(lines.join("<br>"), 12e3);
       }
     },
     check: {
@@ -1914,10 +1933,10 @@
           stripCheck(ta);
           return;
         }
-        showPendingBadge("checking", "Checking grammar...");
-        state.commandInFlight = true;
         state.cancelLiveDraft?.();
         state.activeCheckController?.abort();
+        showPendingBadge("checking", "Checking grammar...");
+        state.commandInFlight = true;
         try {
           const settings = await safeGetStorage({
             grammarHost: "127.0.0.1",
@@ -1939,8 +1958,14 @@
             return;
           }
           if (data?.errors?.length > 0) {
+            state.skipLiveCheck = true;
+            stripCheck(ta);
+            state.skipLiveCheck = false;
             highlightLiveDraft(ta, data.errors);
           } else {
+            state.skipLiveCheck = true;
+            stripCheck(ta);
+            state.skipLiveCheck = false;
             showGreenCheck(ta, draft);
           }
         } catch (e) {
@@ -1957,9 +1982,6 @@
           removePendingBadge("checking");
           state.commandInFlight = false;
           state.activeCheckController = null;
-          state.skipLiveCheck = true;
-          stripCheck(ta);
-          state.skipLiveCheck = false;
         }
       }
     },
@@ -1971,6 +1993,7 @@
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
         if (!draft || draft.length < state.minChars) {
           showResultBadge("No text to fix (need at least " + state.minChars + " characters)");
+          stripCommand("?/fix", ta);
           return;
         }
         showPendingBadge("fixing", "Fixing...");
@@ -1993,6 +2016,7 @@
           removePendingBadge("fixing");
           if (!data?.errors?.length) {
             showResultBadge("\u2713 No corrections needed");
+            stripCommand("?/fix", ta);
             return;
           }
           const sorted = [...data.errors].sort((a, b) => b.start - a.start);
@@ -2051,6 +2075,7 @@
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
         if (!draft || draft.length < state.minChars) {
           showResultBadge("No text to polish (need at least " + state.minChars + " characters)");
+          stripCommand("?/polish", ta);
           return;
         }
         showPendingBadge("polishing", "Polishing...");
@@ -2078,6 +2103,7 @@
           const polished = data.polished;
           if (!polished || polished === draft) {
             showResultBadge("\u2713 Text already polished");
+            stripCommand("?/polish", ta);
             return;
           }
           state.skipLiveCheck = true;
@@ -2601,6 +2627,7 @@
     document.addEventListener("input", (e) => {
       const ta = e.target;
       if (ta.tagName !== "TEXTAREA" && !ta.isContentEditable) return;
+      if (state.replacingCommand) return;
       clearTimeout(commandDebounce);
       const value = ta.value || ta.textContent || "";
       if (/\?\/\s*$/.test(value) && !/\w\?\/\s*$/.test(value)) {
@@ -2623,6 +2650,23 @@
               const currentValue = ta.value || ta.textContent || "";
               const fullCmd = matched.full;
               if (!currentValue.includes(cmdText)) return;
+              if (matched.name === "fix" || matched.name === "polish" || matched.name === "check") {
+                const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || "").lastIndexOf(cmdText);
+                const val = ta.value || ta.textContent || "";
+                if (idx >= 0) {
+                  const replaced = val.slice(0, idx) + fullCmd + val.slice(idx + cmdText.length);
+                  state.skipLiveCheck = true;
+                  state.replacingCommand = true;
+                  if (ta.tagName === "TEXTAREA") {
+                    ta.value = replaced;
+                    ta.dispatchEvent(new Event("input", { bubbles: true }));
+                  } else {
+                    ta.textContent = replaced;
+                  }
+                  state.replacingCommand = false;
+                  state.skipLiveCheck = false;
+                }
+              }
               try {
                 if (matched.name === "fix" || matched.name === "polish" || matched.name === "check") {
                   await COMMANDS[matched.name].run("", ta);
