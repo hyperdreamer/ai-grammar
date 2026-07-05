@@ -52,6 +52,7 @@ export const COMMANDS = {
   check: {
     help: 'Manual grammar check for live-draft text',
     async run(_args, ta) {
+      console.debug('[AI Grammar] ?/check command fired', { value: (ta?.value || ta?.textContent || '').slice(0, 30), minChars: state.minChars });
       /** Strip the ?/check command from the input field */
       function stripCheck(input) {
         const val = input.value || input.textContent || '';

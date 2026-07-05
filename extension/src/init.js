@@ -325,6 +325,7 @@ export function init() {
 
       commandDebounce = setTimeout(async () => {
         const currentValue = ta.value || ta.textContent || '';
+        console.debug('[AI Grammar] Debounce fired', { cmdName, cmdText, currentValue: currentValue.slice(-20), includes: currentValue.includes(cmdText) });
         if (!currentValue.includes(cmdText)) return;
 
         try {

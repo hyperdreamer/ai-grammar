@@ -1888,6 +1888,7 @@
     check: {
       help: "Manual grammar check for live-draft text",
       async run(_args, ta) {
+        console.debug("[AI Grammar] ?/check command fired", { value: (ta?.value || ta?.textContent || "").slice(0, 30), minChars: state.minChars });
         function stripCheck(input) {
           const val = input.value || input.textContent || "";
           const idx = val.lastIndexOf("?/check");
@@ -2650,6 +2651,7 @@
         }
         commandDebounce = setTimeout(async () => {
           const currentValue = ta.value || ta.textContent || "";
+          console.debug("[AI Grammar] Debounce fired", { cmdName, cmdText, currentValue: currentValue.slice(-20), includes: currentValue.includes(cmdText) });
           if (!currentValue.includes(cmdText)) return;
           try {
             if (cmdName === "fix" || cmdName === "polish" || cmdName === "check") {
