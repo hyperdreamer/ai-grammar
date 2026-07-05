@@ -2650,22 +2650,25 @@
               const currentValue = ta.value || ta.textContent || "";
               const fullCmd = matched.full;
               if (!currentValue.includes(cmdText)) return;
-              if (matched.name === "fix" || matched.name === "polish" || matched.name === "check") {
-                const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || "").lastIndexOf(cmdText);
-                const val = ta.value || ta.textContent || "";
-                if (idx >= 0) {
-                  const replaced = val.slice(0, idx) + fullCmd + val.slice(idx + cmdText.length);
-                  state.skipLiveCheck = true;
-                  state.replacingCommand = true;
-                  if (ta.tagName === "TEXTAREA") {
-                    ta.value = replaced;
-                    ta.dispatchEvent(new Event("input", { bubbles: true }));
-                  } else {
-                    ta.textContent = replaced;
-                  }
-                  state.replacingCommand = false;
-                  state.skipLiveCheck = false;
+              const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || "").lastIndexOf(cmdText);
+              const val = ta.value || ta.textContent || "";
+              if (idx >= 0) {
+                const suffix = matched.name === "lang" ? " " : "";
+                const replaced = val.slice(0, idx) + fullCmd + suffix + val.slice(idx + cmdText.length);
+                state.skipLiveCheck = true;
+                state.replacingCommand = true;
+                if (ta.tagName === "TEXTAREA") {
+                  ta.value = replaced;
+                  ta.dispatchEvent(new Event("input", { bubbles: true }));
+                } else {
+                  ta.textContent = replaced;
                 }
+                state.replacingCommand = false;
+                state.skipLiveCheck = false;
+              }
+              if (matched.name === "lang") {
+                showResultBadge("Available: auto, en, zh, ja, ko, fr, de, es, ru, pt, it, ar", 8e3);
+                return;
               }
               try {
                 if (matched.name === "fix" || matched.name === "polish" || matched.name === "check") {
@@ -2677,15 +2680,18 @@
                 showResultBadge(`Command failed: ${err.message}`);
               }
               if (matched.name !== "fix" && matched.name !== "polish" && matched.name !== "check") {
-                const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || "").lastIndexOf(cmdText);
-                const val = ta.value || ta.textContent || "";
-                const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
+                await new Promise((r) => setTimeout(r, 400));
+                const idx2 = ta.value ? ta.value.lastIndexOf(fullCmd) : (ta.textContent || "").lastIndexOf(fullCmd);
+                const val2 = ta.value || ta.textContent || "";
+                const cleaned = (idx2 >= 0 ? val2.slice(0, idx2) + val2.slice(idx2 + fullCmd.length) : val2).trimEnd();
+                state.skipLiveCheck = true;
                 if (ta.tagName === "TEXTAREA") {
                   ta.value = cleaned;
                   ta.dispatchEvent(new Event("input", { bubbles: true }));
                 } else {
                   ta.textContent = cleaned;
                 }
+                state.skipLiveCheck = false;
               }
             }, 600);
             return;
@@ -2697,6 +2703,10 @@
           const currentValue = ta.value || ta.textContent || "";
           console.debug("[AI Grammar] Debounce fired", { cmdName, cmdText, currentValue: currentValue.slice(-20), includes: currentValue.includes(cmdText) });
           if (!currentValue.includes(cmdText)) return;
+          if (cmdName === "lang" && !cmdArgs) {
+            showResultBadge("Available: auto, en, zh, ja, ko, fr, de, es, ru, pt, it, ar", 8e3);
+            return;
+          }
           try {
             if (cmdName === "fix" || cmdName === "polish" || cmdName === "check") {
               await COMMANDS[cmdName].run(cmdArgs, ta);
@@ -2707,14 +2717,17 @@
             showResultBadge(`Command failed: ${err.message}`);
           }
           if (cmdName !== "fix" && cmdName !== "polish" && cmdName !== "check") {
-            const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || "").lastIndexOf(cmdText);
-            const val = ta.value || ta.textContent || "";
-            const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
-            if (ta.tagName === "TEXTAREA") {
-              ta.value = cleaned;
-              ta.dispatchEvent(new Event("input", { bubbles: true }));
+            if (cmdName === "lang" && !cmdArgs) {
             } else {
-              ta.textContent = cleaned;
+              const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || "").lastIndexOf(cmdText);
+              const val = ta.value || ta.textContent || "";
+              const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
+              if (ta.tagName === "TEXTAREA") {
+                ta.value = cleaned;
+                ta.dispatchEvent(new Event("input", { bubbles: true }));
+              } else {
+                ta.textContent = cleaned;
+              }
             }
           }
         }, 600);

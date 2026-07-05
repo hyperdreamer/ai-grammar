@@ -300,24 +300,32 @@ export function init() {
             if (!currentValue.includes(cmdText)) return;
 
             // Replace the partial prefix with the full command in the
-            // textarea BEFORE calling the handler — so commands like
-            // ?/check that strip themselves by exact name can find it.
-            if (matched.name === 'fix' || matched.name === 'polish' || matched.name === 'check') {
-              const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
-              const val = ta.value || ta.textContent || '';
-              if (idx >= 0) {
-                const replaced = val.slice(0, idx) + fullCmd + val.slice(idx + cmdText.length);
-                state.skipLiveCheck = true;
-                state.replacingCommand = true;
-                if (ta.tagName === 'TEXTAREA') {
-                  ta.value = replaced;
-                  ta.dispatchEvent(new Event('input', { bubbles: true }));
-                } else {
-                  ta.textContent = replaced;
-                }
-                state.replacingCommand = false;
-                state.skipLiveCheck = false;
+            // textarea BEFORE calling the handler — so the user sees the
+            // resolved command and commands that read the textarea (check,
+            // fix, polish) can find the full command string.
+            const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
+            const val = ta.value || ta.textContent || '';
+            if (idx >= 0) {
+              // ?/lang appends a trailing space to invite parameter input.
+              const suffix = matched.name === 'lang' ? ' ' : '';
+              const replaced = val.slice(0, idx) + fullCmd + suffix + val.slice(idx + cmdText.length);
+              state.skipLiveCheck = true;
+              state.replacingCommand = true;
+              if (ta.tagName === 'TEXTAREA') {
+                ta.value = replaced;
+                ta.dispatchEvent(new Event('input', { bubbles: true }));
+              } else {
+                ta.textContent = replaced;
               }
+              state.replacingCommand = false;
+              state.skipLiveCheck = false;
+            }
+
+            // ?/lang is a two-step command — show language options and
+            // wait for the user to type the parameter.
+            if (matched.name === 'lang') {
+              showResultBadge('Available: auto, en, zh, ja, ko, fr, de, es, ru, pt, it, ar', 8000);
+              return;
             }
 
             try {
@@ -329,17 +337,23 @@ export function init() {
             } catch (err) {
               showResultBadge(`Command failed: ${err.message}`);
             }
-            // Strip command afterward (skip for fix/polish/check — they handle their own cleanup)
+
+            // Strip the resolved full command afterward (skip for
+            // fix/polish/check — they handle their own cleanup).
             if (matched.name !== 'fix' && matched.name !== 'polish' && matched.name !== 'check') {
-              const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
-              const val = ta.value || ta.textContent || '';
-              const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
+              // Brief pause so the user sees the completed command before it's stripped
+              await new Promise(r => setTimeout(r, 400));
+              const idx2 = ta.value ? ta.value.lastIndexOf(fullCmd) : (ta.textContent || '').lastIndexOf(fullCmd);
+              const val2 = ta.value || ta.textContent || '';
+              const cleaned = (idx2 >= 0 ? val2.slice(0, idx2) + val2.slice(idx2 + fullCmd.length) : val2).trimEnd();
+              state.skipLiveCheck = true;
               if (ta.tagName === 'TEXTAREA') {
                 ta.value = cleaned;
                 ta.dispatchEvent(new Event('input', { bubbles: true }));
               } else {
                 ta.textContent = cleaned;
               }
+              state.skipLiveCheck = false;
             }
           }, 600);
           return;
@@ -354,6 +368,12 @@ export function init() {
         console.debug('[AI Grammar] Debounce fired', { cmdName, cmdText, currentValue: currentValue.slice(-20), includes: currentValue.includes(cmdText) });
         if (!currentValue.includes(cmdText)) return;
 
+        // ?/lang without a parameter — show available languages and wait
+        if (cmdName === 'lang' && !cmdArgs) {
+          showResultBadge('Available: auto, en, zh, ja, ko, fr, de, es, ru, pt, it, ar', 8000);
+          return;
+        }
+
         try {
           if (cmdName === 'fix' || cmdName === 'polish' || cmdName === 'check') {
             await COMMANDS[cmdName].run(cmdArgs, ta);
@@ -365,16 +385,20 @@ export function init() {
         }
 
         // Strip the command portion, keep text before it
-        // Skip for 'fix', 'polish', and 'check' — they handle their own cleanup
+        // Skip for 'fix', 'polish', 'check', and lang-without-args (lang waits for parameter)
         if (cmdName !== 'fix' && cmdName !== 'polish' && cmdName !== 'check') {
-          const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
-          const val = ta.value || ta.textContent || '';
-          const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
-          if (ta.tagName === 'TEXTAREA') {
-            ta.value = cleaned;
-            ta.dispatchEvent(new Event('input', { bubbles: true }));
+          if (cmdName === 'lang' && !cmdArgs) {
+            // lang without args — keep the command text, user still typing parameter
           } else {
-            ta.textContent = cleaned;
+            const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
+            const val = ta.value || ta.textContent || '';
+            const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
+            if (ta.tagName === 'TEXTAREA') {
+              ta.value = cleaned;
+              ta.dispatchEvent(new Event('input', { bubbles: true }));
+            } else {
+              ta.textContent = cleaned;
+            }
           }
         }
       }, 600);
