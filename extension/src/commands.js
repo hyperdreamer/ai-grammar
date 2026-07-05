@@ -1,4 +1,4 @@
-import { state, safeGetStorage, isTeams } from './state.js';
+import { state, safeGetStorage } from './state.js';
 import {
   showPendingBadge,
   removePendingBadge,
@@ -60,7 +60,7 @@ export const COMMANDS = {
         return;
       }
       const isWhatsApp = location.hostname === 'web.whatsapp.com';
-      if (isWhatsApp || isTeams) {
+      if (isWhatsApp) {
         showResultBadge('?/lang is not available on this site');
         stripCommand('?/lang ' + args, ta);
         return;
@@ -156,7 +156,7 @@ export const COMMANDS = {
     async run(_args, ta) {
       console.debug('[AI Grammar] ?/check command fired', { value: (ta?.value || ta?.textContent || '').slice(0, 30), minChars: state.minChars });
       /** Strip the ?/check command from the input field */
-      function stripCheck(input) {
+      async function stripCheck(input) {
         const val = input.value || input.textContent || '';
         const idx = val.lastIndexOf('?/check');  // '?/check'.length === 7
         const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + 7) : val).trimEnd();
@@ -164,16 +164,13 @@ export const COMMANDS = {
           input.value = cleaned;
           input.dispatchEvent(new Event('input', { bubbles: true }));
         } else {
-          input.textContent = cleaned;
+          // Use beforeinput for contentEditable (Lexical, CKEditor, etc.)
+          if (await tryBeforeInput(cleaned, input)) {
+            // Success
+          } else {
+            applyFixCDP(cleaned);
+          }
         }
-      }
-
-      // GUARD: disabled on WhatsApp and Teams
-      const isWhatsApp = location.hostname === 'web.whatsapp.com';
-      if (isWhatsApp || isTeams) {
-        showResultBadge('?/check is not available on this site');
-        stripCheck(ta);
-        return;
       }
 
       const value = ta.value || ta.textContent || '';

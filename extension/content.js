@@ -2007,7 +2007,7 @@
           return;
         }
         const isWhatsApp = location.hostname === "web.whatsapp.com";
-        if (isWhatsApp || isTeams) {
+        if (isWhatsApp) {
           showResultBadge("?/lang is not available on this site");
           stripCommand("?/lang " + args, ta);
           return;
@@ -2102,7 +2102,7 @@
       help: "Manual grammar check for live-draft text",
       async run(_args, ta) {
         console.debug("[AI Grammar] ?/check command fired", { value: (ta?.value || ta?.textContent || "").slice(0, 30), minChars: state.minChars });
-        function stripCheck(input) {
+        async function stripCheck(input) {
           const val = input.value || input.textContent || "";
           const idx = val.lastIndexOf("?/check");
           const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + 7) : val).trimEnd();
@@ -2110,15 +2110,13 @@
             input.value = cleaned;
             input.dispatchEvent(new Event("input", { bubbles: true }));
           } else {
-            input.textContent = cleaned;
+            if (await tryBeforeInput(cleaned, input)) {
+            } else {
+              applyFixCDP(cleaned);
+            }
           }
         }
-        const isWhatsApp = location.hostname === "web.whatsapp.com";
-        if (isWhatsApp || isTeams) {
-          showResultBadge("?/check is not available on this site");
-          stripCheck(ta);
-          return;
-        }
+
         const value = ta.value || ta.textContent || "";
         const cmdIdx = value.lastIndexOf("?/check");
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
