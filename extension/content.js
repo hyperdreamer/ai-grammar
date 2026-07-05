@@ -1854,6 +1854,74 @@
     setTimeout(handleConversationMaybeChanged, 500);
   }
 
+  // src/languages.js
+  var LANGUAGES = [
+    { code: "auto", name: "Auto-detect", aliases: ["automatic", "detect"] },
+    { code: "en", name: "English", aliases: ["eng", "english"] },
+    { code: "zh", name: "Chinese", aliases: ["ch", "chinese", "\u4E2D\u6587", "mandarin", "cn"] },
+    { code: "ja", name: "Japanese", aliases: ["jp", "japanese", "\u65E5\u672C\u8A9E"] },
+    { code: "ko", name: "Korean", aliases: ["kr", "korean", "\uD55C\uAD6D\uC5B4"] },
+    { code: "fr", name: "French", aliases: ["french", "fran\xE7ais"] },
+    { code: "de", name: "German", aliases: ["german", "deutsch"] },
+    { code: "es", name: "Spanish", aliases: ["spanish", "espa\xF1ol"] },
+    { code: "ru", name: "Russian", aliases: ["russian", "\u0440\u0443\u0441\u0441\u043A\u0438\u0439"] },
+    { code: "pt", name: "Portuguese", aliases: ["portuguese", "portugu\xEAs"] },
+    { code: "it", name: "Italian", aliases: ["italian", "italiano"] },
+    { code: "ar", name: "Arabic", aliases: ["arabic", "\u0627\u0644\u0639\u0631\u0628\u064A\u0629"] },
+    { code: "nl", name: "Dutch", aliases: ["dutch", "nederlands"] },
+    { code: "hi", name: "Hindi", aliases: ["hindi", "\u0939\u093F\u0928\u094D\u0926\u0940"] },
+    { code: "th", name: "Thai", aliases: ["thai", "\u0E44\u0E17\u0E22"] },
+    { code: "vi", name: "Vietnamese", aliases: ["vietnamese", "ti\u1EBFng vi\u1EC7t", "tieng viet"] },
+    { code: "sv", name: "Swedish", aliases: ["swedish", "svenska"] },
+    { code: "tr", name: "Turkish", aliases: ["turkish", "t\xFCrk\xE7e"] },
+    { code: "pl", name: "Polish", aliases: ["polish", "polski"] },
+    { code: "uk", name: "Ukrainian", aliases: ["ukrainian", "\u0443\u043A\u0440\u0430\u0457\u043D\u0441\u044C\u043A\u0430"] },
+    { code: "fi", name: "Finnish", aliases: ["finnish", "suomi"] },
+    { code: "no", name: "Norwegian", aliases: ["norwegian", "norsk"] },
+    { code: "da", name: "Danish", aliases: ["danish", "dansk"] },
+    { code: "cs", name: "Czech", aliases: ["czech", "\u010De\u0161tina"] },
+    { code: "el", name: "Greek", aliases: ["greek", "\u03B5\u03BB\u03BB\u03B7\u03BD\u03B9\u03BA\u03AC"] },
+    { code: "he", name: "Hebrew", aliases: ["hebrew", "\u05E2\u05D1\u05E8\u05D9\u05EA"] },
+    { code: "hu", name: "Hungarian", aliases: ["hungarian", "magyar"] },
+    { code: "ro", name: "Romanian", aliases: ["romanian", "rom\xE2n\u0103"] },
+    { code: "id", name: "Indonesian", aliases: ["indonesian", "bahasa", "bahasa indonesia"] },
+    { code: "ms", name: "Malay", aliases: ["malay", "malaysian", "bahasa melayu", "bahasa malaysia"] },
+    { code: "tl", name: "Filipino", aliases: ["filipino", "tagalog"] },
+    { code: "bn", name: "Bengali", aliases: ["bengali", "\u09AC\u09BE\u0982\u09B2\u09BE"] },
+    { code: "fa", name: "Persian", aliases: ["persian", "farsi", "\u0641\u0627\u0631\u0633\u06CC"] },
+    { code: "ta", name: "Tamil", aliases: ["tamil", "\u0BA4\u0BAE\u0BBF\u0BB4\u0BCD"] },
+    { code: "te", name: "Telugu", aliases: ["telugu", "\u0C24\u0C46\u0C32\u0C41\u0C17\u0C41"] },
+    { code: "ur", name: "Urdu", aliases: ["urdu", "\u0627\u0631\u062F\u0648"] },
+    { code: "sw", name: "Swahili", aliases: ["swahili", "kiswahili"] },
+    { code: "bg", name: "Bulgarian", aliases: ["bulgarian", "\u0431\u044A\u043B\u0433\u0430\u0440\u0441\u043A\u0438"] },
+    { code: "sk", name: "Slovak", aliases: ["slovak", "sloven\u010Dina"] },
+    { code: "lt", name: "Lithuanian", aliases: ["lithuanian", "lietuvi\u0173"] },
+    { code: "lv", name: "Latvian", aliases: ["latvian", "latvie\u0161u"] },
+    { code: "et", name: "Estonian", aliases: ["estonian", "eesti"] }
+  ];
+  function searchLanguages(query) {
+    if (!query) return [...LANGUAGES];
+    const q = query.toLowerCase();
+    const scored = [];
+    for (const lang of LANGUAGES) {
+      let score = 99;
+      if (lang.code === q) score = 0;
+      else if (lang.code.startsWith(q)) score = 1;
+      else if (lang.name.toLowerCase().startsWith(q)) score = 2;
+      else if (lang.aliases.some((a) => a.toLowerCase().startsWith(q))) score = 3;
+      else if (lang.name.toLowerCase().includes(q)) score = 4;
+      else if (lang.aliases.some((a) => a.toLowerCase().includes(q))) score = 5;
+      else continue;
+      scored.push({ ...lang, _score: score });
+    }
+    scored.sort((a, b) => a._score - b._score || a.code.localeCompare(b.code));
+    return scored.map(({ _score, ...lang }) => lang);
+  }
+  function findUniqueMatch(query) {
+    const results = searchLanguages(query);
+    return results.length === 1 ? results[0] : null;
+  }
+
   // src/commands.js
   function stripCommand(cmd, ta) {
     const val = ta.value || ta.textContent || "";
@@ -1886,12 +1954,11 @@
       }
     },
     lang: {
-      help: "Translate text (e.g., ?/lang fr, ?/lang ja). Text before the command is translated.",
+      help: "Translate text (e.g., ?/lang fr). Pick a language or type any code.",
       async run(args, ta) {
-        const valid = ["auto", "en", "zh", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar"];
-        const targetLang = (args || "").toLowerCase();
-        if (!valid.includes(targetLang)) {
-          showResultBadge(`Unknown language: "${args}". Use: ${valid.join(", ")}`);
+        const targetLang = (args || "").toLowerCase().trim();
+        if (!targetLang) {
+          showResultBadge("Type a language code (e.g., ?/lang fr, ?/lang ja)");
           return;
         }
         const isWhatsApp = location.hostname === "web.whatsapp.com";
@@ -2356,6 +2423,11 @@
   var paletteEl = null;
   var paletteTarget = null;
   var paletteSelectedIdx = 0;
+  var langPaletteEl = null;
+  var langPaletteTarget = null;
+  var langPaletteSelectedIdx = 0;
+  var langPaletteFilter = "";
+  var langPaletteUniqueTimer = null;
   function buildPaletteCommands() {
     return Object.entries(COMMANDS).map(([name, cmd]) => ({
       name,
@@ -2365,6 +2437,7 @@
     }));
   }
   function showCommandPalette(ta, filter = "") {
+    hideLanguagePalette();
     hideCommandPalette();
     paletteTarget = ta;
     paletteSelectedIdx = 0;
@@ -2444,6 +2517,7 @@
     }
     paletteTarget = null;
     paletteSelectedIdx = 0;
+    hideLanguagePalette();
   }
   function updatePaletteSelection(delta) {
     if (!paletteEl) return;
@@ -2508,6 +2582,166 @@
       }
       ta.focus();
     }, 100);
+  }
+  function showLanguagePalette(ta, filter = "") {
+    hideCommandPalette();
+    langPaletteTarget = ta;
+    langPaletteFilter = filter || "";
+    langPaletteSelectedIdx = 0;
+    if (langPaletteUniqueTimer) {
+      clearTimeout(langPaletteUniqueTimer);
+      langPaletteUniqueTimer = null;
+    }
+    const items = searchLanguages(langPaletteFilter);
+    if (items.length === 0) return;
+    const rect = ta.getBoundingClientRect();
+    langPaletteEl = document.createElement("div");
+    langPaletteEl.id = "ai-grammar-lang-palette";
+    langPaletteEl.innerHTML = `
+    <style>
+      #ai-grammar-lang-palette {
+        position: fixed; z-index: 2147483647;
+        background: #1e293b; color: #f1f5f9; border-radius: 10px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4); min-width: 280px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 13px; overflow: hidden; animation: ai-gfadein 0.12s ease;
+        max-height: 320px; overflow-y: auto;
+      }
+      #ai-grammar-lang-palette .agl-item {
+        padding: 8px 14px; cursor: pointer; display: flex;
+        justify-content: space-between; align-items: center;
+        border-bottom: 1px solid #0f172a;
+      }
+      #ai-grammar-lang-palette .agl-item:last-child { border-bottom: none; }
+      #ai-grammar-lang-palette .agl-item.active { background: #334155; }
+      #ai-grammar-lang-palette .agl-item:hover { background: #334155; }
+      #ai-grammar-lang-palette .agl-name { color: #f1f5f9; }
+      #ai-grammar-lang-palette .agl-code {
+        color: #4ade80; font-weight: 600; font-family: monospace;
+      }
+      @media (prefers-color-scheme: light) {
+        #ai-grammar-lang-palette {
+          background: #ffffff;
+          color: #0f172a;
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+        }
+        #ai-grammar-lang-palette .agl-item { border-bottom-color: #f1f5f9; }
+        #ai-grammar-lang-palette .agl-item.active { background: #f1f5f9; }
+        #ai-grammar-lang-palette .agl-item:hover { background: #f1f5f9; }
+        #ai-grammar-lang-palette .agl-name { color: #0f172a; }
+        #ai-grammar-lang-palette .agl-code { color: #16a34a; }
+      }
+    </style>
+    ${items.map((item, i) => `
+      <div class="agl-item${i === 0 ? " active" : ""}" data-idx="${i}" data-code="${item.code}">
+        <span class="agl-name">${item.name}</span>
+        <span class="agl-code">${item.code}</span>
+      </div>
+    `).join("")}
+  `;
+    document.body.appendChild(langPaletteEl);
+    const pH = langPaletteEl.offsetHeight;
+    let top = rect.bottom + 4;
+    if (top + pH > window.innerHeight - 10) {
+      top = rect.top - pH - 4;
+    }
+    langPaletteEl.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 296)) + "px";
+    langPaletteEl.style.top = Math.max(8, top) + "px";
+    langPaletteEl.addEventListener("mousedown", (e) => {
+      const item = e.target.closest(".agl-item");
+      if (item) {
+        e.preventDefault();
+        const code = item.dataset.code;
+        commitLanguageSelection(code);
+      }
+    });
+    if (langPaletteFilter) {
+      const unique = findUniqueMatch(langPaletteFilter);
+      if (unique) {
+        langPaletteUniqueTimer = setTimeout(() => {
+          langPaletteUniqueTimer = null;
+          if (!langPaletteEl || !langPaletteTarget) return;
+          const code = unique.code;
+          const ta2 = langPaletteTarget;
+          const val = ta2.value || ta2.textContent || "";
+          const escaped = langPaletteFilter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp("[\\?/]lang\\s+" + escaped + "$");
+          const m = val.match(re);
+          if (m) {
+            const newVal = val.slice(0, m.index) + "?/lang " + code;
+            state.skipLiveCheck = true;
+            if (ta2.tagName === "TEXTAREA") {
+              ta2.value = newVal;
+              ta2.dispatchEvent(new Event("input", { bubbles: true }));
+            } else {
+              ta2.textContent = newVal;
+            }
+            state.skipLiveCheck = false;
+          }
+          hideLanguagePalette();
+          try {
+            COMMANDS.lang.run(code, ta2);
+          } catch (err) {
+            showResultBadge(`Command failed: ${err.message}`);
+          }
+        }, 600);
+      }
+    }
+  }
+  function hideLanguagePalette() {
+    if (langPaletteUniqueTimer) {
+      clearTimeout(langPaletteUniqueTimer);
+      langPaletteUniqueTimer = null;
+    }
+    if (langPaletteEl) {
+      langPaletteEl.remove();
+      langPaletteEl = null;
+    }
+    langPaletteTarget = null;
+    langPaletteSelectedIdx = 0;
+    langPaletteFilter = "";
+  }
+  function updateLanguagePaletteSelection(delta) {
+    if (!langPaletteEl) return;
+    const items = langPaletteEl.querySelectorAll(".agl-item");
+    if (items.length === 0) return;
+    items[langPaletteSelectedIdx].classList.remove("active");
+    langPaletteSelectedIdx = (langPaletteSelectedIdx + delta + items.length) % items.length;
+    items[langPaletteSelectedIdx].classList.add("active");
+    items[langPaletteSelectedIdx].scrollIntoView({ block: "nearest" });
+  }
+  function selectLanguagePaletteItem() {
+    if (!langPaletteEl || !langPaletteTarget) return;
+    const active = langPaletteEl.querySelector(".agl-item.active");
+    if (!active) return;
+    const code = active.dataset.code;
+    commitLanguageSelection(code);
+  }
+  function commitLanguageSelection(code) {
+    if (!langPaletteTarget) return;
+    const ta = langPaletteTarget;
+    const val = ta.value || ta.textContent || "";
+    const re = /([\?\/])lang(\s+[^\s]*)?$/;
+    const m = val.match(re);
+    if (m) {
+      const newVal = val.slice(0, m.index) + "?/lang " + code;
+      state.skipLiveCheck = true;
+      if (ta.tagName === "TEXTAREA") {
+        ta.value = newVal;
+        ta.dispatchEvent(new Event("input", { bubbles: true }));
+      } else {
+        ta.textContent = newVal;
+      }
+      state.skipLiveCheck = false;
+    }
+    hideLanguagePalette();
+    setTimeout(() => {
+      try {
+        COMMANDS.lang.run(code, ta);
+      } catch (err) {
+        showResultBadge(`Command failed: ${err.message}`);
+      }
+    }, 600);
   }
 
   // src/init.js
@@ -2670,6 +2904,30 @@
     document.addEventListener("keydown", (e) => {
       const ta = e.target;
       if (ta.tagName !== "TEXTAREA" && !ta.isContentEditable) return;
+      if (langPaletteEl) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          updateLanguagePaletteSelection(1);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          updateLanguagePaletteSelection(-1);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          hideLanguagePalette();
+          return;
+        }
+        if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          selectLanguagePaletteItem();
+          return;
+        }
+        return;
+      }
       if (paletteEl) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -2712,7 +2970,15 @@
       if (state.replacingCommand) return;
       clearTimeout(commandDebounce);
       const value = ta.value || ta.textContent || "";
+      if (/\/?\/lang\s+\S*$/.test(value) || /\/?\/lang\s*$/.test(value)) {
+        const langMatch = value.match(/\/?\/lang\s*(.*)$/);
+        const filter = (langMatch?.[1] || "").trim();
+        hideCommandPalette();
+        showLanguagePalette(ta, filter);
+        return;
+      }
       if (/\?\/\s*$/.test(value) && !/\w\?\/\s*$/.test(value)) {
+        hideLanguagePalette();
         showCommandPalette(ta);
         return;
       }
@@ -2749,7 +3015,7 @@
                 state.skipLiveCheck = false;
               }
               if (matched.name === "lang") {
-                showResultBadge("Available: auto, en, zh, ja, ko, fr, de, es, ru, pt, it, ar", 8e3);
+                showLanguagePalette(ta, "");
                 return;
               }
               try {
@@ -2786,7 +3052,7 @@
           console.debug("[AI Grammar] Debounce fired", { cmdName, cmdText, currentValue: currentValue.slice(-20), includes: currentValue.includes(cmdText) });
           if (!currentValue.includes(cmdText)) return;
           if (cmdName === "lang" && !cmdArgs) {
-            showResultBadge("Available: auto, en, zh, ja, ko, fr, de, es, ru, pt, it, ar", 8e3);
+            showLanguagePalette(ta, "");
             return;
           }
           try {
@@ -2816,6 +3082,7 @@
         return;
       }
       hideCommandPalette();
+      hideLanguagePalette();
     }, true);
     if (!isTeams) {
       setupLiveDraftCheck();

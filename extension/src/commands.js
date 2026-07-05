@@ -7,6 +7,7 @@ import {
 } from './indicators.js';
 import { tryBeforeInput, applyFixCDP } from './apply-correction.js';
 import { highlightLiveDraft } from './live-draft.js';
+import { LANGUAGES, searchLanguages, findUniqueMatch } from './languages.js';
 
 // -----------------------------------------------------------------------
 // Command system (?/ prefix)
@@ -51,12 +52,11 @@ export const COMMANDS = {
     },
   },
   lang: {
-    help: 'Translate text (e.g., ?/lang fr, ?/lang ja). Text before the command is translated.',
+    help: 'Translate text (e.g., ?/lang fr). Pick a language or type any code.',
     async run(args, ta) {
-      const valid = ['auto', 'en', 'zh', 'ja', 'ko', 'fr', 'de', 'es', 'ru', 'pt', 'it', 'ar'];
-      const targetLang = (args || '').toLowerCase();
-      if (!valid.includes(targetLang)) {
-        showResultBadge(`Unknown language: "${args}". Use: ${valid.join(', ')}`);
+      const targetLang = (args || '').toLowerCase().trim();
+      if (!targetLang) {
+        showResultBadge('Type a language code (e.g., ?/lang fr, ?/lang ja)');
         return;
       }
       const isWhatsApp = location.hostname === 'web.whatsapp.com';
@@ -569,6 +569,12 @@ export let paletteEl = null;
 export let paletteTarget = null;
 let paletteSelectedIdx = 0;
 
+export let langPaletteEl = null;
+let langPaletteTarget = null;
+let langPaletteSelectedIdx = 0;
+let langPaletteFilter = '';
+let langPaletteUniqueTimer = null;
+
 export function buildPaletteCommands() {
   return Object.entries(COMMANDS).map(([name, cmd]) => ({
     name,
@@ -579,6 +585,7 @@ export function buildPaletteCommands() {
 }
 
 export function showCommandPalette(ta, filter = '') {
+  hideLanguagePalette();
   hideCommandPalette();
   paletteTarget = ta;
   paletteSelectedIdx = 0;
@@ -664,6 +671,7 @@ export function hideCommandPalette() {
   if (paletteEl) { paletteEl.remove(); paletteEl = null; }
   paletteTarget = null;
   paletteSelectedIdx = 0;
+  hideLanguagePalette();
 }
 
 export function updatePaletteSelection(delta) {
@@ -741,3 +749,184 @@ async function applyPaletteCommand(cmdName) {
     ta.focus();
   }, 100);
 }
+
+// -----------------------------------------------------------------------
+// Language palette (shown when user types ?/lang with optional filter)
+// -----------------------------------------------------------------------
+
+export function showLanguagePalette(ta, filter = '') {
+  hideCommandPalette();
+  langPaletteTarget = ta;
+  langPaletteFilter = filter || '';
+  langPaletteSelectedIdx = 0;
+  if (langPaletteUniqueTimer) {
+    clearTimeout(langPaletteUniqueTimer);
+    langPaletteUniqueTimer = null;
+  }
+
+  const items = searchLanguages(langPaletteFilter);
+  if (items.length === 0) return;  // no match, don't show
+  const rect = ta.getBoundingClientRect();
+
+  langPaletteEl = document.createElement('div');
+  langPaletteEl.id = 'ai-grammar-lang-palette';
+  langPaletteEl.innerHTML = `
+    <style>
+      #ai-grammar-lang-palette {
+        position: fixed; z-index: 2147483647;
+        background: #1e293b; color: #f1f5f9; border-radius: 10px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4); min-width: 280px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 13px; overflow: hidden; animation: ai-gfadein 0.12s ease;
+        max-height: 320px; overflow-y: auto;
+      }
+      #ai-grammar-lang-palette .agl-item {
+        padding: 8px 14px; cursor: pointer; display: flex;
+        justify-content: space-between; align-items: center;
+        border-bottom: 1px solid #0f172a;
+      }
+      #ai-grammar-lang-palette .agl-item:last-child { border-bottom: none; }
+      #ai-grammar-lang-palette .agl-item.active { background: #334155; }
+      #ai-grammar-lang-palette .agl-item:hover { background: #334155; }
+      #ai-grammar-lang-palette .agl-name { color: #f1f5f9; }
+      #ai-grammar-lang-palette .agl-code {
+        color: #4ade80; font-weight: 600; font-family: monospace;
+      }
+      @media (prefers-color-scheme: light) {
+        #ai-grammar-lang-palette {
+          background: #ffffff;
+          color: #0f172a;
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+        }
+        #ai-grammar-lang-palette .agl-item { border-bottom-color: #f1f5f9; }
+        #ai-grammar-lang-palette .agl-item.active { background: #f1f5f9; }
+        #ai-grammar-lang-palette .agl-item:hover { background: #f1f5f9; }
+        #ai-grammar-lang-palette .agl-name { color: #0f172a; }
+        #ai-grammar-lang-palette .agl-code { color: #16a34a; }
+      }
+    </style>
+    ${items.map((item, i) => `
+      <div class="agl-item${i === 0 ? ' active' : ''}" data-idx="${i}" data-code="${item.code}">
+        <span class="agl-name">${item.name}</span>
+        <span class="agl-code">${item.code}</span>
+      </div>
+    `).join('')}
+  `;
+  document.body.appendChild(langPaletteEl);
+
+  // Position below or above the textarea
+  const pH = langPaletteEl.offsetHeight;
+  let top = rect.bottom + 4;
+  if (top + pH > window.innerHeight - 10) {
+    top = rect.top - pH - 4;
+  }
+  langPaletteEl.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 296)) + 'px';
+  langPaletteEl.style.top = Math.max(8, top) + 'px';
+
+  // Click handler
+  langPaletteEl.addEventListener('mousedown', (e) => {
+    const item = e.target.closest('.agl-item');
+    if (item) {
+      e.preventDefault();
+      const code = item.dataset.code;
+      commitLanguageSelection(code);
+    }
+  });
+
+  // If filter is non-empty and uniquely matches one language, set 600ms timer
+  // to auto-complete: replace "?/lang <partial>" with "?/lang <code>" in the
+  // textarea, hide the palette, and run the command.
+  if (langPaletteFilter) {
+    const unique = findUniqueMatch(langPaletteFilter);
+    if (unique) {
+      langPaletteUniqueTimer = setTimeout(() => {
+        langPaletteUniqueTimer = null;
+        if (!langPaletteEl || !langPaletteTarget) return;
+        const code = unique.code;
+        // Replace the filter portion in the textarea
+        const ta2 = langPaletteTarget;
+        const val = ta2.value || ta2.textContent || '';
+        const escaped = langPaletteFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp('[\\?/]lang\\s+' + escaped + '$');
+        const m = val.match(re);
+        if (m) {
+          const newVal = val.slice(0, m.index) + '?/lang ' + code;
+          state.skipLiveCheck = true;
+          if (ta2.tagName === 'TEXTAREA') {
+            ta2.value = newVal;
+            ta2.dispatchEvent(new Event('input', { bubbles: true }));
+          } else {
+            ta2.textContent = newVal;
+          }
+          state.skipLiveCheck = false;
+        }
+        hideLanguagePalette();
+        try {
+          COMMANDS.lang.run(code, ta2);
+        } catch (err) {
+          showResultBadge(`Command failed: ${err.message}`);
+        }
+      }, 600);
+    }
+  }
+}
+
+export function hideLanguagePalette() {
+  if (langPaletteUniqueTimer) {
+    clearTimeout(langPaletteUniqueTimer);
+    langPaletteUniqueTimer = null;
+  }
+  if (langPaletteEl) { langPaletteEl.remove(); langPaletteEl = null; }
+  langPaletteTarget = null;
+  langPaletteSelectedIdx = 0;
+  langPaletteFilter = '';
+}
+
+export function updateLanguagePaletteSelection(delta) {
+  if (!langPaletteEl) return;
+  const items = langPaletteEl.querySelectorAll('.agl-item');
+  if (items.length === 0) return;
+  items[langPaletteSelectedIdx].classList.remove('active');
+  langPaletteSelectedIdx = (langPaletteSelectedIdx + delta + items.length) % items.length;
+  items[langPaletteSelectedIdx].classList.add('active');
+  items[langPaletteSelectedIdx].scrollIntoView({ block: 'nearest' });
+}
+
+export function selectLanguagePaletteItem() {
+  if (!langPaletteEl || !langPaletteTarget) return;
+  const active = langPaletteEl.querySelector('.agl-item.active');
+  if (!active) return;
+  const code = active.dataset.code;
+  commitLanguageSelection(code);
+}
+
+function commitLanguageSelection(code) {
+  if (!langPaletteTarget) return;
+  const ta = langPaletteTarget;
+  // Replace "?/lang <filter>" with "?/lang <code>" in the textarea
+  const val = ta.value || ta.textContent || '';
+  // Find the trailing "?/lang ..." or "/lang ..." portion
+  const re = /([\?\/])lang(\s+[^\s]*)?$/;
+  const m = val.match(re);
+  if (m) {
+    const newVal = val.slice(0, m.index) + '?/lang ' + code;
+    state.skipLiveCheck = true;
+    if (ta.tagName === 'TEXTAREA') {
+      ta.value = newVal;
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      ta.textContent = newVal;
+    }
+    state.skipLiveCheck = false;
+  }
+  hideLanguagePalette();
+  // Debounce slightly so the textarea event settles before we read it
+  setTimeout(() => {
+    try {
+      COMMANDS.lang.run(code, ta);
+    } catch (err) {
+      showResultBadge(`Command failed: ${err.message}`);
+    }
+  }, 600);
+}
+

@@ -18,6 +18,11 @@ import {
   buildPaletteCommands,
   paletteEl,
   COMMANDS,
+  showLanguagePalette,
+  hideLanguagePalette,
+  updateLanguagePaletteSelection,
+  selectLanguagePaletteItem,
+  langPaletteEl,
 } from './commands.js';
 import { showResultBadge } from './indicators.js';
 
@@ -227,6 +232,20 @@ export function init() {
     const ta = e.target;
     if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
 
+    // Language palette keyboard navigation (takes priority over command palette)
+    if (langPaletteEl) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); updateLanguagePaletteSelection(1); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); updateLanguagePaletteSelection(-1); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); hideLanguagePalette(); return; }
+      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        selectLanguagePaletteItem();
+        return;
+      }
+      return; // Block other keys while language palette is open
+    }
+
     // Palette keyboard navigation
     if (paletteEl) {
       if (e.key === 'ArrowDown') { e.preventDefault(); updatePaletteSelection(1); return; }
@@ -272,8 +291,18 @@ export function init() {
     clearTimeout(commandDebounce);
     const value = ta.value || ta.textContent || '';
 
+    // Language palette: ?/lang with optional filter
+    if (/\/?\/lang\s+\S*$/.test(value) || /\/?\/lang\s*$/.test(value)) {
+      const langMatch = value.match(/\/?\/lang\s*(.*)$/);
+      const filter = (langMatch?.[1] || '').trim();
+      hideCommandPalette();
+      showLanguagePalette(ta, filter);
+      return;
+    }
+
     // Bare ?/ at end → show command palette
     if (/\?\/\s*$/.test(value) && !/\w\?\/\s*$/.test(value)) {
+      hideLanguagePalette();
       showCommandPalette(ta);
       return;
     }
@@ -324,7 +353,7 @@ export function init() {
             // ?/lang is a two-step command — show language options and
             // wait for the user to type the parameter.
             if (matched.name === 'lang') {
-              showResultBadge('Available: auto, en, zh, ja, ko, fr, de, es, ru, pt, it, ar', 8000);
+              showLanguagePalette(ta, '');
               return;
             }
 
@@ -370,7 +399,7 @@ export function init() {
 
         // ?/lang without a parameter — show available languages and wait
         if (cmdName === 'lang' && !cmdArgs) {
-          showResultBadge('Available: auto, en, zh, ja, ko, fr, de, es, ru, pt, it, ar', 8000);
+          showLanguagePalette(ta, '');
           return;
         }
 
@@ -405,8 +434,9 @@ export function init() {
       return;
     }
 
-    // User typed something else → hide palette
+    // User typed something else → hide palettes
     hideCommandPalette();
+    hideLanguagePalette();
   }, true);
 
   // Start live draft checking (checks text as you type after 5s pause)
