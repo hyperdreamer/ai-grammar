@@ -21,7 +21,8 @@ extension/           # Chrome Extension (Manifest V3)
     live-draft.js    # Live draft highlights + debounced checking
     check-text.js    # Grammar check pipeline (API call + dispatch)
     mutation-observer.js  # DOM mutation → detect new messages
-    commands.js      # ?/fix, ?/polish, command palette
+    commands.js      # ?/fix, ?/polish, ?/lang, command palette, language picker
+    languages.js     # 42-language map with search/auto-complete helpers
     selection-check.js    # Manual selection → grammar check
     conversation.js  # Conversation key tracking, scoped state
     events.js        # Tooltip/correction event delegation
@@ -121,7 +122,7 @@ Type `?/` in any text input to open the **command palette** — a popup menu lis
 | `?/on` | Enable grammar checking |
 | `?/fix` | Auto-correct the text you typed (everything before `?/fix`) |
 | `?/polish` | Polish/improve the text for clarity and naturalness (everything before `?/polish`) |
-| `?/lang en` | Set language to English (also: zh, ja, ko, fr, de, es, ru, pt, it, ar, auto) |
+| `?/lang` | Translate text before the command to a target language. Opens a 42-language picker palette — type to filter, arrow keys to navigate, Enter to select. Supports names (`english`, `japanese`) and codes (`en`, `ja`). Any language code is accepted — the AI backend is the final arbiter. |
 | `?/help` | Show all available commands |
 
 The palette opens when you type `?/`. Arrow keys navigate, Enter selects, Escape closes. Type more to filter (e.g., `?/o` filters to `?/off` and `?/on`). Prefix shortcuts auto-execute when only one match remains (e.g., `?/pol` → `?/polish`).
