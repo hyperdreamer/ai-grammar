@@ -106,7 +106,7 @@ export const COMMANDS = {
           ta.value = translated;
           ta.dispatchEvent(new Event('input', { bubbles: true }));
         } else {
-          if (tryBeforeInput(translated, ta)) {
+          if (await tryBeforeInput(translated, ta)) {
             // Success
           } else {
             applyFixCDP(translated).then(success => {
@@ -298,7 +298,7 @@ export const COMMANDS = {
           // Lexical (WhatsApp), CKEditor (Teams), and other rich-text
           // editors all process beforeinput natively.  Falls back to
           // CDP keyboard simulation when beforeinput is not handled.
-          if (tryBeforeInput(fixed, ta)) {
+          if (await tryBeforeInput(fixed, ta)) {
             // Success — fall through to common code below
           } else {
             // Fall back to CDP keyboard simulation
@@ -387,7 +387,7 @@ export const COMMANDS = {
           // Lexical (WhatsApp), CKEditor (Teams), and other rich-text
           // editors all process beforeinput natively.  Falls back to
           // CDP keyboard simulation when beforeinput is not handled.
-          if (tryBeforeInput(polished, ta)) {
+          if (await tryBeforeInput(polished, ta)) {
             // Success — fall through to common code below
           } else {
             // Fall back to CDP keyboard simulation

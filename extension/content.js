@@ -961,7 +961,7 @@
           end: Number(s.getAttribute("data-end")),
           correction: s.getAttribute("data-correction") || ""
         })).filter((f) => Number.isInteger(f.start) && Number.isInteger(f.end) && f.correction).sort((a, b) => b.start - a.start);
-        let text = ta.value || ta.textContent || "";
+        let text = (ta.value || ta.textContent || "").replace(/\u200B/g, "");
         for (const f of fixes) {
           text = text.slice(0, f.start) + f.correction + text.slice(f.end);
         }
@@ -975,30 +975,70 @@
             data: text
           }));
         } else if (ta.isContentEditable) {
-          if (tryBeforeInput(text, ta)) {
-            clearLiveDraftHighlights();
-            showResultBadge("\u2713 Fixed!", 3e3);
-          } else {
-            state.skipLiveCheck = true;
-            applyFixCDP(text).then((success) => {
-              if (success) {
-                clearLiveDraftHighlights();
-                hideTooltip();
-                showResultBadge("\u2713 Fixed!", 3e3);
-              } else {
-                navigator.clipboard.writeText(text).catch(() => {
-                });
-                ta.focus();
-                const range = document.createRange();
-                range.selectNodeContents(ta);
+          hideTooltip();
+          clearLiveDraftHighlights();
+          state.skipLiveCheck = true;
+          state.cancelLiveDraft?.();
+          ta.focus();
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              const el = document.querySelector(
+                'footer div[contenteditable="true"][role="textbox"]'
+              ) || document.querySelector('[contenteditable="true"][role="textbox"]') || document.querySelector('[contenteditable="true"]');
+              if (el && document.contains(el)) {
+                const before = (el.textContent || el.innerText || "").replace(/\u200B/g, "");
+                el.focus();
                 const sel = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(el);
                 sel.removeAllRanges();
                 sel.addRange(range);
-                showResultBadge("Copied to clipboard \u2014 paste (Ctrl+V) to apply", 4e3);
+                el.dispatchEvent(new InputEvent("beforeinput", {
+                  bubbles: true,
+                  cancelable: true,
+                  inputType: "insertReplacementText",
+                  data: text
+                }));
+                requestAnimationFrame(() => {
+                  const after = (el.textContent || el.innerText || "").replace(/\u200B/g, "");
+                  if (after !== before) {
+                    showResultBadge("\u2713 Fixed!", 3e3);
+                  } else {
+                    console.debug(
+                      "[AI Grammar] beforeinput had no effect, falling back to CDP",
+                      { before, after, text: text.replace(/\u200B/g, "") }
+                    );
+                    applyFixCDP(text).then((success) => {
+                      if (success) {
+                        showResultBadge("\u2713 Fixed!", 3e3);
+                      } else {
+                        navigator.clipboard.writeText(text).catch(() => {
+                        });
+                        showResultBadge("Copied to clipboard \u2014 paste (Ctrl+V) to apply", 4e3);
+                      }
+                      state.skipLiveCheck = false;
+                    });
+                    return;
+                  }
+                  state.skipLiveCheck = false;
+                });
+              } else {
+                console.debug("[AI Grammar] contentEditable not found, falling back to CDP");
+                applyFixCDP(text).then((success) => {
+                  if (success) {
+                    showResultBadge("\u2713 Fixed!", 3e3);
+                  } else {
+                    navigator.clipboard.writeText(text).catch(() => {
+                    });
+                    showResultBadge("Copied to clipboard \u2014 paste (Ctrl+V) to apply", 4e3);
+                  }
+                  state.skipLiveCheck = false;
+                });
+                return;
               }
               state.skipLiveCheck = false;
             });
-          }
+          });
         }
       }
       hideTooltip();
@@ -1014,24 +1054,29 @@
     hideTooltip();
   }
   function tryBeforeInput(text, ta) {
-    try {
-      ta.focus();
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(ta);
-      sel.removeAllRanges();
-      sel.addRange(range);
-      ta.dispatchEvent(new InputEvent("beforeinput", {
-        bubbles: true,
-        cancelable: true,
-        inputType: "insertReplacementText",
-        data: text
-      }));
-      const current = (ta.textContent || ta.innerText || "").replace(/​/g, "");
-      return current.includes(text.replace(/​/g, ""));
-    } catch {
-      return false;
-    }
+    return new Promise((resolve) => {
+      try {
+        const before = (ta.textContent || ta.innerText || "").replace(/​/g, "");
+        ta.focus();
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(ta);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        ta.dispatchEvent(new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertReplacementText",
+          data: text
+        }));
+        requestAnimationFrame(() => {
+          const after = (ta.textContent || ta.innerText || "").replace(/​/g, "");
+          resolve(after !== before);
+        });
+      } catch {
+        resolve(false);
+      }
+    });
   }
   function applyFixCDP(text) {
     return new Promise((resolve) => {
@@ -2008,7 +2053,7 @@
             ta.value = translated;
             ta.dispatchEvent(new Event("input", { bubbles: true }));
           } else {
-            if (tryBeforeInput(translated, ta)) {
+            if (await tryBeforeInput(translated, ta)) {
             } else {
               applyFixCDP(translated).then((success) => {
                 if (success) {
@@ -2178,7 +2223,7 @@
             ta.value = fixed;
             ta.dispatchEvent(new Event("input", { bubbles: true }));
           } else {
-            if (tryBeforeInput(fixed, ta)) {
+            if (await tryBeforeInput(fixed, ta)) {
             } else {
               applyFixCDP(fixed).then((success) => {
                 if (success) {
@@ -2260,7 +2305,7 @@
             ta.value = polished;
             ta.dispatchEvent(new Event("input", { bubbles: true }));
           } else {
-            if (tryBeforeInput(polished, ta)) {
+            if (await tryBeforeInput(polished, ta)) {
             } else {
               applyFixCDP(polished).then((success) => {
                 if (success) {

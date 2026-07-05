@@ -38,7 +38,7 @@ export function applyCorrection(errorEl) {
         .filter(f => Number.isInteger(f.start) && Number.isInteger(f.end) && f.correction)
         .sort((a, b) => b.start - a.start); // descending for safe in-place edits
 
-      let text = ta.value || ta.textContent || '';
+      let text = (ta.value || ta.textContent || '').replace(/\u200B/g, '');
       for (const f of fixes) {
         text = text.slice(0, f.start) + f.correction + text.slice(f.end);
       }
@@ -52,30 +52,73 @@ export function applyCorrection(errorEl) {
           data: text,
         }));
       } else if (ta.isContentEditable) {
-        if (tryBeforeInput(text, ta)) {
-          clearLiveDraftHighlights();
-          showResultBadge('✓ Fixed!', 3000);
-        } else {
-          // beforeinput didn't work — fall back to CDP keyboard simulation
-          state.skipLiveCheck = true;
-          applyFixCDP(text).then(success => {
-            if (success) {
-              clearLiveDraftHighlights();
-              hideTooltip();
-              showResultBadge('✓ Fixed!', 3000);
-            } else {
-              navigator.clipboard.writeText(text).catch(() => {});
-              ta.focus();
-              const range = document.createRange();
-              range.selectNodeContents(ta);
+        // Dismiss tooltip and remove overlay immediately so the user
+        // sees instant feedback; the text replacement follows after
+        // a double rAF to let Lexical reinitialize after focus.
+        // Suppress live-draft checks while we apply the fix so the
+        // text replacement doesn't trigger a new auto-check.
+        hideTooltip();
+        clearLiveDraftHighlights();
+        state.skipLiveCheck = true;
+        state.cancelLiveDraft?.();
+        ta.focus();
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            // Re-query: ta may have been detached by React re-render
+            const el = document.querySelector(
+              'footer div[contenteditable="true"][role="textbox"]'
+            ) || document.querySelector('[contenteditable="true"][role="textbox"]')
+              || document.querySelector('[contenteditable="true"]');
+            if (el && document.contains(el)) {
+              const before = (el.textContent || el.innerText || '').replace(/\u200B/g, '');
+              el.focus();
               const sel = window.getSelection();
+              const range = document.createRange();
+              range.selectNodeContents(el);
               sel.removeAllRanges();
               sel.addRange(range);
-              showResultBadge('Copied to clipboard — paste (Ctrl+V) to apply', 4000);
+              el.dispatchEvent(new InputEvent('beforeinput', {
+                bubbles: true, cancelable: true,
+                inputType: 'insertReplacementText', data: text,
+              }));
+              // Lexical processes beforeinput asynchronously (React batch).
+              // Check after one more frame to see if the text actually changed.
+              requestAnimationFrame(() => {
+                const after = (el.textContent || el.innerText || '').replace(/\u200B/g, '');
+                if (after !== before) {
+                  showResultBadge('✓ Fixed!', 3000);
+                } else {
+                  console.debug('[AI Grammar] beforeinput had no effect, falling back to CDP',
+                    { before, after, text: text.replace(/\u200B/g, '') });
+                  applyFixCDP(text).then(success => {
+                    if (success) {
+                      showResultBadge('✓ Fixed!', 3000);
+                    } else {
+                      navigator.clipboard.writeText(text).catch(() => {});
+                      showResultBadge('Copied to clipboard — paste (Ctrl+V) to apply', 4000);
+                    }
+                    state.skipLiveCheck = false;
+                  });
+                  return;
+                }
+                state.skipLiveCheck = false;
+              });
+            } else {
+              console.debug('[AI Grammar] contentEditable not found, falling back to CDP');
+              applyFixCDP(text).then(success => {
+                if (success) {
+                  showResultBadge('✓ Fixed!', 3000);
+                } else {
+                  navigator.clipboard.writeText(text).catch(() => {});
+                  showResultBadge('Copied to clipboard — paste (Ctrl+V) to apply', 4000);
+                }
+                state.skipLiveCheck = false;
+              });
+              return;
             }
             state.skipLiveCheck = false;
           });
-        }
+        });
       }
     }
     hideTooltip();
@@ -103,28 +146,35 @@ export function applyCorrection(errorEl) {
  * Returns true if the text was successfully inserted.
  */
 export function tryBeforeInput(text, ta) {
-  try {
-    ta.focus();
-    // Set selection to cover all existing content
-    const sel = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(ta);
-    sel.removeAllRanges();
-    sel.addRange(range);
+  return new Promise((resolve) => {
+    try {
+      // Capture current text so we can verify it changed after dispatch.
+      const before = (ta.textContent || ta.innerText || '').replace(/​/g, '');
+      ta.focus();
+      // Set selection to cover all existing content
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(ta);
+      sel.removeAllRanges();
+      sel.addRange(range);
 
-    ta.dispatchEvent(new InputEvent('beforeinput', {
-      bubbles: true,
-      cancelable: true,
-      inputType: 'insertReplacementText',
-      data: text,
-    }));
+      ta.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertReplacementText',
+        data: text,
+      }));
 
-    // Verify text was inserted
-    const current = (ta.textContent || ta.innerText || '').replace(/​/g, '');
-    return current.includes(text.replace(/​/g, ''));
-  } catch {
-    return false;
-  }
+      // Lexical processes beforeinput asynchronously (React batch).
+      // Check after one frame to see if the text actually changed.
+      requestAnimationFrame(() => {
+        const after = (ta.textContent || ta.innerText || '').replace(/​/g, '');
+        resolve(after !== before);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
 }
 
 export function applyFixCDP(text) {
