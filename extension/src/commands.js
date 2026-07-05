@@ -573,7 +573,7 @@ export function buildPaletteCommands() {
   return Object.entries(COMMANDS).map(([name, cmd]) => ({
     name,
     help: cmd.help,
-    full: name === 'lang' ? `?/lang en` : `?/${name}`,
+    full: name === 'lang' ? `?/lang` : `?/${name}`,
     needsArg: name === 'lang',
   }));
 }

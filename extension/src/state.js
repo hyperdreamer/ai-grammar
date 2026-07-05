@@ -99,13 +99,14 @@ export const state = {
   pendingSubmission: null,        // { text, messageList, time, conversationKey }
 
   // Reference counters: one counter per pending category
-  badgeCounters: { checking: 0, fixing: 0, polishing: 0 },
+  badgeCounters: { checking: 0, fixing: 0, polishing: 0, translating: 0 },
 
   // Current label text for each category
   badgeLabels: {
     checking: 'Checking grammar...',
     fixing: 'Fixing...',
-    polishing: 'Polishing...'
+    polishing: 'Polishing...',
+    translating: 'Translating...'
   },
 
   // Active badge DOM elements, keyed by category or 'result-N' for result badges
