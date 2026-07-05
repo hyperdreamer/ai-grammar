@@ -847,7 +847,7 @@ export function showLanguagePalette(ta, filter = '') {
         const ta2 = langPaletteTarget;
         const val = ta2.value || ta2.textContent || '';
         const escaped = langPaletteFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const re = new RegExp('[\\?/]lang\\s+' + escaped + '$');
+        const re = new RegExp('\\?/lang\\s+' + escaped + '$');
         const m = val.match(re);
         if (m) {
           const newVal = val.slice(0, m.index) + '?/lang ' + code;
@@ -906,7 +906,7 @@ function commitLanguageSelection(code) {
   // Replace "?/lang <filter>" with "?/lang <code>" in the textarea
   const val = ta.value || ta.textContent || '';
   // Find the trailing "?/lang ..." or "/lang ..." portion
-  const re = /([\?\/])lang(\s+[^\s]*)?$/;
+  const re = /\?\/lang(\s+[^\s]*)?$/;
   const m = val.match(re);
   if (m) {
     const newVal = val.slice(0, m.index) + '?/lang ' + code;

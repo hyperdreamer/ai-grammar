@@ -2665,7 +2665,7 @@
           const ta2 = langPaletteTarget;
           const val = ta2.value || ta2.textContent || "";
           const escaped = langPaletteFilter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const re = new RegExp("[\\?/]lang\\s+" + escaped + "$");
+          const re = new RegExp("\\?/lang\\s+" + escaped + "$");
           const m = val.match(re);
           if (m) {
             const newVal = val.slice(0, m.index) + "?/lang " + code;
@@ -2721,7 +2721,7 @@
     if (!langPaletteTarget) return;
     const ta = langPaletteTarget;
     const val = ta.value || ta.textContent || "";
-    const re = /([\?\/])lang(\s+[^\s]*)?$/;
+    const re = /\?\/lang(\s+[^\s]*)?$/;
     const m = val.match(re);
     if (m) {
       const newVal = val.slice(0, m.index) + "?/lang " + code;
