@@ -51,17 +51,97 @@ export const COMMANDS = {
     },
   },
   lang: {
-    help: 'Set language (e.g., ?/lang en, ?/lang zh, ?/lang auto)',
-    async run(args) {
+    help: 'Translate text (e.g., ?/lang fr, ?/lang ja). Text before the command is translated.',
+    async run(args, ta) {
       const valid = ['auto', 'en', 'zh', 'ja', 'ko', 'fr', 'de', 'es', 'ru', 'pt', 'it', 'ar'];
-      const lang = (args || '').toLowerCase();
-      if (!valid.includes(lang)) {
+      const targetLang = (args || '').toLowerCase();
+      if (!valid.includes(targetLang)) {
         showResultBadge(`Unknown language: "${args}". Use: ${valid.join(', ')}`);
         return;
       }
-      const label = lang === 'auto' ? 'Auto-detect' : lang.toUpperCase();
-      await chrome.storage.sync.set({ grammarLanguage: lang });
-      showResultBadge(`Language set to ${label}`);
+      const isWhatsApp = location.hostname === 'web.whatsapp.com';
+      if (isWhatsApp || isTeams) {
+        showResultBadge('?/lang is not available on this site');
+        stripCommand('?/lang ' + args, ta);
+        return;
+      }
+      const value = ta.value || ta.textContent || '';
+      const cmdStr = '?/lang ' + args;
+      const cmdIdx = value.lastIndexOf(cmdStr);
+      const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
+      if (!draft || draft.length < state.minChars) {
+        showResultBadge(`No text to translate (need at least ${state.minChars} characters)`);
+        stripCommand(cmdStr, ta);
+        return;
+      }
+      showPendingBadge('translating', 'Translating...');
+      state.commandInFlight = true;
+      state.cancelLiveDraft?.();
+      state.activeCheckController?.abort();
+      try {
+        const settings = await safeGetStorage({ grammarHost: '127.0.0.1', grammarPort: 8766 });
+        const translateController = new AbortController();
+        const timeoutId = setTimeout(() => translateController.abort(), 60000);
+        const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/translate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: draft, target_lang: targetLang }),
+          signal: translateController.signal,
+        });
+        clearTimeout(timeoutId);
+        const data = await resp.json();
+        removePendingBadge('translating');
+        if (!resp.ok) {
+          showResultBadge(`Translation failed: ${data?.detail || resp.status}`, 5000);
+          return;
+        }
+        const translated = data.translated;
+        if (!translated || translated === draft) {
+          showResultBadge('✓ Text is already in that language or could not be translated');
+          stripCommand(cmdStr, ta);
+          return;
+        }
+        state.skipLiveCheck = true;
+        if (ta.tagName === 'TEXTAREA') {
+          ta.value = translated;
+          ta.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+          if (tryBeforeInput(translated, ta)) {
+            // Success
+          } else {
+            applyFixCDP(translated).then(success => {
+              if (success) {
+                showResultBadge(`✓ Translated to ${targetLang.toUpperCase()}`, 3000);
+              } else {
+                navigator.clipboard.writeText(translated).catch(() => {});
+                showResultBadge('Copied translation to clipboard — paste (Ctrl+V) to apply', 4000);
+              }
+              state.skipLiveCheck = false;
+            });
+            state.cancelLiveDraft?.();
+            state.activeCheckController?.abort();
+            return;
+          }
+        }
+        state.skipLiveCheck = false;
+        state.cancelLiveDraft?.();
+        state.activeCheckController?.abort();
+        ta.focus();
+        showResultBadge(`✓ Translated to ${targetLang.toUpperCase()}`);
+      } catch (e) {
+        removePendingBadge('translating');
+        let reason;
+        if (e.name === 'AbortError') {
+          reason = 'Request timed out or was cancelled';
+        } else if (e.message?.includes('Extension context invalidated')) {
+          reason = 'Extension reloaded — please reload this page';
+        } else {
+          reason = e.message;
+        }
+        showResultBadge(`Translation failed: ${reason}`);
+      } finally {
+        state.commandInFlight = false;
+      }
     },
   },
   help: {
@@ -369,7 +449,7 @@ export async function handleCommand(text, ta = null) {
   }
 
   try {
-    if ((cmdName === 'fix' || cmdName === 'polish' || cmdName === 'check') && ta) {
+    if ((cmdName === 'fix' || cmdName === 'polish' || cmdName === 'check' || cmdName === 'lang') && ta) {
       await cmd.run(args, ta);
     } else if (cmdName === 'fix') {
       // Called from submit handler — extract text before ?/fix and apply

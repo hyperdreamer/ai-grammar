@@ -131,6 +131,7 @@ export function removeAllBadges() {
   state.badgeCounters.checking = 0;
   state.badgeCounters.fixing = 0;
   state.badgeCounters.polishing = 0;
+  state.badgeCounters.translating = 0;
   const stack = document.querySelector('.ag-badge-stack');
   if (stack) stack.remove();
 }

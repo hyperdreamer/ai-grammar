@@ -49,7 +49,7 @@ export function init() {
     if (!captured || captured.length < state.minChars) return;
     // Check for ?/ prefix commands at the end
     if (/\?\/\w+(\s+\S+)?$/.test(captured)) {
-      await handleCommand(captured);
+      await handleCommand(captured, textarea);
       return;
     }
     const conversationKey = getConversationKey();
@@ -250,7 +250,7 @@ export function init() {
 
     // Prevent WhatsApp/chat platforms from sending when a ?/fix, ?/polish, or ?/check
     // command is pending — the Enter triggers our handler, not the platform's send.
-    if (/\?\/\b(fix|polish|check)\b\s*$/.test(text)) {
+    if (/\?\/\b(fix|polish|check|lang)\b\s*$/.test(text)) {
       e.preventDefault();
       e.stopPropagation();
     }
@@ -375,7 +375,7 @@ export function init() {
         }
 
         try {
-          if (cmdName === 'fix' || cmdName === 'polish' || cmdName === 'check') {
+          if (cmdName === 'fix' || cmdName === 'polish' || cmdName === 'check' || cmdName === 'lang') {
             await COMMANDS[cmdName].run(cmdArgs, ta);
           } else {
             await COMMANDS[cmdName].run(cmdArgs);
@@ -386,7 +386,7 @@ export function init() {
 
         // Strip the command portion, keep text before it
         // Skip for 'fix', 'polish', 'check', and lang-without-args (lang waits for parameter)
-        if (cmdName !== 'fix' && cmdName !== 'polish' && cmdName !== 'check') {
+        if (cmdName !== 'fix' && cmdName !== 'polish' && cmdName !== 'check' && cmdName !== 'lang') {
           if (cmdName === 'lang' && !cmdArgs) {
             // lang without args — keep the command text, user still typing parameter
           } else {

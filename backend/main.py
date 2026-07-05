@@ -56,6 +56,11 @@ POLISH_SYSTEM_PROMPT = """You are a text polisher. Improve the given text to be 
 
 Keep the tone and intent identical — only improve the quality of expression. No markdown, no extra text."""
 
+TRANSLATE_SYSTEM_PROMPT = """You are a translator. Translate the given text into the target language. Return ONLY a JSON object with a single field:
+- "translated": string, the translated text
+
+Preserve the tone, intent, and formatting of the original. Do not add explanations, notes, or commentary. No markdown, no extra text."""
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -93,6 +98,20 @@ class PolishResponse(BaseModel):
     """Response body returned by the /polish endpoint."""
 
     polished: str
+    model: str
+    tokens_used: int
+    error: str | None = None
+
+
+class TranslateRequest(BaseModel):
+    """Request body for the /translate endpoint."""
+    text: str
+    target_lang: str = "en"
+    max_tokens: int | None = None
+
+class TranslateResponse(BaseModel):
+    """Response body returned by the /translate endpoint."""
+    translated: str
     model: str
     tokens_used: int
     error: str | None = None
@@ -209,7 +228,7 @@ def load_server_config() -> ServerConfig:
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="AI Grammar Checker", version="1.0.6")
+app = FastAPI(title="AI Grammar Checker", version="1.0.7")
 
 # Allow requests from any origin (content scripts run in page context)
 app.add_middleware(
@@ -575,6 +594,109 @@ async def polish_text(request: CheckRequest) -> Response:
         ensure_ascii=False,
     )
     _debug("polish", f"response: {len(polished)} chars model={result['model']} tokens={result['tokens']}", enabled=debug)
+
+    return Response(
+        content=body.encode("utf-8"),
+        media_type="application/json",
+        headers={"Connection": "close"},
+    )
+
+
+def _parse_translated(content: str) -> str:
+    """Parse AI translate response — extract the 'translated' field from JSON."""
+    if not isinstance(content, str):
+        raise HTTPException(status_code=502, detail="AI response had no text content")
+
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+    content = content.strip()
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=502, detail=f"Failed to parse AI response: {content[:300]}")
+        else:
+            raise HTTPException(status_code=502, detail=f"AI response is not valid JSON: {content[:300]}")
+
+    translated = data.get("translated", "")
+    if not translated or not isinstance(translated, str):
+        raise HTTPException(status_code=502, detail=f"AI response missing 'translated' field: {content[:300]}")
+
+    return translated
+
+
+@app.post("/translate", response_model=None)
+async def translate_text(request: TranslateRequest) -> Response:
+    """Translate text to the target language."""
+    text = request.text.strip()
+    debug = _load_debug()
+    _debug("translate", f"request: {len(text)} chars target={request.target_lang}", enabled=debug)
+
+    if not text:
+        body = json.dumps({"translated": "", "model": "", "tokens_used": 0}, ensure_ascii=False)
+        return Response(content=body.encode("utf-8"), media_type="application/json")
+
+    if len(text) > DEFAULT_MAX_TEXT_CHARS:
+        text = text[:DEFAULT_MAX_TEXT_CHARS]
+
+    try:
+        config = load_config()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Configuration error: {type(exc).__name__}: {exc}")
+
+    timeout = httpx.Timeout(
+        connect=config.timeout.connect,
+        read=config.timeout.read,
+        write=config.timeout.write,
+        pool=config.timeout.pool,
+    )
+    headers = {
+        "Authorization": f"Bearer {config.api_key}",
+        "Content-Type": "application/json",
+    }
+    target_lang_label = "English" if request.target_lang == "en" else request.target_lang
+    system_prompt = TRANSLATE_SYSTEM_PROMPT + f"\n\nTarget language: {target_lang_label}"
+    body_data = {
+        "model": config.model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text},
+        ],
+        "temperature": 0.3,
+    }
+    if request.max_tokens and request.max_tokens > 0:
+        body_data["max_tokens"] = request.max_tokens
+
+    try:
+        deadline = config.timeout.read + 5  # buffer so httpx fires first
+        result = await _do_ai_call(body_data, headers, timeout, config, deadline=deadline)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI call failed: {exc}")
+
+    try:
+        translated = _parse_translated(result["content"])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to parse AI response: {type(exc).__name__}: {exc}")
+
+    body = json.dumps(
+        {"translated": translated, "model": result["model"], "tokens_used": result["tokens"]},
+        ensure_ascii=False,
+    )
+    _debug("translate", f"response: {len(translated)} chars model={result['model']} tokens={result['tokens']}", enabled=debug)
 
     return Response(
         content=body.encode("utf-8"),

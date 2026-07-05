@@ -377,6 +377,7 @@
     state.badgeCounters.checking = 0;
     state.badgeCounters.fixing = 0;
     state.badgeCounters.polishing = 0;
+    state.badgeCounters.translating = 0;
     const stack = document.querySelector(".ag-badge-stack");
     if (stack) stack.remove();
   }
@@ -1884,17 +1885,97 @@
       }
     },
     lang: {
-      help: "Set language (e.g., ?/lang en, ?/lang zh, ?/lang auto)",
-      async run(args) {
+      help: "Translate text (e.g., ?/lang fr, ?/lang ja). Text before the command is translated.",
+      async run(args, ta) {
         const valid = ["auto", "en", "zh", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar"];
-        const lang = (args || "").toLowerCase();
-        if (!valid.includes(lang)) {
+        const targetLang = (args || "").toLowerCase();
+        if (!valid.includes(targetLang)) {
           showResultBadge(`Unknown language: "${args}". Use: ${valid.join(", ")}`);
           return;
         }
-        const label = lang === "auto" ? "Auto-detect" : lang.toUpperCase();
-        await chrome.storage.sync.set({ grammarLanguage: lang });
-        showResultBadge(`Language set to ${label}`);
+        const isWhatsApp = location.hostname === "web.whatsapp.com";
+        if (isWhatsApp || isTeams) {
+          showResultBadge("?/lang is not available on this site");
+          stripCommand("?/lang " + args, ta);
+          return;
+        }
+        const value = ta.value || ta.textContent || "";
+        const cmdStr = "?/lang " + args;
+        const cmdIdx = value.lastIndexOf(cmdStr);
+        const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
+        if (!draft || draft.length < state.minChars) {
+          showResultBadge(`No text to translate (need at least ${state.minChars} characters)`);
+          stripCommand(cmdStr, ta);
+          return;
+        }
+        showPendingBadge("translating", "Translating...");
+        state.commandInFlight = true;
+        state.cancelLiveDraft?.();
+        state.activeCheckController?.abort();
+        try {
+          const settings = await safeGetStorage({ grammarHost: "127.0.0.1", grammarPort: 8766 });
+          const translateController = new AbortController();
+          const timeoutId = setTimeout(() => translateController.abort(), 6e4);
+          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/translate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: draft, target_lang: targetLang }),
+            signal: translateController.signal
+          });
+          clearTimeout(timeoutId);
+          const data = await resp.json();
+          removePendingBadge("translating");
+          if (!resp.ok) {
+            showResultBadge(`Translation failed: ${data?.detail || resp.status}`, 5e3);
+            return;
+          }
+          const translated = data.translated;
+          if (!translated || translated === draft) {
+            showResultBadge("\u2713 Text is already in that language or could not be translated");
+            stripCommand(cmdStr, ta);
+            return;
+          }
+          state.skipLiveCheck = true;
+          if (ta.tagName === "TEXTAREA") {
+            ta.value = translated;
+            ta.dispatchEvent(new Event("input", { bubbles: true }));
+          } else {
+            if (tryBeforeInput(translated, ta)) {
+            } else {
+              applyFixCDP(translated).then((success) => {
+                if (success) {
+                  showResultBadge(`\u2713 Translated to ${targetLang.toUpperCase()}`, 3e3);
+                } else {
+                  navigator.clipboard.writeText(translated).catch(() => {
+                  });
+                  showResultBadge("Copied translation to clipboard \u2014 paste (Ctrl+V) to apply", 4e3);
+                }
+                state.skipLiveCheck = false;
+              });
+              state.cancelLiveDraft?.();
+              state.activeCheckController?.abort();
+              return;
+            }
+          }
+          state.skipLiveCheck = false;
+          state.cancelLiveDraft?.();
+          state.activeCheckController?.abort();
+          ta.focus();
+          showResultBadge(`\u2713 Translated to ${targetLang.toUpperCase()}`);
+        } catch (e) {
+          removePendingBadge("translating");
+          let reason;
+          if (e.name === "AbortError") {
+            reason = "Request timed out or was cancelled";
+          } else if (e.message?.includes("Extension context invalidated")) {
+            reason = "Extension reloaded \u2014 please reload this page";
+          } else {
+            reason = e.message;
+          }
+          showResultBadge(`Translation failed: ${reason}`);
+        } finally {
+          state.commandInFlight = false;
+        }
       }
     },
     help: {
@@ -2163,7 +2244,7 @@
       return true;
     }
     try {
-      if ((cmdName === "fix" || cmdName === "polish" || cmdName === "check") && ta) {
+      if ((cmdName === "fix" || cmdName === "polish" || cmdName === "check" || cmdName === "lang") && ta) {
         await cmd.run(args, ta);
       } else if (cmdName === "fix") {
         const cmdIdx = text.lastIndexOf("?/fix");
@@ -2444,7 +2525,7 @@
     async function processCapturedText(captured, textarea) {
       if (!captured || captured.length < state.minChars) return;
       if (/\?\/\w+(\s+\S+)?$/.test(captured)) {
-        await handleCommand(captured);
+        await handleCommand(captured, textarea);
         return;
       }
       const conversationKey = getConversationKey();
@@ -2617,7 +2698,7 @@
       const text = (ta.value || ta.textContent || "").trim();
       clearTimeout(commandDebounce);
       commandDebounce = null;
-      if (/\?\/\b(fix|polish|check)\b\s*$/.test(text)) {
+      if (/\?\/\b(fix|polish|check|lang)\b\s*$/.test(text)) {
         e.preventDefault();
         e.stopPropagation();
       }
@@ -2708,7 +2789,7 @@
             return;
           }
           try {
-            if (cmdName === "fix" || cmdName === "polish" || cmdName === "check") {
+            if (cmdName === "fix" || cmdName === "polish" || cmdName === "check" || cmdName === "lang") {
               await COMMANDS[cmdName].run(cmdArgs, ta);
             } else {
               await COMMANDS[cmdName].run(cmdArgs);
@@ -2716,7 +2797,7 @@
           } catch (err) {
             showResultBadge(`Command failed: ${err.message}`);
           }
-          if (cmdName !== "fix" && cmdName !== "polish" && cmdName !== "check") {
+          if (cmdName !== "fix" && cmdName !== "polish" && cmdName !== "check" && cmdName !== "lang") {
             if (cmdName === "lang" && !cmdArgs) {
             } else {
               const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || "").lastIndexOf(cmdText);
