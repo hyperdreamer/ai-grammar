@@ -28,6 +28,7 @@
   const PANEL_ID = 'ag-teams-float';
 
   // ── State ─────────────────────────────────────────────────────────────
+  const log = (...args) => console.debug('[AI Grammar Teams]', ...args);
   let editorElement = null; // the .ck-editor__editable DOM element
   let lastEditTime = 0;
   let liveTarget = null;
