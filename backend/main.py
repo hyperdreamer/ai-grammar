@@ -1,6 +1,6 @@
 """AI Grammar Checker — FastAPI backend entry point."""
 
-from .routes import app  # noqa: F401
+from backend.routes import app  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -9,7 +9,7 @@ from .routes import app  # noqa: F401
 if __name__ == "__main__":
     import uvicorn
 
-    from .config import load_server_config
+    from backend.config import load_server_config
 
     server = load_server_config()
     uvicorn.run(app, host=server.host, port=server.port)
