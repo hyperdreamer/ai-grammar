@@ -1,66 +1,75 @@
 # AI Grammar Checker
 
-Chrome extension that detects grammar and spelling errors in submitted text using AI. Highlights errors inline and shows corrections in a tooltip. On Microsoft Teams, uses a popup panel with per-error fixes and a floating command bar for quick actions.
+Chrome MV3 extension that detects grammar, spelling, and style issues in text using AI. Works on any web page — WhatsApp Web, Microsoft Teams, and generic text inputs. Highlights errors inline, shows corrections in tooltips, and offers one-click fixing, polishing, and translation.
 
 ## Architecture
 
 ```
-extension/           # Chrome Extension (Manifest V3)
-  manifest.json      # Permissions, content scripts, keyboard shortcut
-  background.js      # Service worker — backend communication, state management
-  content.js         # Bundled content script (built from src/)
-  src/               # Source modules (bundled into content.js by esbuild)
-    content.js       # Entry point — IIFE wrapper + init()
-    state.js         # Constants, mutable state object, shared utilities
-    styles.js        # CSS injection (underlines, tooltips, overlays)
-    dom-utils.js     # DOM helpers (text extraction, block detection)
-    highlight.js     # Error highlighting (DOM + overlay strategies)
-    tooltip.js       # Floating tooltip with smart positioning
+extension/               # Chrome Extension (Manifest V3)
+  manifest.json
+  content.js             # Bundled shared modules (built from src/)
+  src/                   # ESM source modules
+    content.js           # Entry point — init, platform detection
+    api.js               # Shared backend fetch wrappers (check, polish, translate)
+    state.js             # Mutable state, safeGetStorage, escapeHtml
+    styles.js            # CSS injection (underlines, tooltips, badges)
+    dom-utils.js         # DOM helpers (text extraction, block detection)
+    highlight.js         # Error highlighting (DOM + overlay strategies)
+    tooltip.js           # Floating tooltip with smart positioning
     apply-correction.js  # Correction injection (beforeinput → CDP fallback)
-    indicators.js    # Badges, green checks, error floats
-    live-draft.js    # Live draft highlights + debounced checking
-    check-text.js    # Grammar check pipeline (API call + dispatch)
-    mutation-observer.js  # DOM mutation → detect new messages
-    commands.js      # ?/fix, ?/polish, ?/lang, command palette, language picker
-    languages.js     # 42-language map with search/auto-complete helpers
-    selection-check.js    # Manual selection → grammar check
-    conversation.js  # Conversation key tracking, scoped state
-    events.js        # Tooltip/correction event delegation
-  teams-bridge.js    # Teams CKEditor live-draft module
-  popup.html         # Settings popup
-  popup.js           # Popup logic
-  package.json       # Build config (esbuild)
-backend/             # FastAPI server
-  ...
+    indicators.js        # Badges (pending/result), green checks, error floats
+    live-draft.js        # Live draft idle-poll checking + inline highlights
+    check-text.js        # Post-submit grammar check pipeline
+    mutation-observer.js # DOM mutation → detect new messages
+    commands.js          # ?/fix, ?/polish, ?/lang, command palette, language picker
+    languages.js         # 42-language map with search/autocomplete
+    selection-check.js   # Manual selection → grammar check
+    conversation.js      # Chat-scoped conversation key tracking
+    events.js            # Tooltip/correction event delegation
+  teams-bridge.js        # Teams CKEditor live-draft + command bar + error panel
+  whatsapp-bridge.js     # WhatsApp DOM adapter (bidi normalization, overlay rendering)
+  background.js           # Service worker — CKEditor MAIN-world bridge
+  popup.html/js           # Settings popup
+  package.json            # esbuild build config
+
+backend/                 # FastAPI server
+  config.py              # Config loading (yaml + env vars), dataclasses
+  models.py              # Pydantic request/response models
+  providers.py           # AI prompts, HTTP calls, response parsing, retry logic
+  routes.py              # FastAPI app, CORS, endpoints (/check, /polish, /translate)
+  main.py                # Entry point
+  config.yaml            # Server + AI provider settings
+  config.example.yaml
+  requirements.txt
+
+tests/                   # Test suite
+  test_backend.py        # 20 pytest tests (config, parsing, endpoints, AI retry)
+  test_*.py              # Playwright browser tests (extension + WhatsApp)
+
+.github/workflows/
+  ci.yml                 # Backend pytest + extension build on push/PR
 ```
 
-### Building the extension
+### Platform adapters
 
-The source modules under `extension/src/` are bundled into `extension/content.js` by [esbuild](https://esbuild.github.io/):
+The extension uses a **thin adapter** pattern for platform-specific code:
+
+| Bridge | Lines | Pattern | What it does |
+|---|---|---|---|
+| `whatsapp-bridge.js` | 499 | Thin DOM adapter (~95% platform-specific) | Bidi text normalization, WhatsApp DOM selectors, overlay rendering, chat-switch detection |
+| `teams-bridge.js` | 1,619 | Substantial subsystem (~63% platform-specific) | CKEditor live-draft, floating command bar, error panel, translate picker, grammar toggle |
+
+Shared modules drive all backend communication and badge/indicator logic via `window.__aiGrammar`. Platform bridges expose platform-specific APIs (e.g., `window.__aiWhatsApp`).
+
+## Building
 
 ```bash
 cd extension
 npm install
-npm run build      # esbuild src/content.js --bundle --outfile=content.js --format=iife
+npm run build      # esbuild bundles src/ → content.js (IIFE, ~124KB)
 ```
 
-This produces a single-file IIFE content script compatible with Chrome MV3. Edit source files in `src/`, then rebuild.
-
-## How It Works
-
-1. **Auto-check submitted text** on chat platforms (WhatsApp Web, Teams, etc.) — your messages are checked automatically after sending.
-2. **Live draft checking** — text you're composing in any input is checked after a configurable pause.
-3. Press the **keyboard shortcut** (`Ctrl+Shift+L` / `Cmd+Shift+L`) to manually check selected text.
-4. The text is sent to the **background service worker**.
-5. The background forwards it to the **FastAPI backend** (`POST /check`).
-6. The backend calls an AI model (OpenAI, Anthropic, etc.) with a grammar-checking prompt.
-7. The AI returns structured JSON with error positions and corrections.
-8. Issues are **highlighted inline** with colored wavy underlines:
-   - 🔴 **Red** — errors (spelling, grammar, punctuation)
-   - 🟢 **Green** — improvements (awkward phrasing, wordiness)
-   - 🔵 **Blue** — idioms (more natural expressions)
-9. **Hover or click** on highlighted text to see the correction in a tooltip.
-10. **Chat-scoped** — switching conversations clears highlights from the old chat so results stay with the chat they belong to. On WhatsApp Web, grammar checks are automatically scoped to the active chat using message container detection.
+The bundled `content.js` is committed to the repo so the extension works without a build step.
 
 ## Setup
 
@@ -71,148 +80,126 @@ cd backend
 pip install -r requirements.txt
 cp config.example.yaml config.yaml
 # Edit config.yaml — set your AI provider, model, and API key
-python main.py
+python main.py          # Runs on http://127.0.0.1:8766
 ```
-
-The backend runs on `http://127.0.0.1:8766` by default.
 
 ### 2. Extension
 
-1. Open Chrome and go to `chrome://extensions/`
-2. Enable "Developer mode"
-3. Click "Load unpacked" and select the `extension/` directory
-4. The extension icon appears in the toolbar
+1. Open `chrome://extensions/`, enable "Developer mode"
+2. Click "Load unpacked" → select the `extension/` directory
+3. Click the extension icon to open settings
 
-## Usage
+## Backend API
 
-### Manual check
+| Endpoint | Method | Purpose | Response |
+|---|---|---|---|
+| `/health` | GET | Health check | `{"status": "ok"}` |
+| `/version` | GET | Extension version from manifest | `{"version": "7.0.0"}` |
+| `/check` | POST | Grammar/spell check | `{"errors": [...], "model": "...", "tokens_used": N}` |
+| `/polish` | POST | AI text polish/rewrite | `{"polished": "...", "model": "...", "tokens_used": N}` |
+| `/translate` | POST | Language translation | `{"translated": "...", "model": "...", "tokens_used": N}` |
 
-1. Select any text on a page
-2. Press `Ctrl+Shift+L` (Mac: `Cmd+Shift+L`)
-3. Errors in the selection will be highlighted
+All endpoints accept `{"text": "...", "language": "auto"}`. The backend calls any OpenAI-compatible API (`/v1/chat/completions`) with structured prompts and parses the JSON response.
 
-You can also check text as you compose it in any text input using the live draft checker or inline commands.
-
-### Popup settings
-
-Click the extension icon to configure:
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| **Enabled** | ON | Toggle grammar checking |
-| **Language** | Auto-detect | Focus on language-specific errors |
-| **Backend host** | 127.0.0.1:8766 | Where the backend is running |
-| **Live check delay** | 5s | How long after you stop typing before checking |
-| **Min characters** | 30 | Minimum text length to trigger checking |
-| **Max tokens** | 4096 | AI output limit (0 = unbounded) |
-
-Changes save automatically as you type.
-
-### Theme
-
-The extension automatically matches your browser/OS theme — no manual toggle needed. Every UI surface (popup, test page, tooltips, error panels, command palette, status badge) uses `prefers-color-scheme` to render in light or dark mode. Switch your system to light mode and all extension UI follows.
-
-### Inline commands (`?/` prefix)
-
-Type `?/` in any text input to open the **command palette** — a popup menu listing all available commands. Use arrow keys to navigate, Enter to select, or click a command. You can also type the full command directly (e.g., `?/off`).
-
-| Command | Action |
-|---------|--------|
-| `?/off` | Disable grammar checking |
-| `?/on` | Enable grammar checking |
-| `?/fix` | Auto-correct the text you typed (everything before `?/fix`) |
-| `?/polish` | Polish/improve the text for clarity and naturalness (everything before `?/polish`) |
-| `?/lang` | Translate text before the command to a target language. Opens a 42-language picker palette — type to filter, arrow keys to navigate, Enter to select. Supports names (`english`, `japanese`) and codes (`en`, `ja`). Any language code is accepted — the AI backend is the final arbiter. A unique-match filter auto-executes after 600ms (e.g., `?/lang fr` → translates to French). |
-| `?/check` | Force an immediate grammar check on the draft text (everything before `?/check`). Highlights errors inline, or shows a green check if clean. |
-| `?/help` | Show all available commands |
-
-The palette opens when you type `?/`. Arrow keys navigate, Enter selects, Escape closes. Type more to filter (e.g., `?/o` filters to `?/off` and `?/on`). Prefix shortcuts auto-execute when only one match remains (e.g., `?/pol` → `?/polish`). For `?/lang`, the language palette filters in real-time — a unique match auto-executes after 600ms.
-
-Commands work on textareas and standard `contentEditable` fields. On WhatsApp Web, text insertion uses a synthetic `beforeinput` event with double-rAF focus recovery — matching the proven `applyCorrection` pattern. CDP keyboard simulation (`chrome.debugger`) remains as a genuine last-resort fallback when `beforeinput` has no effect. **On Microsoft Teams**, `?/` commands are not available — a floating command bar with clickable buttons replaces them (see below).
-
-### Microsoft Teams
-
-Teams uses CKEditor 5 for its message input, which prevents standard DOM-based text manipulation. The extension uses a dedicated `teams-bridge.js` module that hooks into CKEditor's internal `change:data` event for live-draft grammar checking.
-
-**Floating command bar** — a frosted-glass bar appears above the editor when the input has focus and meets the minimum character count:
-
-| Button | Action |
-|--------|--------|
-| 🟢 On / 🔴 Off | Toggle grammar checking on/off — color indicates current state |
-| ✨ Polish | Improve the draft for clarity and naturalness |
-| 🔧 Fix | Auto-correct all grammar errors in place |
-| 🔍 Check | Force an immediate grammar check |
-| 🌐 Translate | Translate to another language via compact picker (8 common + search) |
-
-The bar stays visible while you type and dismisses when the editor loses focus or text drops below the minimum length. The grammar toggle is mutually exclusive — the button shows green when enabled, red when disabled.
-
-**Error panel** — when errors are found, a popup panel shows each error with its correction and explanation, plus an "Apply all fixes" button to correct everything at once (applied in reverse offset order to keep corrections valid).
-
-**Clean panel** — when no errors are found, a compact panel confirms "✅ No errors found". Both panels auto-dismiss when you continue typing.
-
-**Theme** — all panels and the command bar follow the OS light/dark preference via `prefers-color-scheme`. The translate picker detects Teams' actual theme at runtime from the page background luminance, so it matches even when Teams' theme differs from the OS setting.
-
-## Configuration
-
-### Server
-
-The backend listens on `127.0.0.1:8766` by default. Change in `backend/config.yaml`:
+### Configuration
 
 ```yaml
+# backend/config.yaml
 server:
   host: 127.0.0.1
   port: 8766
+
+ai:
+  model: gpt-4o-mini
+  api_base: https://api.openai.com     # /v1 auto-appended
+  api_key: $OPENAI_API_KEY             # $ prefix = read from env var
 ```
 
-### AI Provider
+Works with any OpenAI-compatible API — OpenAI, Anthropic (via proxy), DeepSeek, local LLMs, etc.
 
-The backend uses OpenAI-compatible chat APIs. Configure in `backend/config.yaml`:
+## Usage
 
-```yaml
-ai:
-  provider: openai
-  model: gpt-4o-mini
-  api_base: https://api.openai.com  # /v1 auto-appended
-  api_key: ***            # reads from env var
-  # api_key: sk-abc123    # or inline key
+### Auto-check (WhatsApp Web, Teams, generic pages)
 
-Works with:
-- OpenAI (gpt-4o-mini, gpt-4o)
-- Anthropic (via compatible proxy)
-- DeepSeek (deepseek-chat)
-- Any OpenAI-compatible API (chat2api, local LLMs, etc.)
+- **Post-submit** — messages are checked automatically after sending (WhatsApp, generic textareas)
+- **Live draft** — text you're composing is checked after a configurable pause (all platforms)
+- **Manual selection** — `Ctrl+Shift+L` checks selected text
 
-### Recommended models
+### Inline commands (`?/` prefix)
 
-| Model | Speed | Quality | Cost |
-|---|---|---|---|
-| gpt-4o-mini | Fast | Good | Very low |
-| gpt-4o | Moderate | Excellent | Medium |
-| claude-haiku | Fast | Good | Low |
-| deepseek-chat | Moderate | Good | Very low |
+Type `?/` in any text input to open the command palette:
 
-Smaller models work well because grammar checking is a focused task with a structured output format.
-
-## Keyboard Shortcut
-
-| Action | Shortcut |
+| Command | Action |
 |---|---|
-| Check selected text | `Ctrl+Shift+L` / `Cmd+Shift+L` |
+| `?/fix` | Auto-correct grammar errors in your draft |
+| `?/polish` | AI-rewrite for clarity and naturalness |
+| `?/check` | Force an immediate grammar check with inline highlights |
+| `?/lang` | Translate to another language (42-language picker) |
+| `?/off` / `?/on` | Toggle grammar checking |
+| `?/help` | Show all available commands |
+
+### Microsoft Teams
+
+Teams uses CKEditor 5 — `?/` text commands don't work. Instead, a **floating command bar** appears above the editor:
+
+| Button | Action |
+|---|---|
+| 🟢 On / 🔴 Off | Toggle grammar checking |
+| ✨ Polish | AI-rewrite draft |
+| 🔧 Fix | Auto-correct all errors |
+| 🔍 Check | Immediate grammar check |
+| 🌐 Translate | Language translation picker |
+
+Errors appear in a popup panel with per-error corrections and an "Apply all fixes" button. The panel auto-dismisses as you type.
+
+### Highlight colors
+
+- 🔴 **Red underline** — error (spelling, grammar, punctuation)
+- 🟢 **Green underline** — improvement (wordiness, awkward phrasing)
+- 🔵 **Blue underline** — idiom (more natural expression)
+
+## Popup Settings
+
+| Setting | Default | Description |
+|---|---|---|
+| Enabled | ON | Toggle grammar checking globally |
+| Language | Auto-detect | Language for error detection |
+| Backend host | 127.0.0.1:8766 | Backend address |
+| Live check delay | 5s | Idle time before auto-checking draft |
+| Min characters | 30 | Minimum text length to trigger checking |
+| Max tokens | 4096 | AI output token limit (0 = unbounded) |
+
+## Testing
+
+```bash
+# Backend unit tests (no AI provider needed)
+python -m pytest tests/test_backend.py -v     # 20 tests — config, parsing, endpoints, AI retry
+
+# Browser integration tests (requires running backend + Chrome)
+python tests/test_commands_local.py           # Command palette on contentEditable
+python tests/test_full_commands.py            # Commands on WhatsApp Web profile
+
+# Build verification
+cd extension && npm run build                 # Must produce content.js
+```
+
+CI runs `pytest test_backend.py` + `npm run build` on every push via GitHub Actions.
 
 ## Limitations
 
-- **Text only** — checks text content, not images or other media
-- **Rich text editors** — WhatsApp Web and contentEditable fields are fully supported. Text insertion uses synthetic `beforeinput` events with double-rAF focus recovery; CDP keyboard simulation is a last-resort fallback. Microsoft Teams uses a dedicated CKEditor bridge with a popup panel and command bar (no inline underlines or `?/` commands)
-- **Text length** — maximum 50,000 characters per check (configurable in backend)
+- **Text only** — no image/media checking
+- **Max 50,000 characters** per check (configurable)
+- **Teams CKEditor** — no inline underlines or `?/` commands (uses popup panel + command bar instead)
+- **WhatsApp Lexical** — programmatic text insertion is blocked; clipboard fallback used
+- **Requires running backend** on `localhost:8766`
 
-## Test Page
+## Recommended AI Models
 
-A built-in test page at `http://127.0.0.1:8766/static/grammar-test.html` provides two side-by-side test environments:
+| Model | Speed | Quality | Cost |
+|---|---|---|---|
+| `gpt-4o-mini` | Fast | Good | Very low |
+| `gpt-4o` | Moderate | Excellent | Medium |
+| `claude-haiku` | Fast | Good | Low |
+| `deepseek-chat` | Moderate | Good | Very low |
 
-| Mode | Editor type | Tests |
-|------|-------------|-------|
-| **Chat — Regular Sites** | TEXTAREA | Post-submit grammar checking, `?/` commands, quick-test snippets |
-| **Chat — WhatsApp-style** | contentEditable | Same as above, plus Lexical-compatible text insertion |
-| **Inline Command Testing** | Both | Standalone editors for palette and command interaction without submit |
-
-The test page includes pre-loaded error text (grammar, spelling, wordiness), command buttons for all `?/` commands, and simulated chat replies. It mirrors both production editor types — TEXTAREA for standard web forms and contentEditable for rich-text platforms like WhatsApp Web.
+Smaller models work well — grammar checking is a focused task with structured JSON output.
