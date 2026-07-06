@@ -134,21 +134,23 @@ Commands work on textareas and standard `contentEditable` fields. On WhatsApp We
 
 Teams uses CKEditor 5 for its message input, which prevents standard DOM-based text manipulation. The extension uses a dedicated `teams-bridge.js` module that hooks into CKEditor's internal `change:data` event for live-draft grammar checking.
 
-**Floating command bar** — a frosted-glass bar appears above the editor when you have text:
+**Floating command bar** — a frosted-glass bar appears above the editor when the input has focus and meets the minimum character count:
 
 | Button | Action |
 |--------|--------|
+| 🟢 On / 🔴 Off | Toggle grammar checking on/off — color indicates current state |
 | ✨ Polish | Improve the draft for clarity and naturalness |
 | 🔧 Fix | Auto-correct all grammar errors in place |
 | 🔍 Check | Force an immediate grammar check |
+| 🌐 Translate | Translate to another language via compact picker (8 common + search) |
 
-The bar auto-hides when you start typing or clear the text.
+The bar stays visible while you type and dismisses when the editor loses focus or text drops below the minimum length. The grammar toggle is mutually exclusive — the button shows green when enabled, red when disabled.
 
-**Error panel** — when errors are found, a popup panel shows each error with its correction, a per-item "Apply" button, and an "Apply all fixes" button to correct everything at once.
+**Error panel** — when errors are found, a popup panel shows each error with its correction and explanation, plus an "Apply all fixes" button to correct everything at once (applied in reverse offset order to keep corrections valid).
 
 **Clean panel** — when no errors are found, a compact panel confirms "✅ No errors found". Both panels auto-dismiss when you continue typing.
 
-**Theme** — all panels and the command bar follow the OS light/dark preference via `prefers-color-scheme`.
+**Theme** — all panels and the command bar follow the OS light/dark preference via `prefers-color-scheme`. The translate picker detects Teams' actual theme at runtime from the page background luminance, so it matches even when Teams' theme differs from the OS setting.
 
 ## Configuration
 

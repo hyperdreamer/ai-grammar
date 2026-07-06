@@ -39,6 +39,81 @@
   let polishAbortController = null; // abort in-flight polish on user edit
   let commandBarEl = null;          // floating command bar
   let fixAbortController = null;    // abort in-flight fix on user edit
+  let grammarEnabled = true;       // cached on/off state — read from storage on init
+  let translateAbortController = null; // abort in-flight translate on user edit
+  let translatePickerEl = null;    // floating language picker
+  let editorFocusHandler = null;   // focus/blur listeners on editorElement
+
+  // Inline language list (subset of src/languages.js — teams-bridge is IIFE)
+  const LANGUAGES = [
+    { code: 'en', name: 'English' },
+    { code: 'zh', name: 'Chinese (中文)' },
+    { code: 'ja', name: 'Japanese (日本語)' },
+    { code: 'ko', name: 'Korean (한국어)' },
+    { code: 'fr', name: 'French' },
+    { code: 'de', name: 'German' },
+    { code: 'es', name: 'Spanish' },
+    { code: 'pt', name: 'Portuguese' },
+    { code: 'ru', name: 'Russian' },
+    { code: 'it', name: 'Italian' },
+    { code: 'ar', name: 'Arabic' },
+    { code: 'nl', name: 'Dutch' },
+    { code: 'hi', name: 'Hindi' },
+    { code: 'th', name: 'Thai' },
+    { code: 'vi', name: 'Vietnamese' },
+    { code: 'sv', name: 'Swedish' },
+    { code: 'tr', name: 'Turkish' },
+    { code: 'pl', name: 'Polish' },
+    { code: 'uk', name: 'Ukrainian' },
+    { code: 'fi', name: 'Finnish' },
+    { code: 'no', name: 'Norwegian' },
+    { code: 'da', name: 'Danish' },
+    { code: 'cs', name: 'Czech' },
+    { code: 'el', name: 'Greek' },
+    { code: 'he', name: 'Hebrew' },
+    { code: 'hu', name: 'Hungarian' },
+    { code: 'ro', name: 'Romanian' },
+    { code: 'id', name: 'Indonesian' },
+    { code: 'ms', name: 'Malay' },
+    { code: 'tl', name: 'Filipino' },
+    { code: 'bn', name: 'Bengali' },
+    { code: 'fa', name: 'Persian' },
+    { code: 'ta', name: 'Tamil' },
+    { code: 'te', name: 'Telugu' },
+    { code: 'ur', name: 'Urdu' },
+    { code: 'sw', name: 'Swahili' },
+    { code: 'bg', name: 'Bulgarian' },
+    { code: 'sk', name: 'Slovak' },
+    { code: 'lt', name: 'Lithuanian' },
+    { code: 'lv', name: 'Latvian' },
+    { code: 'et', name: 'Estonian' },
+  ];
+  const COMMON_LANGS = ['en', 'zh', 'ja', 'ko', 'fr', 'de', 'es', 'pt'];
+
+  // Detect Teams actual theme (not OS — Teams has its own theme setting)
+  function isTeamsLightTheme() {
+    try {
+      // Teams body is often transparent — try multiple elements
+      const els = [
+        document.querySelector('.ts-left-rail, .ts-left-rail-header, .app-header'),
+        document.querySelector('[data-tid="app-bar"]'),
+        document.querySelector('header, nav, .left-rail'),
+        document.documentElement,
+        document.body,
+      ].filter(Boolean);
+      for (const el of els) {
+        const bg = getComputedStyle(el).backgroundColor;
+        const m = bg.match(/[\d.]+/g);
+        if (!m || m.length < 3) continue;
+        const [r, g, b, a] = [parseFloat(m[0]), parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3] || '1')];
+        if (a < 0.1) continue; // skip transparent/near-transparent
+        const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+        const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+        return L > 0.5;
+      }
+      return window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false;
+    } catch { return window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false; }
+  }
 
   // MutationObserver for SPA navigation (editor appears / disappears)
   let domObserver = null;
@@ -305,11 +380,40 @@
     lastKnownText = editorGetPlainText() || '';
     liveTarget = element;
     lastEditTime = Date.now();
+
+    // ── Focus/blur — show command bar on focus, hide on blur ──────────
+    if (editorFocusHandler) {
+      element.removeEventListener('focus', editorFocusHandler.onFocus);
+      element.removeEventListener('blur', editorFocusHandler.onBlur);
+    }
+    const onFocus = () => {
+      const text = editorGetPlainText();
+      if (text && text.length >= minChars) {
+        showCommandBar();
+      }
+    };
+    const onBlur = () => {
+      // Delay so click events on command bar buttons fire before dismiss
+      setTimeout(() => {
+        if (document.activeElement !== element) {
+          dismissCommandBar();
+        }
+      }, 150);
+    };
+    element.addEventListener('focus', onFocus);
+    element.addEventListener('blur', onBlur);
+    editorFocusHandler = { onFocus, onBlur };
   }
 
   function detachEditor() {
     dismissErrors();
     dismissCommandBar();
+    dismissTranslatePicker();
+    if (editorFocusHandler && editorElement) {
+      editorElement.removeEventListener('focus', editorFocusHandler.onFocus);
+      editorElement.removeEventListener('blur', editorFocusHandler.onBlur);
+      editorFocusHandler = null;
+    }
     if (editorMo) {
       editorMo.disconnect();
       editorMo = null;
@@ -421,10 +525,10 @@
 
     // Dismiss any floating panel (error or clean) on user edit
     dismissErrors();
-    dismissCommandBar();
 
-    // Abort in-flight polish / fix
+    // Abort in-flight polish / fix / translate
     abortPolish();
+    abortTranslate();
     if (fixAbortController) {
       fixAbortController.abort();
       fixAbortController = null;
@@ -613,8 +717,8 @@
 
         // Dismiss panel + abort polish on any edit (safety net)
         dismissErrors();
-        dismissCommandBar();
         abortPolish();
+        abortTranslate();
         if (fixAbortController) {
           fixAbortController.abort();
           fixAbortController = null;
@@ -626,14 +730,15 @@
       if (liveTarget === editorElement && !currentText) {
         dismissErrors();
         dismissCommandBar();
+        dismissTranslatePicker();
         liveTarget = null;
       }
 
       // Show/hide command bar based on text state
+      // Note: showing is now handled by the focus event on the editor.
+      // The poll loop only dismisses when text is too short or editor unfocused.
       if (!currentText || currentText.length < minChars) {
         dismissCommandBar();
-      } else if (!floatEl && !commandBarEl && !polishAbortController && !fixAbortController) {
-        showCommandBar();
       }
 
       if (!liveTarget || liveTarget !== editorElement) return;
@@ -673,9 +778,11 @@
     const s = await safeGetStorage({
       grammarLiveDelay: 5,
       grammarLiveMinChars: 30,
+      grammarEnabled: true,
     });
     checkDelay = (s.grammarLiveDelay || 5) * 1000;
     minChars = s.grammarLiveMinChars || 30;
+    grammarEnabled = s.grammarEnabled !== false;
   }
 
   function watchSettings() {
@@ -686,6 +793,17 @@
         }
         if (changes.grammarLiveMinChars) {
           minChars = changes.grammarLiveMinChars.newValue || 30;
+        }
+        if (changes.grammarEnabled) {
+          grammarEnabled = changes.grammarEnabled.newValue !== false;
+          // Update command-bar toggle button styling if visible
+          if (commandBarEl) {
+            const toggleBtn = commandBarEl.querySelector('.ag-cmd-toggle');
+            if (toggleBtn) {
+              toggleBtn.textContent = grammarEnabled ? '🟢 On' : '🔴 Off';
+              toggleBtn.className = 'ag-cmd-btn ag-cmd-toggle ' + (grammarEnabled ? 'ag-cmd-on' : 'ag-cmd-off');
+            }
+          }
         }
       });
     } catch {
@@ -823,7 +941,7 @@
     panel.style.right = 'auto';
   }
 
-  // ── Floating command bar (Polish / Fix / Check Now) ────────────────────
+  // ── Floating command bar (Toggle / Polish / Fix / Check / Translate) ──
   const COMMAND_BAR_ID = 'ag-teams-cmds';
 
   function showCommandBar() {
@@ -862,6 +980,10 @@
       '#' + COMMAND_BAR_ID + ' .ag-cmd-btn:hover { background: #475569; }',
       '#' + COMMAND_BAR_ID + ' .ag-cmd-polish:hover { background: #6d28d9; }',
       '#' + COMMAND_BAR_ID + ' .ag-cmd-fix:hover { background: #2563eb; }',
+      '#' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-on { background: #166534; color: #bbf7d0; }',
+      '#' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-on:hover { background: #15803d; }',
+      '#' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-off { background: #7f1d1d; color: #fecaca; }',
+      '#' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-off:hover { background: #991b1b; }',
       '@media (prefers-color-scheme: light) {',
       '  #' + COMMAND_BAR_ID + ' {',
       '    background: rgba(255,255,255,0.65); backdrop-filter: blur(12px);',
@@ -880,9 +1002,31 @@
       '    background: #2563eb; color: #fff !important;',
       '  }',
       '  #' + COMMAND_BAR_ID + ' .ag-cmd-fix:hover { background: #1d4ed8 !important; }',
+      '  #' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-on { background: #dcfce7; color: #166534; }',
+      '  #' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-on:hover { background: #bbf7d0 !important; }',
+      '  #' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-off { background: #fee2e2; color: #991b1b; }',
+      '  #' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-off:hover { background: #fecaca !important; }',
       '}',
     ].join('\\n');
     bar.appendChild(styleEl);
+
+    // Grammar toggle — on/off with color indication (master switch, first)
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'ag-cmd-btn ag-cmd-toggle ' + (grammarEnabled ? 'ag-cmd-on' : 'ag-cmd-off');
+    toggleBtn.textContent = grammarEnabled ? '🟢 On' : '🔴 Off';
+    toggleBtn.addEventListener('click', async () => {
+      const newState = !grammarEnabled;
+      grammarEnabled = newState;
+      toggleBtn.textContent = newState ? '🟢 On' : '🔴 Off';
+      toggleBtn.className = 'ag-cmd-btn ag-cmd-toggle ' + (newState ? 'ag-cmd-on' : 'ag-cmd-off');
+      try {
+        await chrome.storage.sync.set({ grammarEnabled: newState });
+        showResultBadge(newState ? '✓ Grammar ON' : 'Grammar OFF', newState ? 'done' : 'error', 2000);
+      } catch {
+        // Extension context invalidated — state already updated visually
+      }
+    });
+    bar.appendChild(toggleBtn);
 
     // Polish button
     const polishBtn = document.createElement('button');
@@ -916,6 +1060,15 @@
       }
     });
     bar.appendChild(checkBtn);
+
+    // Translate button
+    const translateBtn = document.createElement('button');
+    translateBtn.className = 'ag-cmd-btn ag-cmd-translate';
+    translateBtn.textContent = '🌐 Translate';
+    translateBtn.addEventListener('click', () => {
+      showTranslatePicker();
+    });
+    bar.appendChild(translateBtn);
 
     document.body.appendChild(bar);
     commandBarEl = bar;
@@ -1010,16 +1163,6 @@
     row.appendChild(arrow);
     row.appendChild(correction);
 
-    // Apply button for this single error
-    const applyBtn = document.createElement('button');
-    applyBtn.className = 'agf-apply';
-    applyBtn.textContent = 'Apply';
-    applyBtn.addEventListener('click', (evt) => {
-      evt.stopPropagation();
-      applySingleCorrection(err);
-    });
-    row.appendChild(applyBtn);
-
     item.appendChild(row);
 
     // Explanation line
@@ -1090,13 +1233,6 @@
         '#' + PANEL_ID + ' .agf-explain {',
         '  color: #64748b; font-size: 11px; margin-top: 2px;',
         '}',
-        '#' + PANEL_ID + ' .agf-apply {',
-        '  margin-left: auto; background: #334155; color: #e2e8f0;',
-        '  border: none; border-radius: 6px; padding: 2px 10px;',
-        '  font-size: 12px; cursor: pointer; font-family: inherit;',
-        '  white-space: nowrap;',
-        '}',
-        '#' + PANEL_ID + ' .agf-apply:hover { background: #475569; }',
         '#' + PANEL_ID + ' .agf-footer {',
         '  padding: 10px 16px; border-top: 1px solid #334155;',
         '  position: sticky; bottom: 0; background: inherit;',
@@ -1125,10 +1261,6 @@
         '  #' + PANEL_ID + ' .agf-original { color: #dc2626; }',
         '  #' + PANEL_ID + ' .agf-correction { color: #16a34a; }',
         '  #' + PANEL_ID + ' .agf-explain { color: #64748b; }',
-        '  #' + PANEL_ID + ' .agf-apply {',
-        '    background: #e2e8f0; color: #334155;',
-        '  }',
-        '  #' + PANEL_ID + ' .agf-apply:hover { background: #cbd5e1; }',
         '  #' + PANEL_ID + ' .agf-footer {',
         '    border-top-color: #e2e8f0;',
         '  }',
@@ -1146,16 +1278,6 @@
    * character-offset-based replacement, then pushes the result back
    * into the CKEditor via beforeinput.
    */
-  function applySingleCorrection(err) {
-    if (!editorElement) return;
-    const text = editorGetPlainText();
-    const s = Math.max(0, Number(err.start) || 0);
-    const e = Math.min(text.length, Number(err.end) || text.length);
-    if (s >= e) return;
-    const corrected = text.slice(0, s) + (err.correction || '') + text.slice(e);
-    applyTextToEditor(corrected);
-  }
-
   /** Apply ALL corrections at once (reverse-sorted by offset). */
   function applyAllCorrections(errors) {
     if (!editorElement) return;
@@ -1272,6 +1394,274 @@
       removePendingBadge('fixing');
       if (err.name === 'AbortError') return;
       showResultBadge('✗ Fix failed: ' + (err.message || 'error'), 'error', 4000);
+    }
+  }
+
+  // ── Translate — call backend and replace editor text ────────────────
+
+  /** Call the /translate backend. */
+  async function callTranslate(text, targetLang, signal) {
+    const settings = await safeGetStorage({
+      grammarHost: '127.0.0.1',
+      grammarPort: 8766,
+    });
+    const url = `http://${settings.grammarHost}:${settings.grammarPort}/translate?_=${Date.now()}`;
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      if (signal) signal.addEventListener('abort', () => controller.abort());
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, target_lang: targetLang }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => '');
+        return { ok: false, error: `Backend error (${resp.status}): ${errBody.slice(0, 200)}` };
+      }
+      const data = await resp.json();
+      return { ok: true, translated: data.translated || '', model: data.model || '' };
+    } catch (e) {
+      if (e.name === 'AbortError') return { ok: true, aborted: true };
+      return { ok: false, error: e.message };
+    }
+  }
+
+  function abortTranslate() {
+    if (translateAbortController) {
+      translateAbortController.abort();
+      translateAbortController = null;
+      removePendingBadge('translating');
+    }
+    dismissTranslatePicker();
+  }
+
+  async function translateAndApply(targetLang) {
+    if (!editorElement) return;
+    const text = editorGetPlainText();
+    if (!text || text.length < 5) {
+      showResultBadge('Text too short to translate', 'error', 3000);
+      return;
+    }
+
+    abortTranslate();
+    translateAbortController = new AbortController();
+
+    showPendingBadge('translating', 'Translating…');
+    try {
+      const resp = await callTranslate(text, targetLang, translateAbortController.signal);
+      removePendingBadge('translating');
+      translateAbortController = null;
+
+      if (!resp.ok) {
+        showResultBadge('✗ Translate failed: ' + (resp.error || 'unknown'), 'error', 4000);
+        return;
+      }
+      if (resp.aborted) return;
+
+      const translated = resp.translated;
+      if (!translated || translated === text) {
+        showResultBadge('✓ Text already in that language');
+        return;
+      }
+
+      applyTextToEditor(translated);
+      dismissErrors();
+    } catch (err) {
+      translateAbortController = null;
+      removePendingBadge('translating');
+      if (err.name === 'AbortError') return;
+      showResultBadge('✗ Translate failed: ' + (err.message || 'error'), 'error', 4000);
+    }
+  }
+
+  // ── Language picker (compact floating popup) ─────────────────────────
+  const TRANSLATE_PICKER_ID = 'ag-teams-translate';
+
+  function showTranslatePicker() {
+    dismissTranslatePicker();
+    dismissCommandBar();
+
+    const picker = document.createElement('div');
+    picker.id = TRANSLATE_PICKER_ID;
+
+    const s = picker.style;
+    s.position = 'fixed';
+    s.zIndex = '2147483646';
+    s.minWidth = '220px';
+    s.maxHeight = '320px';
+    s.overflowY = 'auto';
+    s.padding = '0';
+    s.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    s.fontSize = '13px';
+    s.lineHeight = '1.5';
+    s.borderRadius = '12px';
+    s.boxShadow = '0 8px 32px rgba(0,0,0,0.35)';
+    s.animation = 'agfadein 0.2s ease';
+
+    // CSP-safe: inline styles only — no <style> element (Teams blocks them)
+    const light = isTeamsLightTheme();
+    const colors = light
+      ? { bg: '#fff', fg: '#0f172a', muted: '#64748b', border: '#f1f5f9',
+          itemHover: '#f1f5f9', inputBg: '#f8fafc', inputBorder: '#cbd5e1',
+          closeColor: '#64748b', closeHover: '#0f172a',
+          searchBorder: '#e2e8f0', shadow: '0 8px 32px rgba(0,0,0,0.12)' }
+      : { bg: '#1e293b', fg: '#f1f5f9', muted: '#64748b', border: '#1e293b',
+          itemHover: '#0f172a', inputBg: '#0f172a', inputBorder: '#475569',
+          closeColor: '#94a3b8', closeHover: '#f1f5f9',
+          searchBorder: '#334155', shadow: '0 8px 32px rgba(0,0,0,0.35)' };
+
+    s.background = colors.bg;
+    s.color = colors.fg;
+    s.boxShadow = colors.shadow;
+    s.opacity = '1';
+    s.backdropFilter = 'none';
+
+    // Header with close button
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 14px 0 14px';
+    const headerLabel = document.createElement('span');
+    headerLabel.textContent = 'Translate to';
+    headerLabel.style.cssText = 'font-size:11px;color:' + colors.muted + ';font-weight:600';
+    header.appendChild(headerLabel);
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'background:none;border:none;color:' + colors.closeColor
+      + ';cursor:pointer;font-size:16px;line-height:1;padding:0';
+    closeBtn.addEventListener('mouseenter', () => { closeBtn.style.color = colors.closeHover; });
+    closeBtn.addEventListener('mouseleave', () => { closeBtn.style.color = colors.closeColor; });
+    closeBtn.addEventListener('click', dismissTranslatePicker);
+    header.appendChild(closeBtn);
+    picker.appendChild(header);
+
+    // Search input
+    const searchWrap = document.createElement('div');
+    searchWrap.style.cssText = 'display:flex;padding:8px;border-bottom:1px solid ' + colors.searchBorder;
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.placeholder = 'Filter languages…';
+    searchInput.style.cssText = 'width:100%;background:' + colors.inputBg + ';color:' + colors.fg
+      + ';border:1px solid ' + colors.inputBorder + ';outline:none;border-radius:6px'
+      + ';padding:6px 10px;font-size:13px;font-family:inherit;box-shadow:none';
+    searchInput.addEventListener('focus', () => { searchInput.style.borderColor = '#4ade80'; });
+    searchInput.addEventListener('blur', () => { searchInput.style.borderColor = colors.inputBorder; });
+    searchWrap.appendChild(searchInput);
+    picker.appendChild(searchWrap);
+
+    // Common languages header + items
+    const renderItems = (filter) => {
+      // Remove old items (keep header + search)
+      while (picker.children.length > 2) picker.lastChild.remove();
+
+      const q = (filter || '').toLowerCase().trim();
+
+      if (!q) {
+        const commonHeader = document.createElement('div');
+        commonHeader.textContent = 'COMMON';
+        commonHeader.style.cssText = 'padding:8px 14px;font-size:11px;color:' + colors.muted
+          + ';border-bottom:1px solid ' + colors.border;
+        picker.appendChild(commonHeader);
+
+        for (const code of COMMON_LANGS) {
+          const lang = LANGUAGES.find(l => l.code === code);
+          if (!lang) continue;
+          const item = buildItem(lang);
+          picker.appendChild(item);
+        }
+
+        const divider = document.createElement('div');
+        divider.textContent = 'ALL LANGUAGES';
+        divider.style.cssText = 'padding:8px 14px;font-size:11px;color:' + colors.muted
+          + ';border-bottom:1px solid ' + colors.border;
+        picker.appendChild(divider);
+
+        for (const lang of LANGUAGES) {
+          if (COMMON_LANGS.includes(lang.code)) continue;
+          const item = buildItem(lang);
+          picker.appendChild(item);
+        }
+      } else {
+        const matches = LANGUAGES.filter(l =>
+          l.code.startsWith(q) || l.name.toLowerCase().includes(q)
+        );
+        if (matches.length === 0) {
+          const empty = document.createElement('div');
+          empty.textContent = 'No matches';
+          empty.style.cssText = 'padding:8px 14px;color:' + colors.muted
+            + ';border-bottom:1px solid ' + colors.border;
+          picker.appendChild(empty);
+        } else {
+          for (const lang of matches) {
+            const item = buildItem(lang);
+            item.textContent = lang.name + ' (' + lang.code + ')';
+            picker.appendChild(item);
+          }
+        }
+      }
+    };
+
+    function buildItem(lang) {
+      const item = document.createElement('div');
+      item.textContent = lang.name;
+      item.style.cssText = 'padding:8px 14px;cursor:pointer;color:' + colors.fg
+        + ';border-bottom:1px solid ' + colors.border;
+      item.addEventListener('mouseenter', () => { item.style.background = colors.itemHover; });
+      item.addEventListener('mouseleave', () => { item.style.background = ''; });
+      item.addEventListener('click', () => {
+        dismissTranslatePicker();
+        translateAndApply(lang.code);
+      });
+      return item;
+    }
+
+    searchInput.addEventListener('input', () => renderItems(searchInput.value));
+    renderItems('');
+
+    document.body.appendChild(picker);
+    translatePickerEl = picker;
+
+    // Position near the editor
+    if (editorElement && document.contains(editorElement)) {
+      const rect = editorElement.getBoundingClientRect();
+      const pickerRect = picker.getBoundingClientRect();
+      picker.style.top = Math.max(4, rect.top - pickerRect.height - 6) + 'px';
+      picker.style.left = Math.max(4, Math.min(rect.right - pickerRect.width, rect.left)) + 'px';
+    }
+
+    // Focus search input after positioning
+    setTimeout(() => searchInput.focus(), 50);
+
+    // Escape key → dismiss
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        dismissTranslatePicker();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    picker._agKeyHandler = onKeyDown;
+
+    // Click outside → dismiss (deferred so button clicks register)
+    const onClickOutside = (e) => {
+      if (!picker.contains(e.target)) {
+        dismissTranslatePicker();
+      }
+    };
+    setTimeout(() => document.addEventListener('click', onClickOutside, true), 0);
+    picker._agClickHandler = onClickOutside;
+  }
+
+  function dismissTranslatePicker() {
+    if (translatePickerEl) {
+      if (translatePickerEl._agKeyHandler) {
+        document.removeEventListener('keydown', translatePickerEl._agKeyHandler, true);
+      }
+      if (translatePickerEl._agClickHandler) {
+        document.removeEventListener('click', translatePickerEl._agClickHandler, true);
+      }
+      if (document.contains(translatePickerEl)) translatePickerEl.remove();
+      translatePickerEl = null;
     }
   }
 
