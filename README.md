@@ -122,12 +122,13 @@ Type `?/` in any text input to open the **command palette** — a popup menu lis
 | `?/on` | Enable grammar checking |
 | `?/fix` | Auto-correct the text you typed (everything before `?/fix`) |
 | `?/polish` | Polish/improve the text for clarity and naturalness (everything before `?/polish`) |
-| `?/lang` | Translate text before the command to a target language. Opens a 42-language picker palette — type to filter, arrow keys to navigate, Enter to select. Supports names (`english`, `japanese`) and codes (`en`, `ja`). Any language code is accepted — the AI backend is the final arbiter. |
+| `?/lang` | Translate text before the command to a target language. Opens a 42-language picker palette — type to filter, arrow keys to navigate, Enter to select. Supports names (`english`, `japanese`) and codes (`en`, `ja`). Any language code is accepted — the AI backend is the final arbiter. A unique-match filter auto-executes after 600ms (e.g., `?/lang fr` → translates to French). |
+| `?/check` | Force an immediate grammar check on the draft text (everything before `?/check`). Highlights errors inline, or shows a green check if clean. |
 | `?/help` | Show all available commands |
 
-The palette opens when you type `?/`. Arrow keys navigate, Enter selects, Escape closes. Type more to filter (e.g., `?/o` filters to `?/off` and `?/on`). Prefix shortcuts auto-execute when only one match remains (e.g., `?/pol` → `?/polish`).
+The palette opens when you type `?/`. Arrow keys navigate, Enter selects, Escape closes. Type more to filter (e.g., `?/o` filters to `?/off` and `?/on`). Prefix shortcuts auto-execute when only one match remains (e.g., `?/pol` → `?/polish`). For `?/lang`, the language palette filters in real-time — a unique match auto-executes after 600ms.
 
-Commands work on textareas and standard `contentEditable` fields. On WhatsApp Web, `?/fix` and `?/polish` use a fast single-call CDP `Input.insertText` with a synthetic `beforeinput` fallback for Lexical editor compatibility. **On Microsoft Teams**, `?/` commands are not available — a floating command bar with clickable buttons replaces them (see below).
+Commands work on textareas and standard `contentEditable` fields. On WhatsApp Web, text insertion uses a synthetic `beforeinput` event with double-rAF focus recovery — matching the proven `applyCorrection` pattern. CDP keyboard simulation (`chrome.debugger`) remains as a genuine last-resort fallback when `beforeinput` has no effect. **On Microsoft Teams**, `?/` commands are not available — a floating command bar with clickable buttons replaces them (see below).
 
 ### Microsoft Teams
 
@@ -199,5 +200,17 @@ Smaller models work well because grammar checking is a focused task with a struc
 ## Limitations
 
 - **Text only** — checks text content, not images or other media
-- **Rich text editors** — WhatsApp Web and contentEditable fields are fully supported via CDP integration. Microsoft Teams uses a dedicated CKEditor bridge with a popup panel and command bar (no inline underlines or `?/` commands)
+- **Rich text editors** — WhatsApp Web and contentEditable fields are fully supported. Text insertion uses synthetic `beforeinput` events with double-rAF focus recovery; CDP keyboard simulation is a last-resort fallback. Microsoft Teams uses a dedicated CKEditor bridge with a popup panel and command bar (no inline underlines or `?/` commands)
 - **Text length** — maximum 50,000 characters per check (configurable in backend)
+
+## Test Page
+
+A built-in test page at `http://127.0.0.1:8766/static/grammar-test.html` provides two side-by-side test environments:
+
+| Mode | Editor type | Tests |
+|------|-------------|-------|
+| **Chat — Regular Sites** | TEXTAREA | Post-submit grammar checking, `?/` commands, quick-test snippets |
+| **Chat — WhatsApp-style** | contentEditable | Same as above, plus Lexical-compatible text insertion |
+| **Inline Command Testing** | Both | Standalone editors for palette and command interaction without submit |
+
+The test page includes pre-loaded error text (grammar, spelling, wordiness), command buttons for all `?/` commands, and simulated chat replies. It mirrors both production editor types — TEXTAREA for standard web forms and contentEditable for rich-text platforms like WhatsApp Web.
