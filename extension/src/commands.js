@@ -63,12 +63,6 @@ export const COMMANDS = {
         showResultBadge('Type a language code (e.g., ?/lang fr, ?/lang ja)');
         return;
       }
-      const isWhatsApp = location.hostname === 'web.whatsapp.com';
-      if (isWhatsApp) {
-        showResultBadge('?/lang is not available on this site');
-        await stripCommand('?/lang ' + args, ta);
-        return;
-      }
       const value = ta.value || ta.textContent || '';
       const cmdStr = '?/lang ' + args;
       const cmdIdx = value.lastIndexOf(cmdStr);
