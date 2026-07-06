@@ -344,7 +344,11 @@ export function init() {
                 ta.value = replaced;
                 ta.dispatchEvent(new Event('input', { bubbles: true }));
               } else {
-                ta.textContent = replaced;
+                if (await tryBeforeInput(replaced, ta)) {
+                  // Success
+                } else {
+                  applyFixCDP(replaced);
+                }
               }
               state.replacingCommand = false;
               state.skipLiveCheck = false;
@@ -380,7 +384,11 @@ export function init() {
                 ta.value = cleaned;
                 ta.dispatchEvent(new Event('input', { bubbles: true }));
               } else {
-                ta.textContent = cleaned;
+                if (await tryBeforeInput(cleaned, ta)) {
+                  // Success
+                } else {
+                  applyFixCDP(cleaned);
+                }
               }
               state.skipLiveCheck = false;
             }
@@ -426,7 +434,11 @@ export function init() {
               ta.value = cleaned;
               ta.dispatchEvent(new Event('input', { bubbles: true }));
             } else {
-              ta.textContent = cleaned;
+              if (await tryBeforeInput(cleaned, ta)) {
+                // Success
+              } else {
+                applyFixCDP(cleaned);
+              }
             }
           }
         }

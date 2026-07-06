@@ -19,7 +19,7 @@ import { LANGUAGES, searchLanguages, findUniqueMatch } from './languages.js';
  * won't fire on the cleaned text.  Also cancels any pending live draft
  * so the poller doesn't re-check the stripped text later.
  */
-function stripCommand(cmd, ta) {
+async function stripCommand(cmd, ta) {
   const val = ta.value || ta.textContent || '';
   const idx = val.lastIndexOf(cmd);
   if (idx < 0) return;
@@ -30,7 +30,11 @@ function stripCommand(cmd, ta) {
     ta.value = cleaned;
     ta.dispatchEvent(new Event('input', { bubbles: true }));
   } else {
-    ta.textContent = cleaned;
+    if (await tryBeforeInput(cleaned, ta)) {
+      // Success
+    } else {
+      applyFixCDP(cleaned);
+    }
   }
   state.skipLiveCheck = false;
 }
@@ -62,7 +66,7 @@ export const COMMANDS = {
       const isWhatsApp = location.hostname === 'web.whatsapp.com';
       if (isWhatsApp) {
         showResultBadge('?/lang is not available on this site');
-        stripCommand('?/lang ' + args, ta);
+        await stripCommand('?/lang ' + args, ta);
         return;
       }
       const value = ta.value || ta.textContent || '';
@@ -71,7 +75,7 @@ export const COMMANDS = {
       const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
       if (!draft || draft.length < state.minChars) {
         showResultBadge(`No text to translate (need at least ${state.minChars} characters)`);
-        stripCommand(cmdStr, ta);
+        await stripCommand(cmdStr, ta);
         return;
       }
       showPendingBadge('translating', 'Translating...');
@@ -98,7 +102,7 @@ export const COMMANDS = {
         const translated = data.translated;
         if (!translated || translated === draft) {
           showResultBadge('✓ Text is already in that language or could not be translated');
-          stripCommand(cmdStr, ta);
+          await stripCommand(cmdStr, ta);
           return;
         }
         state.skipLiveCheck = true;
@@ -253,7 +257,7 @@ export const COMMANDS = {
       const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
       if (!draft || draft.length < state.minChars) {
         showResultBadge('No text to fix (need at least ' + state.minChars + ' characters)');
-        stripCommand('?/fix', ta);
+        await stripCommand('?/fix', ta);
         return;
       }
       showPendingBadge('fixing', 'Fixing...');
@@ -276,7 +280,7 @@ export const COMMANDS = {
         removePendingBadge('fixing');
         if (!data?.errors?.length) {
           showResultBadge('✓ No corrections needed');
-          stripCommand('?/fix', ta);
+          await stripCommand('?/fix', ta);
           return;
         }
         // Apply corrections bottom-up to preserve offsets
@@ -343,7 +347,7 @@ export const COMMANDS = {
       const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
       if (!draft || draft.length < state.minChars) {
         showResultBadge('No text to polish (need at least ' + state.minChars + ' characters)');
-        stripCommand('?/polish', ta);
+        await stripCommand('?/polish', ta);
         return;
       }
       showPendingBadge('polishing', 'Polishing...');
@@ -371,7 +375,7 @@ export const COMMANDS = {
         const polished = data.polished;
         if (!polished || polished === draft) {
           showResultBadge('✓ Text already polished');
-          stripCommand('?/polish', ta);
+          await stripCommand('?/polish', ta);
           return;
         }
         // Replace textarea content with polished text
@@ -652,14 +656,7 @@ export function showCommandPalette(ta, filter = '') {
     if (item) {
       e.preventDefault();
       const cmdName = item.dataset.cmd;
-      selectPaletteCommand(cmdName);
-
-      // If it's the 'lang' command, insert "lang " and let user type the code
-      if (cmdName === 'lang') {
-        insertPaletteText('lang ');
-      } else {
-        applyPaletteCommand(cmdName);
-      }
+      selectPaletteCommand(cmdName).catch(() => {});
     }
   });
 }
@@ -681,16 +678,16 @@ export function updatePaletteSelection(delta) {
   items[paletteSelectedIdx].scrollIntoView({ block: 'nearest' });
 }
 
-export function selectPaletteCommand(cmdName) {
+export async function selectPaletteCommand(cmdName) {
   if (cmdName === 'lang') {
     // Insert "lang " for the user to complete with a language code
-    insertPaletteText('lang ');
+    await insertPaletteText('lang ');
     return;
   }
-  applyPaletteCommand(cmdName);
+  await applyPaletteCommand(cmdName);
 }
 
-function insertPaletteText(text) {
+async function insertPaletteText(text) {
   if (!paletteTarget) return;
   hideCommandPalette();
   const ta = paletteTarget;
@@ -703,7 +700,11 @@ function insertPaletteText(text) {
     ta.value = newValue;
     ta.dispatchEvent(new Event('input', { bubbles: true }));
   } else {
-    ta.textContent = newValue;
+    if (await tryBeforeInput(newValue, ta)) {
+      // Success
+    } else {
+      applyFixCDP(newValue);
+    }
   }
   ta.focus();
 }
@@ -723,7 +724,11 @@ async function applyPaletteCommand(cmdName) {
     ta.value = newValue;
     ta.dispatchEvent(new Event('input', { bubbles: true }));
   } else {
-    ta.textContent = newValue;
+    if (await tryBeforeInput(newValue, ta)) {
+      // Success
+    } else {
+      applyFixCDP(newValue);
+    }
   }
 
   // Execute the command
@@ -734,14 +739,18 @@ async function applyPaletteCommand(cmdName) {
   }
 
   // Clear the command text from the input
-  setTimeout(() => {
+  setTimeout(async () => {
     const v = ta.value || ta.textContent || '';
     const cleaned = v.replace(fullCmd, '').trimEnd();
     if (ta.tagName === 'TEXTAREA') {
       ta.value = cleaned;
       ta.dispatchEvent(new Event('input', { bubbles: true }));
     } else {
-      ta.textContent = cleaned;
+      if (await tryBeforeInput(cleaned, ta)) {
+        // Success
+      } else {
+        applyFixCDP(cleaned);
+      }
     }
     ta.focus();
   }, 100);
@@ -826,7 +835,7 @@ export function showLanguagePalette(ta, filter = '') {
     if (item) {
       e.preventDefault();
       const code = item.dataset.code;
-      commitLanguageSelection(code);
+      commitLanguageSelection(code).catch(() => {});
     }
   });
 
@@ -836,7 +845,7 @@ export function showLanguagePalette(ta, filter = '') {
   if (langPaletteFilter) {
     const unique = findUniqueMatch(langPaletteFilter);
     if (unique) {
-      langPaletteUniqueTimer = setTimeout(() => {
+      langPaletteUniqueTimer = setTimeout(async () => {
         langPaletteUniqueTimer = null;
         if (!langPaletteEl || !langPaletteTarget) return;
         const code = unique.code;
@@ -853,7 +862,11 @@ export function showLanguagePalette(ta, filter = '') {
             ta2.value = newVal;
             ta2.dispatchEvent(new Event('input', { bubbles: true }));
           } else {
-            ta2.textContent = newVal;
+            if (await tryBeforeInput(newVal, ta2)) {
+              // Success
+            } else {
+              applyFixCDP(newVal);
+            }
           }
           state.skipLiveCheck = false;
         }
@@ -889,15 +902,15 @@ export function updateLanguagePaletteSelection(delta) {
   items[langPaletteSelectedIdx].scrollIntoView({ block: 'nearest' });
 }
 
-export function selectLanguagePaletteItem() {
+export async function selectLanguagePaletteItem() {
   if (!langPaletteEl || !langPaletteTarget) return;
   const active = langPaletteEl.querySelector('.agl-item.active');
   if (!active) return;
   const code = active.dataset.code;
-  commitLanguageSelection(code);
+  await commitLanguageSelection(code);
 }
 
-function commitLanguageSelection(code) {
+async function commitLanguageSelection(code) {
   if (!langPaletteTarget) return;
   const ta = langPaletteTarget;
   // Replace "?/lang <filter>" with "?/lang <code>" in the textarea
@@ -912,7 +925,11 @@ function commitLanguageSelection(code) {
       ta.value = newVal;
       ta.dispatchEvent(new Event('input', { bubbles: true }));
     } else {
-      ta.textContent = newVal;
+      if (await tryBeforeInput(newVal, ta)) {
+        // Success
+      } else {
+        applyFixCDP(newVal);
+      }
     }
     state.skipLiveCheck = false;
   }

@@ -1968,7 +1968,7 @@
   }
 
   // src/commands.js
-  function stripCommand(cmd, ta) {
+  async function stripCommand(cmd, ta) {
     const val = ta.value || ta.textContent || "";
     const idx = val.lastIndexOf(cmd);
     if (idx < 0) return;
@@ -1979,7 +1979,11 @@
       ta.value = cleaned;
       ta.dispatchEvent(new Event("input", { bubbles: true }));
     } else {
-      ta.textContent = cleaned;
+      if (await tryBeforeInput(cleaned, ta)) {
+        // Success
+      } else {
+        applyFixCDP(cleaned);
+      }
     }
     state.skipLiveCheck = false;
   }
@@ -2009,7 +2013,7 @@
         const isWhatsApp = location.hostname === "web.whatsapp.com";
         if (isWhatsApp) {
           showResultBadge("?/lang is not available on this site");
-          stripCommand("?/lang " + args, ta);
+          await stripCommand("?/lang " + args, ta);
           return;
         }
         const value = ta.value || ta.textContent || "";
@@ -2018,7 +2022,7 @@
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
         if (!draft || draft.length < state.minChars) {
           showResultBadge(`No text to translate (need at least ${state.minChars} characters)`);
-          stripCommand(cmdStr, ta);
+          await stripCommand(cmdStr, ta);
           return;
         }
         showPendingBadge("translating", "Translating...");
@@ -2045,7 +2049,7 @@
           const translated = data.translated;
           if (!translated || translated === draft) {
             showResultBadge("\u2713 Text is already in that language or could not be translated");
-            stripCommand(cmdStr, ta);
+            await stripCommand(cmdStr, ta);
             return;
           }
           state.skipLiveCheck = true;
@@ -2185,7 +2189,7 @@
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
         if (!draft || draft.length < state.minChars) {
           showResultBadge("No text to fix (need at least " + state.minChars + " characters)");
-          stripCommand("?/fix", ta);
+          await stripCommand("?/fix", ta);
           return;
         }
         showPendingBadge("fixing", "Fixing...");
@@ -2208,7 +2212,7 @@
           removePendingBadge("fixing");
           if (!data?.errors?.length) {
             showResultBadge("\u2713 No corrections needed");
-            stripCommand("?/fix", ta);
+            await stripCommand("?/fix", ta);
             return;
           }
           const sorted = [...data.errors].sort((a, b) => b.start - a.start);
@@ -2267,7 +2271,7 @@
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
         if (!draft || draft.length < state.minChars) {
           showResultBadge("No text to polish (need at least " + state.minChars + " characters)");
-          stripCommand("?/polish", ta);
+          await stripCommand("?/polish", ta);
           return;
         }
         showPendingBadge("polishing", "Polishing...");
@@ -2295,7 +2299,7 @@
           const polished = data.polished;
           if (!polished || polished === draft) {
             showResultBadge("\u2713 Text already polished");
-            stripCommand("?/polish", ta);
+            await stripCommand("?/polish", ta);
             return;
           }
           state.skipLiveCheck = true;
@@ -2544,12 +2548,7 @@
       if (item) {
         e.preventDefault();
         const cmdName = item.dataset.cmd;
-        selectPaletteCommand(cmdName);
-        if (cmdName === "lang") {
-          insertPaletteText("lang ");
-        } else {
-          applyPaletteCommand(cmdName);
-        }
+        selectPaletteCommand(cmdName).catch(() => {});
       }
     });
   }
@@ -2571,14 +2570,14 @@
     items[paletteSelectedIdx].classList.add("active");
     items[paletteSelectedIdx].scrollIntoView({ block: "nearest" });
   }
-  function selectPaletteCommand(cmdName) {
+  async function selectPaletteCommand(cmdName) {
     if (cmdName === "lang") {
-      insertPaletteText("lang ");
+      await insertPaletteText("lang ");
       return;
     }
-    applyPaletteCommand(cmdName);
+    await applyPaletteCommand(cmdName);
   }
-  function insertPaletteText(text) {
+  async function insertPaletteText(text) {
     if (!paletteTarget) return;
     hideCommandPalette();
     const ta = paletteTarget;
@@ -2590,7 +2589,10 @@
       ta.value = newValue;
       ta.dispatchEvent(new Event("input", { bubbles: true }));
     } else {
-      ta.textContent = newValue;
+      if (await tryBeforeInput(newValue, ta)) {
+      } else {
+        applyFixCDP(newValue);
+      }
     }
     ta.focus();
   }
@@ -2607,21 +2609,29 @@
       ta.value = newValue;
       ta.dispatchEvent(new Event("input", { bubbles: true }));
     } else {
-      ta.textContent = newValue;
+      if (await tryBeforeInput(newValue, ta)) {
+        // Success
+      } else {
+        applyFixCDP(newValue);
+      }
     }
     try {
       await COMMANDS[cmdName].run("");
     } catch (err) {
       showResultBadge(`Command failed: ${err.message}`);
     }
-    setTimeout(() => {
+    setTimeout(async () => {
       const v = ta.value || ta.textContent || "";
       const cleaned = v.replace(fullCmd, "").trimEnd();
       if (ta.tagName === "TEXTAREA") {
         ta.value = cleaned;
         ta.dispatchEvent(new Event("input", { bubbles: true }));
       } else {
-        ta.textContent = cleaned;
+        if (await tryBeforeInput(cleaned, ta)) {
+          // Success
+        } else {
+          applyFixCDP(cleaned);
+        }
       }
       ta.focus();
     }, 100);
@@ -2695,13 +2705,13 @@
       if (item) {
         e.preventDefault();
         const code = item.dataset.code;
-        commitLanguageSelection(code);
+        commitLanguageSelection(code).catch(() => {});
       }
     });
     if (langPaletteFilter) {
       const unique = findUniqueMatch(langPaletteFilter);
       if (unique) {
-        langPaletteUniqueTimer = setTimeout(() => {
+        langPaletteUniqueTimer = setTimeout(async () => {
           langPaletteUniqueTimer = null;
           if (!langPaletteEl || !langPaletteTarget) return;
           const code = unique.code;
@@ -2717,7 +2727,11 @@
               ta2.value = newVal;
               ta2.dispatchEvent(new Event("input", { bubbles: true }));
             } else {
-              ta2.textContent = newVal;
+              if (await tryBeforeInput(newVal, ta2)) {
+                // Success
+              } else {
+                applyFixCDP(newVal);
+              }
             }
             state.skipLiveCheck = false;
           }
@@ -2753,14 +2767,14 @@
     items[langPaletteSelectedIdx].classList.add("active");
     items[langPaletteSelectedIdx].scrollIntoView({ block: "nearest" });
   }
-  function selectLanguagePaletteItem() {
+  async function selectLanguagePaletteItem() {
     if (!langPaletteEl || !langPaletteTarget) return;
     const active = langPaletteEl.querySelector(".agl-item.active");
     if (!active) return;
     const code = active.dataset.code;
-    commitLanguageSelection(code);
+    await commitLanguageSelection(code);
   }
-  function commitLanguageSelection(code) {
+  async function commitLanguageSelection(code) {
     if (!langPaletteTarget) return;
     const ta = langPaletteTarget;
     const val = ta.value || ta.textContent || "";
@@ -2773,7 +2787,11 @@
         ta.value = newVal;
         ta.dispatchEvent(new Event("input", { bubbles: true }));
       } else {
-        ta.textContent = newVal;
+        if (await tryBeforeInput(newVal, ta)) {
+          // Success
+        } else {
+          applyFixCDP(newVal);
+        }
       }
       state.skipLiveCheck = false;
     }
@@ -3052,7 +3070,11 @@
                   ta.value = replaced;
                   ta.dispatchEvent(new Event("input", { bubbles: true }));
                 } else {
-                  ta.textContent = replaced;
+                  if (await tryBeforeInput(replaced, ta)) {
+                    // Success
+                  } else {
+                    applyFixCDP(replaced);
+                  }
                 }
                 state.replacingCommand = false;
                 state.skipLiveCheck = false;
@@ -3080,7 +3102,11 @@
                   ta.value = cleaned;
                   ta.dispatchEvent(new Event("input", { bubbles: true }));
                 } else {
-                  ta.textContent = cleaned;
+                  if (await tryBeforeInput(cleaned, ta)) {
+                    // Success
+                  } else {
+                    applyFixCDP(cleaned);
+                  }
                 }
                 state.skipLiveCheck = false;
               }
@@ -3117,7 +3143,11 @@
                 ta.value = cleaned;
                 ta.dispatchEvent(new Event("input", { bubbles: true }));
               } else {
-                ta.textContent = cleaned;
+                if (await tryBeforeInput(cleaned, ta)) {
+                  // Success
+                } else {
+                  applyFixCDP(cleaned);
+                }
               }
             }
           }
