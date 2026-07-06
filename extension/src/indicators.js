@@ -90,7 +90,7 @@ export function removePendingBadge(category) {
 
 // Show a transient result badge (no spinner). Appears at the top of the stack
 // alongside any pending badges. Auto-dismisses after durationMs.
-export function showResultBadge(text, durationMs = 4000) {
+export function showResultBadge(text, durationMs = 4000, type) {
   if (state.resultBadgeTimer) { clearTimeout(state.resultBadgeTimer); state.resultBadgeTimer = null; }
 
   // Remove any existing result badges
@@ -105,7 +105,10 @@ export function showResultBadge(text, durationMs = 4000) {
   const resultId = `result:${Date.now()}`;
 
   const badge = document.createElement('div');
-  badge.className = 'ai-grammar-badge ag-badge-result';
+  let cls = 'ai-grammar-badge ag-badge-result';
+  if (type === 'done') cls += ' ag-badge-done';
+  else if (type === 'error') cls += ' ag-badge-error';
+  badge.className = cls;
   badge.setAttribute('data-ag-result', '');
   badge.innerHTML = text;
   stack.appendChild(badge);
@@ -444,3 +447,21 @@ export function removeErrorFloat() {
   const panel = document.getElementById('ai-grammar-float');
   if (panel) panel.remove();
 }
+
+
+// -----------------------------------------------------------------------
+// Bridge: expose shared functions/state on window.__aiGrammar so that
+// thin content-script adapters (e.g. teams-bridge.js) can call them
+// without re-implementing identical logic.  Content scripts share an
+// isolated world, so the namespace is accessible across scripts.
+// -----------------------------------------------------------------------
+
+window.__aiGrammar = window.__aiGrammar || {};
+window.__aiGrammar.showPendingBadge = showPendingBadge;
+window.__aiGrammar.removePendingBadge = removePendingBadge;
+window.__aiGrammar.updatePendingBadgeLabel = updatePendingBadgeLabel;
+window.__aiGrammar.showResultBadge = showResultBadge;
+window.__aiGrammar.removeAllBadges = removeAllBadges;
+window.__aiGrammar.updateBatchBadge = updateBatchBadge;
+window.__aiGrammar.ensureBadgeStack = ensureBadgeStack;
+window.__aiGrammar.removeBadgeStackIfEmpty = removeBadgeStackIfEmpty;

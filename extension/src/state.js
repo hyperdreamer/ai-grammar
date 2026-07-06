@@ -194,3 +194,17 @@ export function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
+
+
+// -----------------------------------------------------------------------
+// Bridge: expose shared state and helpers on window.__aiGrammar so
+// thin content-script adapters (e.g. teams-bridge.js) can mutate the
+// same singleton state without re-declaring defaults.
+// -----------------------------------------------------------------------
+
+window.__aiGrammar = window.__aiGrammar || {};
+window.__aiGrammar.state = state;
+window.__aiGrammar.safeGetStorage = safeGetStorage;
+window.__aiGrammar.escapeHtml = escapeHtml;
+window.__aiGrammar.getConversationKey = getConversationKey;
+window.__aiGrammar.getWhatsAppBridge = getWhatsAppBridge;

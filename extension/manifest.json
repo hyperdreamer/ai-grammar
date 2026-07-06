@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Grammar Checker",
-  "version": "7.0.0",
+  "version": "0.0.0",
   "description": "Detect grammar and spelling errors in submitted text using AI. Highlights errors and shows corrections.",
   "permissions": [
     "activeTab",
@@ -42,18 +42,32 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["*://teams.microsoft.com/*", "*://teams.live.com/*", "*://teams.cloud.microsoft/*"],
-      "js": ["teams-bridge.js"],
+      "matches": [
+        "*://teams.microsoft.com/*",
+        "*://teams.live.com/*",
+        "*://teams.cloud.microsoft/*"
+      ],
+      "js": [
+        "teams-bridge.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["*://web.whatsapp.com/*"],
-      "js": ["whatsapp-bridge.js"],
+      "matches": [
+        "*://web.whatsapp.com/*"
+      ],
+      "js": [
+        "whatsapp-bridge.js"
+      ],
       "run_at": "document_idle"
     }
   ]

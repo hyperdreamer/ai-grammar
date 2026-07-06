@@ -35,7 +35,6 @@
   let checkGeneration = 0; // monotonic counter — only latest check wins
   let floatEl = null;
   let floatDismissTimer = null;
-  let contextInvalidated = false;
   let polishAbortController = null; // abort in-flight polish on user edit
   let commandBarEl = null;          // floating command bar
   let fixAbortController = null;    // abort in-flight fix on user edit
@@ -122,124 +121,13 @@
   let ckeBridgeMsgHandler = null; // postMessage handler from main-world CKEditor bridge
 
   // ── Progress badges (vertical stack, bottom-right) ────────────────────
-  const badgeCounters = { checking: 0, fixing: 0, polishing: 0 };
-  const badgeLabels = { checking: 'Checking grammar…', fixing: 'Fixing…', polishing: 'Polishing…' };
-  const activeBadges = new Map();
-  let resultBadgeTimer = null;
-
-  function ensureBadgeStack() {
-    let stack = document.querySelector('.ag-badge-stack');
-    if (!stack) {
-      stack = document.createElement('div');
-      stack.className = 'ag-badge-stack';
-      document.body.appendChild(stack);
-      injectBadgeCSS();
-    }
-    return stack;
-  }
-
-  function injectBadgeCSS() {
-    if (document.getElementById('ag-badge-css')) return;
-    const style = document.createElement('style');
-    style.id = 'ag-badge-css';
-    style.textContent = [
-      '.ag-badge-stack{position:fixed;bottom:16px;right:16px;z-index:2147483645;display:flex;flex-direction:column-reverse;gap:8px;pointer-events:none;max-width:320px}',
-      '.ai-grammar-badge{background:#1e293b;color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;font-size:12px;padding:6px 12px;border-radius:20px;box-shadow:0 2px 8px rgba(0,0,0,0.2);display:flex;align-items:center;gap:6px;animation:ag-fadein 0.2s ease;pointer-events:auto;white-space:nowrap;width:fit-content;align-self:flex-end}',
-      '.ai-grammar-badge.ag-badge-result{border:1px solid #4ade80}',
-      '.ai-grammar-badge .ag-spinner{width:12px;height:12px;border:2px solid #475569;border-top-color:#4ade80;border-radius:50%;animation:ag-spin 0.8s linear infinite}',
-      '.ai-grammar-badge .ag-count{background:rgba(255,255,255,0.15);padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;margin-left:2px}',
-      '.ag-badge-stack .ag-badge-done .ag-spinner{display:none}',
-      '.ag-badge-stack .ag-badge-done{background:#166534;border:1px solid #4ade80}',
-      '.ag-badge-stack .ag-badge-error{background:#7f1d1d;border:1px solid #f87171}',
-      '@keyframes ag-fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}',
-      '@keyframes ag-spin{to{transform:rotate(360deg)}}',
-      '@media(prefers-color-scheme:light){',
-      '.ai-grammar-badge{background:#fff;color:#0f172a;box-shadow:0 2px 8px rgba(0,0,0,0.1)}',
-      '.ai-grammar-badge .ag-spinner{border-color:#e2e8f0;border-top-color:#16a34a}',
-      '.ai-grammar-badge .ag-count{background:rgba(0,0,0,0.08);color:#475569}',
-      '.ag-badge-stack .ag-badge-done{background:#dcfce7;border-color:#4ade80}',
-      '.ag-badge-stack .ag-badge-error{background:#fee2e2;border-color:#f87171}',
-      '}',
-    ].join('\n');
-    (document.head || document.documentElement).appendChild(style);
-  }
-
-  function buildBadgeHTML(category) {
-    const label = badgeLabels[category];
-    const count = badgeCounters[category];
-    const countHtml = count > 1 ? '<span class=\"ag-count\">× ' + count + '</span>' : '';
-    return '<div class=\"ag-spinner\"></div>' + label + countHtml;
-  }
-
-  function showPendingBadge(category, label) {
-    badgeCounters[category]++;
-    badgeLabels[category] = label;
-    if (resultBadgeTimer) { clearTimeout(resultBadgeTimer); resultBadgeTimer = null; }
-    const stack = ensureBadgeStack();
-    const key = 'pending:' + category;
-    if (activeBadges.has(key)) {
-      activeBadges.get(key).el.innerHTML = buildBadgeHTML(category);
-    } else {
-      const badge = document.createElement('div');
-      badge.className = 'ai-grammar-badge';
-      badge.setAttribute('data-ag-category', category);
-      badge.innerHTML = buildBadgeHTML(category);
-      stack.appendChild(badge);
-      activeBadges.set(key, { el: badge, category });
-    }
-  }
-
-  function removePendingBadge(category) {
-    badgeCounters[category] = Math.max(0, badgeCounters[category] - 1);
-    if (badgeCounters[category] <= 0) {
-      const key = 'pending:' + category;
-      const entry = activeBadges.get(key);
-      if (entry) { entry.el.remove(); activeBadges.delete(key); }
-      const stack = document.querySelector('.ag-badge-stack');
-      if (stack && stack.children.length === 0) stack.remove();
-    } else {
-      const key = 'pending:' + category;
-      const entry = activeBadges.get(key);
-      if (entry) entry.el.innerHTML = buildBadgeHTML(category);
-    }
-  }
-
+  // Badge state + helpers now live in extension/src/indicators.js and
+  // extension/src/state.js, exposed on window.__aiGrammar.  All call
+  // sites below reference them through that namespace.
+  // Teams call sites pass (text, type, durationMs); the shared function
+  // takes (text, durationMs, type) — this shim reorders the args.
   function showResultBadge(text, type, durationMs) {
-    if (resultBadgeTimer) { clearTimeout(resultBadgeTimer); resultBadgeTimer = null; }
-    const stack = ensureBadgeStack();
-    // Remove old result badges
-    stack.querySelectorAll('[data-ag-result]').forEach(el => el.remove());
-    const badge = document.createElement('div');
-    badge.className = 'ai-grammar-badge ag-badge-result ' + (type === 'done' ? 'ag-badge-done' : type === 'error' ? 'ag-badge-error' : '');
-    badge.setAttribute('data-ag-result', '');
-    badge.textContent = text;
-    stack.appendChild(badge);
-    if (durationMs > 0) {
-      resultBadgeTimer = setTimeout(() => {
-        badge.remove();
-        resultBadgeTimer = null;
-        const s = document.querySelector('.ag-badge-stack');
-        if (s && s.children.length === 0) s.remove();
-      }, durationMs);
-    }
-  }
-
-  // ── Logging ───────────────────────────────────────────────────────────
-  const log = (...args) => console.debug('[AI Grammar Teams]', ...args);
-
-  // ── Storage helpers ───────────────────────────────────────────────────
-  async function safeGetStorage(defaults) {
-    if (contextInvalidated) return defaults;
-    try {
-      return await chrome.storage.sync.get(defaults);
-    } catch (e) {
-      if (e.message?.includes('Extension context invalidated')) {
-        contextInvalidated = true;
-        log('Extension context invalidated, using defaults');
-        return defaults;
-      }
-      throw e;
-    }
+    return window.__aiGrammar.showResultBadge(text, durationMs, type);
   }
 
   // ── HTML entity decoding (no innerHTML — Trusted Types safe) ──────────
@@ -532,7 +420,7 @@
     if (fixAbortController) {
       fixAbortController.abort();
       fixAbortController = null;
-      removePendingBadge('fixing');
+      window.__aiGrammar.removePendingBadge('fixing');
     }
   }
 
@@ -560,7 +448,7 @@
     const myGen = ++checkGeneration;
     abortController = new AbortController();
 
-    showPendingBadge('checking', 'Checking grammar…');
+    window.__aiGrammar.showPendingBadge('checking', 'Checking grammar…');
 
     try {
       log('Checking grammar:', text.length, 'chars');
@@ -568,22 +456,22 @@
 
       // Superseded by a newer check or editor detached?
       if (myGen !== checkGeneration) {
-        removePendingBadge('checking');
+        window.__aiGrammar.removePendingBadge('checking');
         return;
       }
       abortController = null;
 
       // Editor still present?
-      if (!document.contains(editorElement)) { removePendingBadge('checking'); return; }
+      if (!document.contains(editorElement)) { window.__aiGrammar.removePendingBadge('checking'); return; }
 
       if (!resp.ok) {
-        removePendingBadge('checking');
+        window.__aiGrammar.removePendingBadge('checking');
         showResultBadge('✗ Check failed', 'error', 4000);
         log('Check failed:', resp.error);
         return;
       }
 
-      removePendingBadge('checking');
+      window.__aiGrammar.removePendingBadge('checking');
 
       if (resp.errors?.length > 0) {
         log('Check complete:', resp.errors.length, 'errors found');
@@ -597,12 +485,12 @@
     } catch (err) {
       // Superseded — ignore all errors (including AbortError)
       if (myGen !== checkGeneration) {
-        removePendingBadge('checking');
+        window.__aiGrammar.removePendingBadge('checking');
         return;
       }
       abortController = null;
       if (err.name !== 'AbortError') {
-        removePendingBadge('checking');
+        window.__aiGrammar.removePendingBadge('checking');
         showResultBadge('✗ ' + (err.message || 'Check failed'), 'error', 4000);
         log('Grammar check error:', err);
       }
@@ -611,7 +499,7 @@
 
   /** Call the /polish backend. */
   async function callPolish(text, signal) {
-    const settings = await safeGetStorage({
+    const settings = await window.__aiGrammar.safeGetStorage({
       grammarHost: '127.0.0.1',
       grammarPort: 8766,
       grammarEnabled: true,
@@ -645,7 +533,7 @@
 
   /** Call the grammar backend directly via fetch (avoids SW round-trip). */
   async function callGrammarCheck(text, signal) {
-    const settings = await safeGetStorage({
+    const settings = await window.__aiGrammar.safeGetStorage({
       grammarHost: '127.0.0.1',
       grammarPort: 8766,
       grammarLanguage: 'auto',
@@ -722,7 +610,7 @@
         if (fixAbortController) {
           fixAbortController.abort();
           fixAbortController = null;
-          removePendingBadge('fixing');
+          window.__aiGrammar.removePendingBadge('fixing');
         }
       }
 
@@ -775,7 +663,7 @@
 
   // ── Load settings from storage ────────────────────────────────────────
   async function loadSettings() {
-    const s = await safeGetStorage({
+    const s = await window.__aiGrammar.safeGetStorage({
       grammarLiveDelay: 5,
       grammarLiveMinChars: 30,
       grammarEnabled: true,
@@ -866,7 +754,7 @@
     if (polishAbortController) {
       polishAbortController.abort();
       polishAbortController = null;
-      removePendingBadge('polishing');
+      window.__aiGrammar.removePendingBadge('polishing');
     }
   }
 
@@ -1278,25 +1166,12 @@
    * character-offset-based replacement, then pushes the result back
    * into the CKEditor via beforeinput.
    */
-  /** Apply ALL corrections at once (reverse-sorted by offset). */
+  /** Apply ALL corrections at once (uses the shared pure-text helper). */
   function applyAllCorrections(errors) {
     if (!editorElement) return;
-    let text = editorGetPlainText();
-
-    const fixes = errors
-      .map((e) => ({
-        start: Math.max(0, Number(e.start) || 0),
-        end: Math.min(text.length, Number(e.end) || text.length),
-        correction: e.correction || '',
-      }))
-      .filter((f) => f.start < f.end && f.correction)
-      .sort((a, b) => b.start - a.start); // descending — safe in-place edits
-
-    for (const f of fixes) {
-      text = text.slice(0, f.start) + f.correction + text.slice(f.end);
-    }
-
-    applyTextToEditor(text);
+    const text = editorGetPlainText();
+    const fixed = window.__aiGrammar.applyCorrectionsToText(text, errors);
+    applyTextToEditor(fixed);
   }
 
   /** Polish the editor text and apply the result. */
@@ -1312,10 +1187,10 @@
     abortPolish();
     polishAbortController = new AbortController();
 
-    showPendingBadge('polishing', 'Polishing…');
+    window.__aiGrammar.showPendingBadge('polishing', 'Polishing…');
     try {
       const resp = await callPolish(text, polishAbortController.signal);
-      removePendingBadge('polishing');
+      window.__aiGrammar.removePendingBadge('polishing');
       polishAbortController = null;
 
       if (!resp.ok) {
@@ -1334,7 +1209,7 @@
       dismissErrors();
     } catch (err) {
       polishAbortController = null;
-      removePendingBadge('polishing');
+      window.__aiGrammar.removePendingBadge('polishing');
       if (err.name === 'AbortError') return;
       showResultBadge('✗ Polish failed: ' + (err.message || 'error'), 'error', 4000);
     }
@@ -1353,10 +1228,10 @@
     if (fixAbortController) fixAbortController.abort();
     fixAbortController = new AbortController();
 
-    showPendingBadge('fixing', 'Fixing…');
+    window.__aiGrammar.showPendingBadge('fixing', 'Fixing…');
     try {
       const resp = await callGrammarCheck(text, fixAbortController.signal);
-      removePendingBadge('fixing');
+      window.__aiGrammar.removePendingBadge('fixing');
       fixAbortController = null;
 
       if (!resp.ok) {
@@ -1371,27 +1246,14 @@
         return;
       }
 
-      // Apply corrections bottom-up
-      let fixed = text;
-      const fixes = errors
-        .map(e => ({
-          start: Math.max(0, Number(e.start) || 0),
-          end: Math.min(fixed.length, Number(e.end) || fixed.length),
-          correction: e.correction || '',
-        }))
-        .filter(f => f.start < f.end && f.correction)
-        .sort((a, b) => b.start - a.start);
-
-      for (const f of fixes) {
-        fixed = fixed.slice(0, f.start) + f.correction + fixed.slice(f.end);
-      }
-
+      // Apply corrections bottom-up (uses the shared pure-text helper)
+      const fixed = window.__aiGrammar.applyCorrectionsToText(text, errors);
       applyTextToEditor(fixed);
       dismissErrors();
       dismissCommandBar();
     } catch (err) {
       fixAbortController = null;
-      removePendingBadge('fixing');
+      window.__aiGrammar.removePendingBadge('fixing');
       if (err.name === 'AbortError') return;
       showResultBadge('✗ Fix failed: ' + (err.message || 'error'), 'error', 4000);
     }
@@ -1401,7 +1263,7 @@
 
   /** Call the /translate backend. */
   async function callTranslate(text, targetLang, signal) {
-    const settings = await safeGetStorage({
+    const settings = await window.__aiGrammar.safeGetStorage({
       grammarHost: '127.0.0.1',
       grammarPort: 8766,
     });
@@ -1433,7 +1295,7 @@
     if (translateAbortController) {
       translateAbortController.abort();
       translateAbortController = null;
-      removePendingBadge('translating');
+      window.__aiGrammar.removePendingBadge('translating');
     }
     dismissTranslatePicker();
   }
@@ -1449,10 +1311,10 @@
     abortTranslate();
     translateAbortController = new AbortController();
 
-    showPendingBadge('translating', 'Translating…');
+    window.__aiGrammar.showPendingBadge('translating', 'Translating…');
     try {
       const resp = await callTranslate(text, targetLang, translateAbortController.signal);
-      removePendingBadge('translating');
+      window.__aiGrammar.removePendingBadge('translating');
       translateAbortController = null;
 
       if (!resp.ok) {
@@ -1471,7 +1333,7 @@
       dismissErrors();
     } catch (err) {
       translateAbortController = null;
-      removePendingBadge('translating');
+      window.__aiGrammar.removePendingBadge('translating');
       if (err.name === 'AbortError') return;
       showResultBadge('✗ Translate failed: ' + (err.message || 'error'), 'error', 4000);
     }
@@ -1674,7 +1536,7 @@
   function applyTextToEditor(text) {
     if (!editorElement || !document.contains(editorElement)) return;
 
-    showPendingBadge('fixing', 'Fixing…');
+    window.__aiGrammar.showPendingBadge('fixing', 'Fixing…');
 
     // Use the background worker to apply text via CKEditor's API in the
     // MAIN world.  beforeinput and execCommand are unreliable with CKEditor 5
@@ -1682,7 +1544,7 @@
     chrome.runtime.sendMessage(
       { type: 'ag-cke-apply', text },
       (response) => {
-        removePendingBadge('fixing');
+        window.__aiGrammar.removePendingBadge('fixing');
         if (response?.ok && response?.applied) {
           showResultBadge('✓ Corrected!', 'done', 3000);
           dismissErrors();

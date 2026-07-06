@@ -146,6 +146,12 @@
     div.textContent = str;
     return div.innerHTML;
   }
+  window.__aiGrammar = window.__aiGrammar || {};
+  window.__aiGrammar.state = state;
+  window.__aiGrammar.safeGetStorage = safeGetStorage;
+  window.__aiGrammar.escapeHtml = escapeHtml;
+  window.__aiGrammar.getConversationKey = getConversationKey;
+  window.__aiGrammar.getWhatsAppBridge = getWhatsAppBridge;
 
   // src/tooltip.js
   function createTooltip() {
@@ -323,6 +329,13 @@
       state.activeBadges.set(key, { el: badge, category });
     }
   }
+  function updatePendingBadgeLabel(category, label) {
+    state.badgeLabels[category] = label;
+    const key = `pending:${category}`;
+    const entry = state.activeBadges.get(key);
+    if (!entry) return;
+    entry.el.innerHTML = buildBadgeHTML(category);
+  }
   function removePendingBadge(category) {
     state.badgeCounters[category] = Math.max(0, state.badgeCounters[category] - 1);
     if (state.badgeCounters[category] <= 0) {
@@ -341,7 +354,7 @@
       }
     }
   }
-  function showResultBadge(text, durationMs = 4e3) {
+  function showResultBadge(text, durationMs = 4e3, type) {
     if (state.resultBadgeTimer) {
       clearTimeout(state.resultBadgeTimer);
       state.resultBadgeTimer = null;
@@ -355,7 +368,10 @@
     const stack = ensureBadgeStack();
     const resultId = `result:${Date.now()}`;
     const badge = document.createElement("div");
-    badge.className = "ai-grammar-badge ag-badge-result";
+    let cls = "ai-grammar-badge ag-badge-result";
+    if (type === "done") cls += " ag-badge-done";
+    else if (type === "error") cls += " ag-badge-error";
+    badge.className = cls;
     badge.setAttribute("data-ag-result", "");
     badge.innerHTML = text;
     stack.appendChild(badge);
@@ -381,6 +397,14 @@
     state.badgeCounters.translating = 0;
     const stack = document.querySelector(".ag-badge-stack");
     if (stack) stack.remove();
+  }
+  function updateBatchBadge(completed, total) {
+    const label = `Checking ${completed}/${total} text blocks...`;
+    if (state.badgeCounters.checking > 0) {
+      updatePendingBadgeLabel("checking", label);
+    } else {
+      showPendingBadge("checking", label);
+    }
   }
   function getLastCharRect(container, text) {
     const containerRect = container.getBoundingClientRect();
@@ -612,6 +636,15 @@
     const panel = document.getElementById("ai-grammar-float");
     if (panel) panel.remove();
   }
+  window.__aiGrammar = window.__aiGrammar || {};
+  window.__aiGrammar.showPendingBadge = showPendingBadge;
+  window.__aiGrammar.removePendingBadge = removePendingBadge;
+  window.__aiGrammar.updatePendingBadgeLabel = updatePendingBadgeLabel;
+  window.__aiGrammar.showResultBadge = showResultBadge;
+  window.__aiGrammar.removeAllBadges = removeAllBadges;
+  window.__aiGrammar.updateBatchBadge = updateBatchBadge;
+  window.__aiGrammar.ensureBadgeStack = ensureBadgeStack;
+  window.__aiGrammar.removeBadgeStackIfEmpty = removeBadgeStackIfEmpty;
 
   // src/live-draft.js
   function highlightLiveDraft(ta, errors) {
@@ -1102,6 +1135,23 @@
       }
     });
   }
+  function applyCorrectionsToText(text, errors) {
+    if (!Array.isArray(errors) || !errors.length) return text;
+    const fixes = errors.map((e) => ({
+      start: Math.max(0, Number(e.start) || 0),
+      end: Math.min(text.length, Number(e.end) || text.length),
+      correction: e.correction || ""
+    })).filter((f) => f.start < f.end && f.correction).sort((a, b) => b.start - a.start);
+    let out = text;
+    for (const f of fixes) {
+      out = out.slice(0, f.start) + f.correction + out.slice(f.end);
+    }
+    return out;
+  }
+  window.__aiGrammar = window.__aiGrammar || {};
+  window.__aiGrammar.applyCorrectionsToText = applyCorrectionsToText;
+  window.__aiGrammar.applyFixCDP = applyFixCDP;
+  window.__aiGrammar.tryBeforeInput = tryBeforeInput;
 
   // src/events.js
   document.addEventListener("mouseover", (e) => {
@@ -1776,6 +1826,15 @@
         border-radius: 50%;
         animation: ai-gspin 0.8s linear infinite;
       }
+      .ag-badge-stack .ag-badge-done .ag-spinner { display: none; }
+      .ag-badge-stack .ag-badge-done {
+        background: #166534;
+        border: 1px solid #4ade80;
+      }
+      .ag-badge-stack .ag-badge-error {
+        background: #7f1d1d;
+        border: 1px solid #f87171;
+      }
       .ai-grammar-badge .ag-count {
         background: rgba(255,255,255,0.15);
         padding: 1px 6px;
@@ -1826,6 +1885,14 @@
         }
         .ai-grammar-badge .ag-count {
           background: rgba(0,0,0,0.08);
+        }
+        .ag-badge-stack .ag-badge-done {
+          background: #dcfce7;
+          border-color: #4ade80;
+        }
+        .ag-badge-stack .ag-badge-error {
+          background: #fee2e2;
+          border-color: #f87171;
         }
       }
       .ai-grammar-ok {

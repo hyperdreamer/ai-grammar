@@ -184,6 +184,15 @@ export function injectStyles() {
         border-radius: 50%;
         animation: ai-gspin 0.8s linear infinite;
       }
+      .ag-badge-stack .ag-badge-done .ag-spinner { display: none; }
+      .ag-badge-stack .ag-badge-done {
+        background: #166534;
+        border: 1px solid #4ade80;
+      }
+      .ag-badge-stack .ag-badge-error {
+        background: #7f1d1d;
+        border: 1px solid #f87171;
+      }
       .ai-grammar-badge .ag-count {
         background: rgba(255,255,255,0.15);
         padding: 1px 6px;
@@ -234,6 +243,14 @@ export function injectStyles() {
         }
         .ai-grammar-badge .ag-count {
           background: rgba(0,0,0,0.08);
+        }
+        .ag-badge-stack .ag-badge-done {
+          background: #dcfce7;
+          border-color: #4ade80;
+        }
+        .ag-badge-stack .ag-badge-error {
+          background: #fee2e2;
+          border-color: #f87171;
         }
       }
       .ai-grammar-ok {

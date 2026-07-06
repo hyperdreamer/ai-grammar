@@ -203,3 +203,38 @@ export function applyFixCDP(text) {
     }
   });
 }
+
+/**
+ * Pure text helper — apply a list of {start, end, correction} edits to
+ * a string.  Replacements are sorted descending by start offset so
+ * earlier offsets remain valid as later ones are spliced in.
+ * Returns the corrected text.  Does not touch the DOM.
+ */
+export function applyCorrectionsToText(text, errors) {
+  if (!Array.isArray(errors) || !errors.length) return text;
+  const fixes = errors
+    .map((e) => ({
+      start: Math.max(0, Number(e.start) || 0),
+      end: Math.min(text.length, Number(e.end) || text.length),
+      correction: e.correction || '',
+    }))
+    .filter((f) => f.start < f.end && f.correction)
+    .sort((a, b) => b.start - a.start); // descending — safe in-place edits
+
+  let out = text;
+  for (const f of fixes) {
+    out = out.slice(0, f.start) + f.correction + out.slice(f.end);
+  }
+  return out;
+}
+
+
+// -----------------------------------------------------------------------
+// Bridge: expose shared correction helpers on window.__aiGrammar so
+// thin content-script adapters (e.g. teams-bridge.js) can reuse them.
+// -----------------------------------------------------------------------
+
+window.__aiGrammar = window.__aiGrammar || {};
+window.__aiGrammar.applyCorrectionsToText = applyCorrectionsToText;
+window.__aiGrammar.applyFixCDP = applyFixCDP;
+window.__aiGrammar.tryBeforeInput = tryBeforeInput;
