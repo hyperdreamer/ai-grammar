@@ -1056,22 +1056,34 @@
   function tryBeforeInput(text, ta) {
     return new Promise((resolve) => {
       try {
-        const before = (ta.textContent || ta.innerText || "").replace(/​/g, "");
         ta.focus();
-        const sel = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(ta);
-        sel.removeAllRanges();
-        sel.addRange(range);
-        ta.dispatchEvent(new InputEvent("beforeinput", {
-          bubbles: true,
-          cancelable: true,
-          inputType: "insertReplacementText",
-          data: text
-        }));
         requestAnimationFrame(() => {
-          const after = (ta.textContent || ta.innerText || "").replace(/​/g, "");
-          resolve(after !== before);
+          requestAnimationFrame(() => {
+            const el = document.querySelector(
+              'footer div[contenteditable="true"][role="textbox"]'
+            ) || document.querySelector('[contenteditable="true"][role="textbox"]') || document.querySelector('[contenteditable="true"]');
+            if (!el || !document.contains(el)) {
+              resolve(false);
+              return;
+            }
+            const before = (el.textContent || el.innerText || "").replace(/\u200B/g, "");
+            el.focus();
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            sel.removeAllRanges();
+            sel.addRange(range);
+            el.dispatchEvent(new InputEvent("beforeinput", {
+              bubbles: true,
+              cancelable: true,
+              inputType: "insertReplacementText",
+              data: text
+            }));
+            requestAnimationFrame(() => {
+              const after = (el.textContent || el.innerText || "").replace(/\u200B/g, "");
+              resolve(after !== before);
+            });
+          });
         });
       } catch {
         resolve(false);
@@ -1980,7 +1992,6 @@
       ta.dispatchEvent(new Event("input", { bubbles: true }));
     } else {
       if (await tryBeforeInput(cleaned, ta)) {
-        // Success
       } else {
         applyFixCDP(cleaned);
       }
@@ -2114,7 +2125,6 @@
             }
           }
         }
-
         const value = ta.value || ta.textContent || "";
         const cmdIdx = value.lastIndexOf("?/check");
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
@@ -2542,7 +2552,8 @@
       if (item) {
         e.preventDefault();
         const cmdName = item.dataset.cmd;
-        selectPaletteCommand(cmdName).catch(() => {});
+        selectPaletteCommand(cmdName).catch(() => {
+        });
       }
     });
   }
@@ -2604,7 +2615,6 @@
       ta.dispatchEvent(new Event("input", { bubbles: true }));
     } else {
       if (await tryBeforeInput(newValue, ta)) {
-        // Success
       } else {
         applyFixCDP(newValue);
       }
@@ -2622,7 +2632,6 @@
         ta.dispatchEvent(new Event("input", { bubbles: true }));
       } else {
         if (await tryBeforeInput(cleaned, ta)) {
-          // Success
         } else {
           applyFixCDP(cleaned);
         }
@@ -2699,7 +2708,8 @@
       if (item) {
         e.preventDefault();
         const code = item.dataset.code;
-        commitLanguageSelection(code).catch(() => {});
+        commitLanguageSelection(code).catch(() => {
+        });
       }
     });
     if (langPaletteFilter) {
@@ -2722,7 +2732,6 @@
               ta2.dispatchEvent(new Event("input", { bubbles: true }));
             } else {
               if (await tryBeforeInput(newVal, ta2)) {
-                // Success
               } else {
                 applyFixCDP(newVal);
               }
@@ -2782,7 +2791,6 @@
         ta.dispatchEvent(new Event("input", { bubbles: true }));
       } else {
         if (await tryBeforeInput(newVal, ta)) {
-          // Success
         } else {
           applyFixCDP(newVal);
         }
@@ -3025,8 +3033,8 @@
       if (state.replacingCommand) return;
       clearTimeout(commandDebounce);
       const value = ta.value || ta.textContent || "";
-      if (/\/?\/lang\s+\S*$/.test(value) || /\/?\/lang\s*$/.test(value)) {
-        const langMatch = value.match(/\/?\/lang\s*(.*)$/);
+      if (/\?\/lang\s+\S*$/.test(value) || /\?\/lang\s*$/.test(value)) {
+        const langMatch = value.match(/\?\/lang\s*(.*)$/);
         const filter = (langMatch?.[1] || "").trim();
         hideCommandPalette();
         showLanguagePalette(ta, filter);
@@ -3065,7 +3073,6 @@
                   ta.dispatchEvent(new Event("input", { bubbles: true }));
                 } else {
                   if (await tryBeforeInput(replaced, ta)) {
-                    // Success
                   } else {
                     applyFixCDP(replaced);
                   }
@@ -3097,7 +3104,6 @@
                   ta.dispatchEvent(new Event("input", { bubbles: true }));
                 } else {
                   if (await tryBeforeInput(cleaned, ta)) {
-                    // Success
                   } else {
                     applyFixCDP(cleaned);
                   }
@@ -3138,7 +3144,6 @@
                 ta.dispatchEvent(new Event("input", { bubbles: true }));
               } else {
                 if (await tryBeforeInput(cleaned, ta)) {
-                  // Success
                 } else {
                   applyFixCDP(cleaned);
                 }

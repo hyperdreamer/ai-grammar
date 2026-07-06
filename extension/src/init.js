@@ -24,6 +24,7 @@ import {
   selectLanguagePaletteItem,
   langPaletteEl,
 } from './commands.js';
+import { tryBeforeInput, applyFixCDP } from './apply-correction.js';
 import { showResultBadge } from './indicators.js';
 
 // -----------------------------------------------------------------------
@@ -292,8 +293,8 @@ export function init() {
     const value = ta.value || ta.textContent || '';
 
     // Language palette: ?/lang with optional filter
-    if (/\/?\/lang\s+\S*$/.test(value) || /\/?\/lang\s*$/.test(value)) {
-      const langMatch = value.match(/\/?\/lang\s*(.*)$/);
+    if (/\?\/lang\s+\S*$/.test(value) || /\?\/lang\s*$/.test(value)) {
+      const langMatch = value.match(/\?\/lang\s*(.*)$/);
       const filter = (langMatch?.[1] || '').trim();
       hideCommandPalette();
       showLanguagePalette(ta, filter);

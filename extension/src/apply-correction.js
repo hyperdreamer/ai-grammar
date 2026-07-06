@@ -148,28 +148,42 @@ export function applyCorrection(errorEl) {
 export function tryBeforeInput(text, ta) {
   return new Promise((resolve) => {
     try {
-      // Capture current text so we can verify it changed after dispatch.
-      const before = (ta.textContent || ta.innerText || '').replace(/​/g, '');
       ta.focus();
-      // Set selection to cover all existing content
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(ta);
-      sel.removeAllRanges();
-      sel.addRange(range);
-
-      ta.dispatchEvent(new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'insertReplacementText',
-        data: text,
-      }));
-
-      // Lexical processes beforeinput asynchronously (React batch).
-      // Check after one frame to see if the text actually changed.
+      // Double rAF: let Lexical's React batch re-establish internal focus
+      // state after a floating palette may have stolen it.
       requestAnimationFrame(() => {
-        const after = (ta.textContent || ta.innerText || '').replace(/​/g, '');
-        resolve(after !== before);
+        requestAnimationFrame(() => {
+          // Re-query — ta may have been detached by React re-render
+          const el = document.querySelector(
+            'footer div[contenteditable="true"][role="textbox"]'
+          ) || document.querySelector('[contenteditable="true"][role="textbox"]')
+            || document.querySelector('[contenteditable="true"]');
+          if (!el || !document.contains(el)) {
+            resolve(false);
+            return;
+          }
+          const before = (el.textContent || el.innerText || '').replace(/\u200B/g, '');
+          el.focus();
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          sel.removeAllRanges();
+          sel.addRange(range);
+
+          el.dispatchEvent(new InputEvent('beforeinput', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'insertReplacementText',
+            data: text,
+          }));
+
+          // Lexical processes beforeinput asynchronously (React batch).
+          // Check after one more frame to verify the text actually changed.
+          requestAnimationFrame(() => {
+            const after = (el.textContent || el.innerText || '').replace(/\u200B/g, '');
+            resolve(after !== before);
+          });
+        });
       });
     } catch {
       resolve(false);
