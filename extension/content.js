@@ -2726,17 +2726,19 @@
           const m = val.match(re);
           if (m) {
             const newVal = val.slice(0, m.index) + "?/lang " + code;
-            state.skipLiveCheck = true;
-            if (ta2.tagName === "TEXTAREA") {
-              ta2.value = newVal;
-              ta2.dispatchEvent(new Event("input", { bubbles: true }));
-            } else {
-              if (await tryBeforeInput(newVal, ta2)) {
+            if (newVal !== val) {
+              state.skipLiveCheck = true;
+              if (ta2.tagName === "TEXTAREA") {
+                ta2.value = newVal;
+                ta2.dispatchEvent(new Event("input", { bubbles: true }));
               } else {
-                applyFixCDP(newVal);
+                if (await tryBeforeInput(newVal, ta2)) {
+                } else {
+                  applyFixCDP(newVal);
+                }
               }
+              state.skipLiveCheck = false;
             }
-            state.skipLiveCheck = false;
           }
           hideLanguagePalette();
           try {
@@ -2785,17 +2787,19 @@
     const m = val.match(re);
     if (m) {
       const newVal = val.slice(0, m.index) + "?/lang " + code;
-      state.skipLiveCheck = true;
-      if (ta.tagName === "TEXTAREA") {
-        ta.value = newVal;
-        ta.dispatchEvent(new Event("input", { bubbles: true }));
-      } else {
-        if (await tryBeforeInput(newVal, ta)) {
+      if (newVal !== val) {
+        state.skipLiveCheck = true;
+        if (ta.tagName === "TEXTAREA") {
+          ta.value = newVal;
+          ta.dispatchEvent(new Event("input", { bubbles: true }));
         } else {
-          applyFixCDP(newVal);
+          if (await tryBeforeInput(newVal, ta)) {
+          } else {
+            applyFixCDP(newVal);
+          }
         }
+        state.skipLiveCheck = false;
       }
-      state.skipLiveCheck = false;
     }
     hideLanguagePalette();
     setTimeout(() => {

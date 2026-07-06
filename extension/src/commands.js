@@ -851,18 +851,21 @@ export function showLanguagePalette(ta, filter = '') {
         const m = val.match(re);
         if (m) {
           const newVal = val.slice(0, m.index) + '?/lang ' + code;
-          state.skipLiveCheck = true;
-          if (ta2.tagName === 'TEXTAREA') {
-            ta2.value = newVal;
-            ta2.dispatchEvent(new Event('input', { bubbles: true }));
-          } else {
-            if (await tryBeforeInput(newVal, ta2)) {
-              // Success
+          // Skip text insertion if the command text is already correct
+          if (newVal !== val) {
+            state.skipLiveCheck = true;
+            if (ta2.tagName === 'TEXTAREA') {
+              ta2.value = newVal;
+              ta2.dispatchEvent(new Event('input', { bubbles: true }));
             } else {
-              applyFixCDP(newVal);
+              if (await tryBeforeInput(newVal, ta2)) {
+                // Success
+              } else {
+                applyFixCDP(newVal);
+              }
             }
+            state.skipLiveCheck = false;
           }
-          state.skipLiveCheck = false;
         }
         hideLanguagePalette();
         try {
@@ -914,18 +917,21 @@ async function commitLanguageSelection(code) {
   const m = val.match(re);
   if (m) {
     const newVal = val.slice(0, m.index) + '?/lang ' + code;
-    state.skipLiveCheck = true;
-    if (ta.tagName === 'TEXTAREA') {
-      ta.value = newVal;
-      ta.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
-      if (await tryBeforeInput(newVal, ta)) {
-        // Success
+    // Skip text insertion if the command text is already correct
+    if (newVal !== val) {
+      state.skipLiveCheck = true;
+      if (ta.tagName === 'TEXTAREA') {
+        ta.value = newVal;
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
       } else {
-        applyFixCDP(newVal);
+        if (await tryBeforeInput(newVal, ta)) {
+          // Success
+        } else {
+          applyFixCDP(newVal);
+        }
       }
+      state.skipLiveCheck = false;
     }
-    state.skipLiveCheck = false;
   }
   hideLanguagePalette();
   // Debounce slightly so the textarea event settles before we read it
