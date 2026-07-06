@@ -1643,6 +1643,85 @@
     checkText(text, container);
   }
 
+  // src/api.js
+  function backendUrl(endpoint, settings) {
+    return `http://${settings.grammarHost}:${settings.grammarPort}${endpoint}`;
+  }
+  async function postJson(url, body, signal, timeoutMs) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    if (signal) signal.addEventListener("abort", () => controller.abort());
+    try {
+      return await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+  async function errorEnvelope(resp) {
+    const body = await resp.text().catch(() => "");
+    return { ok: false, error: `Backend error (${resp.status}): ${body.slice(0, 200)}` };
+  }
+  async function checkGrammar(text, opts = {}) {
+    const { signal, language = "auto", maxTokens } = opts;
+    const settings = await safeGetStorage({ grammarHost: "127.0.0.1", grammarPort: 8766 });
+    const body = { text, language };
+    if (maxTokens !== void 0) body.max_tokens = maxTokens;
+    try {
+      const resp = await postJson(backendUrl("/check", settings), body, signal, 3e4);
+      if (!resp.ok) return errorEnvelope(resp);
+      const data = await resp.json();
+      return { ok: true, errors: data.errors || [], model: data.model || "" };
+    } catch (e) {
+      if (e.name === "AbortError") return { ok: true, aborted: true };
+      return { ok: false, error: e.message };
+    }
+  }
+  async function polishGrammar(text, opts = {}) {
+    const { signal, language = "auto" } = opts;
+    const settings = await safeGetStorage({ grammarHost: "127.0.0.1", grammarPort: 8766 });
+    try {
+      const resp = await postJson(
+        backendUrl("/polish", settings),
+        { text, language },
+        signal,
+        6e4
+      );
+      if (!resp.ok) return errorEnvelope(resp);
+      const data = await resp.json();
+      return { ok: true, polished: data.polished || "", model: data.model || "" };
+    } catch (e) {
+      if (e.name === "AbortError") return { ok: true, aborted: true };
+      return { ok: false, error: e.message };
+    }
+  }
+  async function translateText(text, targetLang, opts = {}) {
+    const { signal } = opts;
+    const settings = await safeGetStorage({ grammarHost: "127.0.0.1", grammarPort: 8766 });
+    try {
+      const resp = await postJson(
+        backendUrl("/translate", settings),
+        { text, target_lang: targetLang },
+        signal,
+        6e4
+      );
+      if (!resp.ok) return errorEnvelope(resp);
+      const data = await resp.json();
+      return { ok: true, translated: data.translated || "", model: data.model || "" };
+    } catch (e) {
+      if (e.name === "AbortError") return { ok: true, aborted: true };
+      return { ok: false, error: e.message };
+    }
+  }
+  window.__aiGrammar = window.__aiGrammar || {};
+  window.__aiGrammar.checkGrammar = checkGrammar;
+  window.__aiGrammar.polishGrammar = polishGrammar;
+  window.__aiGrammar.translateText = translateText;
+
   // src/styles.js
   function injectStyles() {
     if (document.getElementById("ai-grammar-styles")) return;
@@ -2102,23 +2181,17 @@
         state.cancelLiveDraft?.();
         state.activeCheckController?.abort();
         try {
-          const settings = await safeGetStorage({ grammarHost: "127.0.0.1", grammarPort: 8766 });
-          const translateController = new AbortController();
-          const timeoutId = setTimeout(() => translateController.abort(), 6e4);
-          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/translate`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: draft, target_lang: targetLang }),
-            signal: translateController.signal
-          });
-          clearTimeout(timeoutId);
-          const data = await resp.json();
+          const resp = await translateText(draft, targetLang);
           removePendingBadge("translating");
-          if (!resp.ok) {
-            showResultBadge(`Translation failed: ${data?.detail || resp.status}`, 5e3);
+          if (resp.aborted) {
+            showResultBadge("Translation failed: Request timed out or was cancelled");
             return;
           }
-          const translated = data.translated;
+          if (!resp.ok) {
+            showResultBadge(`Translation failed: ${resp.error}`, 5e3);
+            return;
+          }
+          const translated = resp.translated;
           if (!translated || translated === draft) {
             showResultBadge("\u2713 Text is already in that language or could not be translated");
             await stripCommand(cmdStr, ta);
@@ -2153,14 +2226,7 @@
           showResultBadge(`\u2713 Translated to ${targetLang.toUpperCase()}`);
         } catch (e) {
           removePendingBadge("translating");
-          let reason;
-          if (e.name === "AbortError") {
-            reason = "Request timed out or was cancelled";
-          } else if (e.message?.includes("Extension context invalidated")) {
-            reason = "Extension reloaded \u2014 please reload this page";
-          } else {
-            reason = e.message;
-          }
+          const reason = e.message?.includes("Extension context invalidated") ? "Extension reloaded \u2014 please reload this page" : e.message;
           showResultBadge(`Translation failed: ${reason}`);
         } finally {
           state.commandInFlight = false;
@@ -2204,31 +2270,20 @@
         state.activeCheckController?.abort();
         showPendingBadge("checking", "Checking grammar...");
         state.commandInFlight = true;
+        state.activeCheckController?.abort();
+        state.activeCheckController = new AbortController();
         try {
-          const settings = await safeGetStorage({
-            grammarHost: "127.0.0.1",
-            grammarPort: 8766
-          });
-          state.activeCheckController?.abort();
-          state.activeCheckController = new AbortController();
-          const timeoutId = setTimeout(() => state.activeCheckController.abort(), 3e4);
-          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: draft, language: "auto" }),
-            signal: state.activeCheckController.signal
-          });
-          clearTimeout(timeoutId);
-          const data = await resp.json();
+          const resp = await checkGrammar(draft, { signal: state.activeCheckController.signal, language: "auto" });
+          if (resp.aborted) return;
           if (!resp.ok) {
-            showResultBadge("Grammar check failed: " + (data?.detail || resp.status), 5e3);
+            showResultBadge("Grammar check failed: " + resp.error, 5e3);
             return;
           }
-          if (data?.errors?.length > 0) {
+          if (resp.errors?.length > 0) {
             state.skipLiveCheck = true;
             await stripCheck(ta);
             state.skipLiveCheck = false;
-            highlightLiveDraft(ta, data.errors);
+            highlightLiveDraft(ta, resp.errors);
           } else {
             state.skipLiveCheck = true;
             await stripCheck(ta);
@@ -2236,14 +2291,7 @@
             showGreenCheck(ta, draft);
           }
         } catch (e) {
-          let reason;
-          if (e.name === "AbortError") {
-            reason = "Request timed out";
-          } else if (e.message?.includes("Extension context invalidated")) {
-            reason = "Extension reloaded \u2014 please reload this page";
-          } else {
-            reason = e.message;
-          }
+          const reason = e.message?.includes("Extension context invalidated") ? "Extension reloaded \u2014 please reload this page" : e.message;
           showResultBadge("Check failed: " + reason);
         } finally {
           removePendingBadge("checking");
@@ -2266,27 +2314,23 @@
         showPendingBadge("fixing", "Fixing...");
         state.commandInFlight = true;
         try {
-          const settings = await safeGetStorage({
-            grammarHost: "127.0.0.1",
-            grammarPort: 8766
-          });
-          const fixController = new AbortController();
-          const timeoutId = setTimeout(() => fixController.abort(), 3e4);
-          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: draft, language: "auto" }),
-            signal: fixController.signal
-          });
-          clearTimeout(timeoutId);
-          const data = await resp.json();
+          const resp = await checkGrammar(draft, { language: "auto" });
           removePendingBadge("fixing");
-          if (!data?.errors?.length) {
+          if (resp.aborted) {
+            showResultBadge("Fix failed: Request timed out or was cancelled");
+            return;
+          }
+          if (!resp.ok) {
+            showResultBadge(`Fix failed: ${resp.error}`);
+            return;
+          }
+          const errors = resp.errors;
+          if (!errors?.length) {
             showResultBadge("\u2713 No corrections needed");
             await stripCommand("?/fix", ta);
             return;
           }
-          const sorted = [...data.errors].sort((a, b) => b.start - a.start);
+          const sorted = [...errors].sort((a, b) => b.start - a.start);
           let fixed = draft;
           for (const err of sorted) {
             fixed = fixed.slice(0, err.start) + err.correction + fixed.slice(err.end);
@@ -2320,14 +2364,7 @@
           showResultBadge(`\u2713 Fixed ${sorted.length} issue${sorted.length > 1 ? "s" : ""}`);
         } catch (e) {
           removePendingBadge("fixing");
-          let reason;
-          if (e.name === "AbortError") {
-            reason = "Request timed out or was cancelled";
-          } else if (e.message?.includes("Extension context invalidated")) {
-            reason = "Extension reloaded \u2014 please reload this page";
-          } else {
-            reason = e.message;
-          }
+          const reason = e.message?.includes("Extension context invalidated") ? "Extension reloaded \u2014 please reload this page" : e.message;
           showResultBadge(`Fix failed: ${reason}`);
         } finally {
           state.commandInFlight = false;
@@ -2348,26 +2385,17 @@
         showPendingBadge("polishing", "Polishing...");
         state.commandInFlight = true;
         try {
-          const settings = await safeGetStorage({
-            grammarHost: "127.0.0.1",
-            grammarPort: 8766
-          });
-          const polishController = new AbortController();
-          const timeoutId = setTimeout(() => polishController.abort(), 6e4);
-          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/polish`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: draft, language: "auto" }),
-            signal: polishController.signal
-          });
-          clearTimeout(timeoutId);
-          const data = await resp.json();
+          const resp = await polishGrammar(draft, { language: "auto" });
           removePendingBadge("polishing");
-          if (!resp.ok) {
-            showResultBadge(`Polish failed: ${data?.detail || resp.status}`, 5e3);
+          if (resp.aborted) {
+            showResultBadge("Polish failed: Request timed out or was cancelled");
             return;
           }
-          const polished = data.polished;
+          if (!resp.ok) {
+            showResultBadge(`Polish failed: ${resp.error}`, 5e3);
+            return;
+          }
+          const polished = resp.polished;
           if (!polished || polished === draft) {
             showResultBadge("\u2713 Text already polished");
             await stripCommand("?/polish", ta);
@@ -2402,14 +2430,7 @@
           showResultBadge("\u2713 Polished");
         } catch (e) {
           removePendingBadge("polishing");
-          let reason;
-          if (e.name === "AbortError") {
-            reason = "Request timed out or was cancelled";
-          } else if (e.message?.includes("Extension context invalidated")) {
-            reason = "Extension reloaded \u2014 please reload this page";
-          } else {
-            reason = e.message;
-          }
+          const reason = e.message?.includes("Extension context invalidated") ? "Extension reloaded \u2014 please reload this page" : e.message;
           showResultBadge(`Polish failed: ${reason}`);
         } finally {
           state.commandInFlight = false;
@@ -2441,46 +2462,27 @@
         }
         showPendingBadge("fixing", "Fixing...");
         state.commandInFlight = true;
-        try {
-          const settings = await safeGetStorage({
-            grammarHost: "127.0.0.1",
-            grammarPort: 8766
-          });
-          const fixController = new AbortController();
-          const timeoutId = setTimeout(() => fixController.abort(), 3e4);
-          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/check`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: draft, language: "auto" }),
-            signal: fixController.signal
-          });
-          clearTimeout(timeoutId);
-          const data = await resp.json();
-          removePendingBadge("fixing");
-          if (!data?.errors?.length) {
-            showResultBadge("\u2713 No corrections needed");
-            return true;
-          }
-          const sorted = [...data.errors].sort((a, b) => b.start - a.start);
-          let fixed = draft;
-          for (const err of sorted) {
-            fixed = fixed.slice(0, err.start) + err.correction + fixed.slice(err.end);
-          }
-          showResultBadge(`Corrected: "${fixed.slice(0, 80)}${fixed.length > 80 ? "..." : ""}"`, 1e4);
-        } catch (e) {
-          removePendingBadge("fixing");
-          let reason;
-          if (e.name === "AbortError") {
-            reason = "Request timed out or was cancelled";
-          } else if (e.message?.includes("Extension context invalidated")) {
-            reason = "Extension reloaded \u2014 please reload this page";
-          } else {
-            reason = e.message;
-          }
-          showResultBadge(`Fix failed: ${reason}`);
-        } finally {
-          state.commandInFlight = false;
+        const fixResp = await checkGrammar(draft, { language: "auto" });
+        removePendingBadge("fixing");
+        if (fixResp.aborted) {
+          showResultBadge("Fix failed: Request timed out or was cancelled");
+          return true;
         }
+        if (!fixResp.ok) {
+          showResultBadge(`Fix failed: ${fixResp.error}`);
+          return true;
+        }
+        if (!fixResp.errors?.length) {
+          showResultBadge("\u2713 No corrections needed");
+          return true;
+        }
+        const sorted = [...fixResp.errors].sort((a, b) => b.start - a.start);
+        let fixed = draft;
+        for (const err of sorted) {
+          fixed = fixed.slice(0, err.start) + err.correction + fixed.slice(err.end);
+        }
+        showResultBadge(`Corrected: "${fixed.slice(0, 80)}${fixed.length > 80 ? "..." : ""}"`, 1e4);
+        state.commandInFlight = false;
       } else if (cmdName === "polish") {
         const cmdIdx = text.lastIndexOf("?/polish");
         const draft = (cmdIdx >= 0 ? text.slice(0, cmdIdx) : text).trim();
@@ -2490,46 +2492,23 @@
         }
         showPendingBadge("polishing", "Polishing...");
         state.commandInFlight = true;
-        try {
-          const settings = await safeGetStorage({
-            grammarHost: "127.0.0.1",
-            grammarPort: 8766
-          });
-          const polishController = new AbortController();
-          const timeoutId = setTimeout(() => polishController.abort(), 6e4);
-          const resp = await fetch(`http://${settings.grammarHost}:${settings.grammarPort}/polish`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: draft, language: "auto" }),
-            signal: polishController.signal
-          });
-          clearTimeout(timeoutId);
-          const data = await resp.json();
-          removePendingBadge("polishing");
-          if (!resp.ok) {
-            showResultBadge(`Polish failed: ${data?.detail || resp.status}`, 5e3);
-            return true;
-          }
-          const polished = data.polished;
-          if (!polished || polished === draft) {
-            showResultBadge("\u2713 Text already polished");
-            return true;
-          }
-          showResultBadge(`Polished: "${polished.slice(0, 80)}${polished.length > 80 ? "..." : ""}"`, 1e4);
-        } catch (e) {
-          removePendingBadge("polishing");
-          let reason;
-          if (e.name === "AbortError") {
-            reason = "Request timed out or was cancelled";
-          } else if (e.message?.includes("Extension context invalidated")) {
-            reason = "Extension reloaded \u2014 please reload this page";
-          } else {
-            reason = e.message;
-          }
-          showResultBadge(`Polish failed: ${reason}`);
-        } finally {
-          state.commandInFlight = false;
+        const polishResp = await polishGrammar(draft, { language: "auto" });
+        removePendingBadge("polishing");
+        if (polishResp.aborted) {
+          showResultBadge("Polish failed: Request timed out or was cancelled");
+          return true;
         }
+        if (!polishResp.ok) {
+          showResultBadge(`Polish failed: ${polishResp.error}`, 5e3);
+          return true;
+        }
+        const polished = polishResp.polished;
+        if (!polished || polished === draft) {
+          showResultBadge("\u2713 Text already polished");
+          return true;
+        }
+        showResultBadge(`Polished: "${polished.slice(0, 80)}${polished.length > 80 ? "..." : ""}"`, 1e4);
+        state.commandInFlight = false;
       } else {
         await cmd.run(args);
       }

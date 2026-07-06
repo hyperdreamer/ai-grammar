@@ -16,6 +16,9 @@
   const isTeams = /^teams\.(cloud\.)?microsoft(\.com)?$/i.test(location.hostname);
   if (!isTeams) return;
 
+  // Shared API wrappers from src/api.js (loaded by content.js).  See Block 2.4.
+  const { checkGrammar, polishGrammar, translateText } = window.__aiGrammar;
+
   // ── Configuration ─────────────────────────────────────────────────────
   const CHECK_DELAY_DEFAULT = 5000; // ms idle before grammar check fires
   const MIN_CHARS_DEFAULT = 30;
@@ -499,78 +502,14 @@
 
   /** Call the /polish backend. */
   async function callPolish(text, signal) {
-    const settings = await window.__aiGrammar.safeGetStorage({
-      grammarHost: '127.0.0.1',
-      grammarPort: 8766,
-      grammarEnabled: true,
-    });
-    if (!settings.grammarEnabled) {
-      return { ok: false, error: 'Grammar checker is disabled' };
-    }
-    const url = `http://${settings.grammarHost}:${settings.grammarPort}/polish?_=${Date.now()}`;
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
-      if (signal) signal.addEventListener('abort', () => controller.abort());
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, language: settings.grammarLanguage || 'auto' }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      if (!resp.ok) {
-        const errBody = await resp.text().catch(() => '');
-        return { ok: false, error: `Backend error (${resp.status}): ${errBody.slice(0, 200)}` };
-      }
-      const data = await resp.json();
-      return { ok: true, polished: data.polished || '', model: data.model || '' };
-    } catch (e) {
-      if (e.name === 'AbortError') return { ok: true, aborted: true };
-      return { ok: false, error: e.message };
-    }
+    const settings = await window.__aiGrammar.safeGetStorage({ grammarLanguage: 'auto' });
+    return await polishGrammar(text, { signal, language: settings.grammarLanguage || 'auto' });
   }
 
   /** Call the grammar backend directly via fetch (avoids SW round-trip). */
   async function callGrammarCheck(text, signal) {
-    const settings = await window.__aiGrammar.safeGetStorage({
-      grammarHost: '127.0.0.1',
-      grammarPort: 8766,
-      grammarLanguage: 'auto',
-      grammarEnabled: true,
-    });
-
-    if (!settings.grammarEnabled) {
-      return { ok: false, error: 'Grammar checker is disabled' };
-    }
-
-    const url = `http://${settings.grammarHost}:${settings.grammarPort}/check?_=${Date.now()}`;
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
-      // Combine external signal with our timeout
-      if (signal) {
-        signal.addEventListener('abort', () => controller.abort());
-      }
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, language: settings.grammarLanguage || 'auto' }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      if (!resp.ok) {
-        const errBody = await resp.text().catch(() => '');
-        return { ok: false, error: `Backend error (${resp.status}): ${errBody.slice(0, 200)}` };
-      }
-
-      const data = await resp.json();
-      return { ok: true, errors: data.errors || [], model: data.model || '' };
-    } catch (e) {
-      if (e.name === 'AbortError') return { ok: true, aborted: true };
-      return { ok: false, error: e.message };
-    }
+    const settings = await window.__aiGrammar.safeGetStorage({ grammarLanguage: 'auto' });
+    return await checkGrammar(text, { signal, language: settings.grammarLanguage || 'auto' });
   }
 
   // ── Idle-timer poll ───────────────────────────────────────────────────
@@ -1263,32 +1202,7 @@
 
   /** Call the /translate backend. */
   async function callTranslate(text, targetLang, signal) {
-    const settings = await window.__aiGrammar.safeGetStorage({
-      grammarHost: '127.0.0.1',
-      grammarPort: 8766,
-    });
-    const url = `http://${settings.grammarHost}:${settings.grammarPort}/translate?_=${Date.now()}`;
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
-      if (signal) signal.addEventListener('abort', () => controller.abort());
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, target_lang: targetLang }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      if (!resp.ok) {
-        const errBody = await resp.text().catch(() => '');
-        return { ok: false, error: `Backend error (${resp.status}): ${errBody.slice(0, 200)}` };
-      }
-      const data = await resp.json();
-      return { ok: true, translated: data.translated || '', model: data.model || '' };
-    } catch (e) {
-      if (e.name === 'AbortError') return { ok: true, aborted: true };
-      return { ok: false, error: e.message };
-    }
+    return await translateText(text, targetLang, { signal });
   }
 
   function abortTranslate() {

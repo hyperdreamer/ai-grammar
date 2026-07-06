@@ -14,6 +14,7 @@ import './state.js';
 // Side-effect modules — register event listeners at import time
 import './events.js';
 import './selection-check.js';
+import './api.js';
 
 // -----------------------------------------------------------------------
 // Init
