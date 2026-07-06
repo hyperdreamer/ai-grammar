@@ -25,25 +25,6 @@
   const log = (...args) => console.debug('[AI Grammar WhatsApp]', ...args);
 
   // ── State ───────────────────────────────────────────────────────────────
-  let contextInvalidated = false;
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // Storage helpers (mirrors content.js safeGetStorage)
-  // ══════════════════════════════════════════════════════════════════════════
-
-  async function safeGetStorage(defaults) {
-    if (contextInvalidated) return defaults;
-    try {
-      return await chrome.storage.sync.get(defaults);
-    } catch (e) {
-      if (e.message?.includes('Extension context invalidated')) {
-        contextInvalidated = true;
-        log('Extension context invalidated, using defaults');
-        return defaults;
-      }
-      throw e;
-    }
-  }
 
   // ══════════════════════════════════════════════════════════════════════════
   // WhatsApp text normalisation
