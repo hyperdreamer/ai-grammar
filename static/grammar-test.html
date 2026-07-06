@@ -33,74 +33,108 @@
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: var(--ag-bg); color: var(--ag-text);
-    min-height: 100vh; padding: 24px 20px; max-width: 900px; margin: 0 auto;
+    min-height: 100vh; padding: 20px;
   }
   h1 { font-size: 22px; margin-bottom: 4px; }
-  .subtitle { color: var(--ag-text-dim); font-size: 13px; margin-bottom: 24px; }
+  .subtitle { color: var(--ag-text-dim); font-size: 13px; margin-bottom: 20px; }
 
-  /* Sections */
-  .section {
-    margin-bottom: 20px; border: 1px solid var(--ag-border);
-    border-radius: 10px; overflow: hidden;
+  /* Two-column chat layout */
+  .chats { display: flex; gap: 16px; margin-bottom: 20px; }
+  .chat-col { flex: 1; min-width: 0; }
+
+  /* Chat box */
+  .chatbox {
+    border: 1px solid var(--ag-border); border-radius: 10px;
+    overflow: hidden; background: var(--ag-surface);
   }
-  .section-header {
+  .chatbox-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px; background: var(--ag-surface);
-    border-bottom: 1px solid var(--ag-border);
+    padding: 10px 14px; border-bottom: 1px solid var(--ag-border);
   }
-  .section-header h2 { font-size: 14px; font-weight: 600; }
+  .chatbox-header h2 { font-size: 13px; font-weight: 600; }
   .mode-badge {
-    font-size: 11px; padding: 3px 10px; border-radius: 20px;
-    font-weight: 600;
+    font-size: 10px; padding: 2px 8px; border-radius: 20px; font-weight: 600;
   }
-  .mode-textarea { background: #1d4ed8; color: #e2e8f0; }
-  .mode-editable { background: #6d28d9; color: #e2e8f0; }
+  .badge-ta { background: #1d4ed8; color: #e2e8f0; }
+  .badge-ce { background: #6d28d9; color: #e2e8f0; }
   @media (prefers-color-scheme: light) {
-    .mode-textarea { background: #3b82f6; color: #ffffff; }
-    .mode-editable { background: #8b5cf6; color: #ffffff; }
+    .badge-ta { background: #3b82f6; color: #fff; }
+    .badge-ce { background: #8b5cf6; color: #fff; }
   }
 
-  /* Editors */
-  .editor-wrap { padding: 12px 16px; }
+  .messages {
+    min-height: 120px; max-height: 300px; overflow-y: auto;
+    padding: 12px 14px;
+  }
+  .message {
+    padding: 8px 12px; border-radius: 10px; margin-bottom: 8px;
+    max-width: 85%; line-height: 1.5; font-size: 13px; word-break: break-word;
+  }
+  .msg-user { background: var(--ag-border); margin-left: auto; }
+  .msg-reply { background: var(--ag-bg); border: 1px solid var(--ag-border); margin-right: auto; }
+  .msg-system { color: var(--ag-text-dim); font-size: 11px; text-align: center; padding: 4px; }
+
+  .input-row {
+    display: flex; padding: 10px 14px; gap: 8px;
+    border-top: 1px solid var(--ag-border);
+  }
   textarea, [contenteditable] {
-    width: 100%; background: var(--ag-bg); border: 1px solid var(--ag-border);
+    flex: 1; background: var(--ag-bg); border: 1px solid var(--ag-border);
     border-radius: 8px; color: var(--ag-text); font-family: inherit;
-    font-size: 14px; padding: 10px 12px; outline: none; resize: none;
-    min-height: 52px; line-height: 1.5;
+    font-size: 13px; padding: 8px 10px; outline: none; resize: none;
+    min-height: 38px; max-height: 100px; line-height: 1.5;
   }
   textarea:focus, [contenteditable]:focus { border-color: var(--ag-accent); }
   [contenteditable]:empty::before {
-    content: attr(data-placeholder);
-    color: var(--ag-text-dim);
+    content: attr(data-placeholder); color: var(--ag-text-dim);
   }
   [contenteditable] { white-space: pre-wrap; word-break: break-word; }
 
-  /* Buttons */
-  .btn-row {
-    display: flex; flex-wrap: wrap; gap: 6px;
-    padding: 0 16px 12px;
+  .send-btn {
+    background: var(--ag-accent); color: var(--ag-accent-text);
+    border: none; border-radius: 8px; padding: 0 16px;
+    font-weight: 600; font-size: 13px; cursor: pointer;
+    font-family: inherit; transition: background 0.15s; white-space: nowrap;
   }
-  .btn {
-    background: var(--ag-surface); border: 1px solid var(--ag-border);
-    color: var(--ag-text); padding: 5px 12px; border-radius: 6px;
-    cursor: pointer; font-size: 12px; font-family: inherit;
+  .send-btn:hover { background: var(--ag-accent-hover); }
+
+  /* Quick-test buttons */
+  .quick-tests {
+    display: flex; flex-wrap: wrap; gap: 5px;
+    padding: 10px 14px; border-top: 1px solid var(--ag-border);
+  }
+  .qt-btn {
+    background: var(--ag-bg); border: 1px solid var(--ag-border);
+    color: var(--ag-text); padding: 3px 10px; border-radius: 5px;
+    cursor: pointer; font-size: 11px; font-family: inherit;
     transition: background 0.15s; white-space: nowrap;
   }
-  .btn:hover { background: var(--ag-border); }
-  .btn-cmd { color: var(--ag-accent); font-weight: 600; }
+  .qt-btn:hover { background: var(--ag-border); }
+  .qt-btn-cmd { color: var(--ag-accent); font-weight: 600; }
 
   /* Status */
   .status-bar {
     display: flex; justify-content: space-between; align-items: center;
-    padding: 12px 16px; border-top: 1px solid var(--ag-border);
-    background: var(--ag-surface);
-    font-size: 12px; color: var(--ag-text-muted);
+    padding: 8px 14px; border-top: 1px solid var(--ag-border);
+    font-size: 11px; color: var(--ag-text-muted);
   }
   .status-ok { color: var(--ag-accent); }
-
   kbd {
     background: var(--ag-border); border: 1px solid var(--ag-text-muted);
-    border-radius: 3px; padding: 1px 5px; font-family: monospace; font-size: 11px;
+    border-radius: 3px; padding: 1px 5px; font-family: monospace; font-size: 10px;
+  }
+
+  /* Standalone editor section */
+  .standalone { margin-bottom: 20px; }
+  .standalone h2 { font-size: 14px; margin-bottom: 8px; color: var(--ag-text-muted); }
+  .editors-grid { display: flex; gap: 16px; }
+  .editor-box {
+    flex: 1; border: 1px solid var(--ag-border); border-radius: 10px;
+    padding: 12px; background: var(--ag-surface);
+  }
+  .editor-box h3 { font-size: 12px; margin-bottom: 8px; color: var(--ag-text-muted); }
+  .editor-box .cmd-row {
+    display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px;
   }
 </style>
 </head>
@@ -108,71 +142,122 @@
 
 <h1>🔍 AI Grammar Checker</h1>
 <p class="subtitle">
-  Test page — two editor modes. Use <kbd>?/</kbd> to open command palette,
-  <kbd>↑↓</kbd> to navigate, <kbd>Enter</kbd> to select, <kbd>Esc</kbd> to close.
+  Post-submit grammar checks + inline commands.
+  Use <kbd>?/</kbd> for command palette, <kbd>↑↓</kbd> to navigate, <kbd>Enter</kbd> to select.
 </p>
 
-<!-- ═══ TEXTAREA ═══ -->
-<div class="section" id="ta-section">
-  <div class="section-header">
-    <h2>Textarea — Regular Sites</h2>
-    <span class="mode-badge mode-textarea">TEXTAREA</span>
+<!-- ═══════════════════════════════════════════════════════════════════
+     CHAT BOXES — post-submit grammar checking
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="chats">
+
+  <!-- TEXTAREA chat -->
+  <div class="chat-col">
+    <div class="chatbox">
+      <div class="chatbox-header">
+        <h2>Chat — Regular Sites</h2>
+        <span class="mode-badge badge-ta">TEXTAREA</span>
+      </div>
+      <div class="messages" id="ta-messages">
+        <div class="msg-system">Send a message — grammar checked on submit</div>
+      </div>
+      <form onsubmit="sendTA(); return false">
+        <div class="input-row">
+          <textarea id="ta-input" rows="1" placeholder="Type a message..."></textarea>
+          <button type="submit" class="send-btn" aria-label="Send" data-testid="send">Send</button>
+        </div>
+      </form>
+      <div class="quick-tests">
+        <button class="qt-btn" onclick="fillAndSendTA('I has a apple and she go to store')">Grammar</button>
+        <button class="qt-btn" onclick="fillAndSendTA('Their going to the party tomorow')">Spelling</button>
+        <button class="qt-btn" onclick="fillAndSendTA('Due to the fact that we are in receipt of your letter')">Wordy</button>
+        <span style="color:var(--ag-border)">│</span>
+        <button class="qt-btn qt-btn-cmd" onclick="fillTA('I has a apple ?/fix')">?/fix</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillTA('due to the fact that ?/polish')">?/polish</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillTA('?/')">?/ palette</button>
+      </div>
+      <div class="status-bar">
+        <span id="ta-status">Ready</span>
+        <span id="ta-count">0 chars</span>
+      </div>
+    </div>
   </div>
-  <div class="editor-wrap">
-    <textarea id="ta-editor" rows="1" placeholder="Type a message or ?/ command..."></textarea>
+
+  <!-- contentEditable chat -->
+  <div class="chat-col">
+    <div class="chatbox">
+      <div class="chatbox-header">
+        <h2>Chat — WhatsApp-style</h2>
+        <span class="mode-badge badge-ce">contentEditable</span>
+      </div>
+      <div class="messages" id="ce-messages">
+        <div class="msg-system">Send a message — grammar checked on submit</div>
+      </div>
+      <form onsubmit="sendCE(); return false">
+        <div class="input-row">
+          <div id="ce-input" contenteditable="true" role="textbox"
+               data-placeholder="Type a message..."></div>
+          <button type="submit" class="send-btn" aria-label="Send" data-testid="send">Send</button>
+        </div>
+      </form>
+      <div class="quick-tests">
+        <button class="qt-btn" onclick="fillAndSendCE('I has a apple and she go to store')">Grammar</button>
+        <button class="qt-btn" onclick="fillAndSendCE('Their going to the party tomorow')">Spelling</button>
+        <button class="qt-btn" onclick="fillAndSendCE('Due to the fact that we are in receipt of your letter')">Wordy</button>
+        <span style="color:var(--ag-border)">│</span>
+        <button class="qt-btn qt-btn-cmd" onclick="fillCE('I has a apple ?/fix')">?/fix</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillCE('due to the fact that ?/polish')">?/polish</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillCE('?/')">?/ palette</button>
+      </div>
+      <div class="status-bar">
+        <span id="ce-status">Ready</span>
+        <span id="ce-count">0 chars</span>
+      </div>
+    </div>
   </div>
-  <div class="btn-row">
-    <button class="btn" onclick="fillTA('I has a apple and she go to store')">Grammar errors</button>
-    <button class="btn" onclick="fillTA('Their going to the party tomorow')">Spelling errors</button>
-    <button class="btn" onclick="fillTA('Due to the fact that we are in receipt of your letter')">Wordiness</button>
-    <span style="margin:0 4px;color:var(--ag-border)">│</span>
-    <button class="btn btn-cmd" onclick="fillTA('?/')">?/ palette</button>
-    <button class="btn btn-cmd" onclick="fillTA('?/lang ')" title="42 languages">?/lang palette</button>
-    <button class="btn btn-cmd" onclick="fillTA('Hello world ?/lang ja')">?/lang ja</button>
-    <button class="btn btn-cmd" onclick="fillTA('I has a apple ?/fix')">?/fix</button>
-    <button class="btn btn-cmd" onclick="fillTA('due to the fact that ?/polish')">?/polish</button>
-    <button class="btn btn-cmd" onclick="fillTA('I has a apple ?/check')">?/check</button>
-    <button class="btn btn-cmd" onclick="fillTA('?/off')">?/off</button>
-    <button class="btn btn-cmd" onclick="fillTA('?/on')">?/on</button>
-  </div>
-  <div class="status-bar">
-    <span id="ta-status">Ready — type <kbd>?/</kbd> for commands</span>
-    <span id="ta-count">0 chars</span>
-  </div>
+
 </div>
 
-<!-- ═══ contentEditable ═══ -->
-<div class="section" id="ce-section">
-  <div class="section-header">
-    <h2>ContentEditable — WhatsApp-style</h2>
-    <span class="mode-badge mode-editable">contentEditable</span>
-  </div>
-  <div class="editor-wrap">
-    <div id="ce-editor" contenteditable="true" role="textbox"
-         data-placeholder="Type a message or ?/ command..."></div>
-  </div>
-  <div class="btn-row">
-    <button class="btn" onclick="fillCE('I has a apple and she go to store')">Grammar errors</button>
-    <button class="btn" onclick="fillCE('Their going to the party tomorow')">Spelling errors</button>
-    <button class="btn" onclick="fillCE('Due to the fact that we are in receipt of your letter')">Wordiness</button>
-    <span style="margin:0 4px;color:var(--ag-border)">│</span>
-    <button class="btn btn-cmd" onclick="fillCE('?/')">?/ palette</button>
-    <button class="btn btn-cmd" onclick="fillCE('?/lang ')" title="42 languages">?/lang palette</button>
-    <button class="btn btn-cmd" onclick="fillCE('Hello world ?/lang ja')">?/lang ja</button>
-    <button class="btn btn-cmd" onclick="fillCE('I has a apple ?/fix')">?/fix</button>
-    <button class="btn btn-cmd" onclick="fillCE('due to the fact that ?/polish')">?/polish</button>
-    <button class="btn btn-cmd" onclick="fillCE('I has a apple ?/check')">?/check</button>
-    <button class="btn btn-cmd" onclick="fillCE('?/off')">?/off</button>
-    <button class="btn btn-cmd" onclick="fillCE('?/on')">?/on</button>
-  </div>
-  <div class="status-bar">
-    <span id="ce-status">Ready — type <kbd>?/</kbd> for commands</span>
-    <span id="ce-count">0 chars</span>
+<!-- ═══════════════════════════════════════════════════════════════════
+     STANDALONE EDITORS — inline command testing (no submit)
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="standalone">
+  <h2>Inline Command Testing (no submit)</h2>
+  <div class="editors-grid">
+    <div class="editor-box">
+      <h3>TEXTAREA</h3>
+      <textarea id="ta-standalone" rows="1" placeholder="Type ?/ command..."></textarea>
+      <div class="cmd-row">
+        <button class="qt-btn qt-btn-cmd" onclick="fillTAS('?/')">?/ palette</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillTAS('?/lang ')">?/lang</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillTAS('?/fix')">?/fix</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillTAS('?/polish')">?/polish</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillTAS('?/check')">?/check</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillTAS('?/off')">?/off</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillTAS('?/on')">?/on</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillTAS('Hello world ?/lang ja')">?/lang ja</button>
+      </div>
+    </div>
+    <div class="editor-box">
+      <h3>contentEditable</h3>
+      <div id="ce-standalone" contenteditable="true" role="textbox"
+           data-placeholder="Type ?/ command..."></div>
+      <div class="cmd-row">
+        <button class="qt-btn qt-btn-cmd" onclick="fillCES('?/')">?/ palette</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillCES('?/lang ')">?/lang</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillCES('?/fix')">?/fix</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillCES('?/polish')">?/polish</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillCES('?/check')">?/check</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillCES('?/off')">?/off</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillCES('?/on')">?/on</button>
+        <button class="qt-btn qt-btn-cmd" onclick="fillCES('Hello world ?/lang ja')">?/lang ja</button>
+      </div>
+    </div>
   </div>
 </div>
 
 <script>
-// ── PostMessage bridge for extension fetch ──────────────────────────
+// ── PostMessage bridge ───────────────────────────────────────────────
 window.addEventListener('message', function(e) {
   if (e.data && e.data.type === 'ag-fetch') {
     var req = e.data;
@@ -187,19 +272,75 @@ window.addEventListener('message', function(e) {
   }
 });
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// ── Random reply pool (for realism) ──────────────────────────────────
+var replies = [
+  "That's interesting! I would of thought differently about it.",
+  "Thanks for sharing — they're approach seems reasonable.",
+  "I see what you mean. Its a complex topic for sure.",
+  "Good point! There going to need more data to confirm.",
+  "Hmm, I hadn't considered that. Your right about the timing.",
+  "Let me think about this... the affect on performance is unclear.",
+  "Between you and I, this whole thing could of been avoided.",
+  "The team has went above and beyond on this project.",
+  "I could care less about the deadline — quality matters more.",
+  "Each of the developers have their own style, and it works.",
+  "She don't think the current approach will scale properly.",
+  "We should of tested this earlier in the development cycle.",
+  "The data suggests that less people are using this feature now.",
+  "Its been a long day but the results are promising so far.",
+  "I'm not sure who's responsibility this falls under anymore.",
+];
+
+function randReply() {
+  return replies[Math.floor(Math.random() * replies.length)];
+}
+
+// ── Message helpers ──────────────────────────────────────────────────
+function addMessage(containerId, cls, text) {
+  var div = document.createElement('div');
+  div.className = 'message ' + cls;
+  div.textContent = text;
+  var c = document.getElementById(containerId);
+  c.appendChild(div);
+  c.scrollTop = c.scrollHeight;
+  return div;
+}
+
+// ── TEXTAREA chat ────────────────────────────────────────────────────
 function fillTA(text) {
-  var ta = document.getElementById('ta-editor');
+  var ta = document.getElementById('ta-input');
   ta.value = text;
   ta.focus();
   ta.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+function sendTA() {
+  var ta = document.getElementById('ta-input');
+  var text = ta.value.trim();
+  if (!text) return;
+  var msgEl = addMessage('ta-messages', 'msg-user', text);
+  ta.value = '';
+  ta.focus();
+  // Simulate reply after a delay (extension should have checked by then)
+  setTimeout(function() {
+    addMessage('ta-messages', 'msg-reply', randReply());
+  }, 1000);
+}
+
+function fillAndSendTA(text) {
+  var ta = document.getElementById('ta-input');
+  ta.value = text;
+  ta.focus();
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  // Trigger form submit so extension picks it up
+  ta.closest('form').requestSubmit();
+}
+
+// ── contentEditable chat ─────────────────────────────────────────────
 function fillCE(text) {
-  var ce = document.getElementById('ce-editor');
+  var ce = document.getElementById('ce-input');
   ce.textContent = text;
   ce.focus();
-  // Place cursor at end
   var sel = window.getSelection();
   var range = document.createRange();
   range.selectNodeContents(ce);
@@ -209,30 +350,73 @@ function fillCE(text) {
   ce.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-// ── Live char counts ─────────────────────────────────────────────────
-var taEl = document.getElementById('ta-editor');
-var ceEl = document.getElementById('ce-editor');
+function sendCE() {
+  var ce = document.getElementById('ce-input');
+  var text = (ce.textContent || '').trim();
+  if (!text) return;
+  var msgEl = addMessage('ce-messages', 'msg-user', text);
+  ce.textContent = '';
+  ce.focus();
+  setTimeout(function() {
+    addMessage('ce-messages', 'msg-reply', randReply());
+  }, 1000);
+}
 
-taEl.addEventListener('input', function() {
-  document.getElementById('ta-count').textContent = taEl.value.length + ' chars';
+function fillAndSendCE(text) {
+  var ce = document.getElementById('ce-input');
+  ce.textContent = text;
+  ce.focus();
+  var sel = window.getSelection();
+  var range = document.createRange();
+  range.selectNodeContents(ce);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  ce.dispatchEvent(new Event('input', { bubbles: true }));
+  ce.closest('form').requestSubmit();
+}
+
+// ── Standalone editors ───────────────────────────────────────────────
+function fillTAS(text) {
+  var ta = document.getElementById('ta-standalone');
+  ta.value = text;
+  ta.focus();
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function fillCES(text) {
+  var ce = document.getElementById('ce-standalone');
+  ce.textContent = text;
+  ce.focus();
+  var sel = window.getSelection();
+  var range = document.createRange();
+  range.selectNodeContents(ce);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  ce.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// ── Char counts ──────────────────────────────────────────────────────
+document.getElementById('ta-input').addEventListener('input', function() {
+  document.getElementById('ta-count').textContent = this.value.length + ' chars';
 });
-ceEl.addEventListener('input', function() {
-  var len = (ceEl.textContent || '').length;
-  document.getElementById('ce-count').textContent = len + ' chars';
+document.getElementById('ce-input').addEventListener('input', function() {
+  document.getElementById('ce-count').textContent = (this.textContent || '').length + ' chars';
 });
 
-// ── Backend health check ─────────────────────────────────────────────
+// ── Backend health ───────────────────────────────────────────────────
 fetch('/health')
   .then(function(r) { return r.json(); })
   .then(function() {
-    document.getElementById('ta-status').innerHTML =
-      'Backend: <span class="status-ok">● connected</span>';
-    document.getElementById('ce-status').innerHTML =
-      'Backend: <span class="status-ok">● connected</span>';
+    ['ta-status','ce-status'].forEach(function(id) {
+      document.getElementById(id).innerHTML = '<span class="status-ok">● connected</span>';
+    });
   })
   .catch(function() {
-    document.getElementById('ta-status').textContent = 'Backend: ● offline';
-    document.getElementById('ce-status').textContent = 'Backend: ● offline';
+    ['ta-status','ce-status'].forEach(function(id) {
+      document.getElementById(id).textContent = '● offline';
+    });
   });
 </script>
 </body>
