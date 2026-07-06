@@ -179,7 +179,7 @@ export const COMMANDS = {
 
       if (!draft || draft.length < state.minChars) {
         showResultBadge('Too short (min ' + state.minChars + ' chars)');
-        stripCheck(ta);
+        await stripCheck(ta);
         return;
       }
 
@@ -219,12 +219,12 @@ export const COMMANDS = {
           // Strip command text only when results are actually shown.
           // On failure, the user should still see their ?/check command.
           state.skipLiveCheck = true;
-          stripCheck(ta);
+          await stripCheck(ta);
           state.skipLiveCheck = false;
           highlightLiveDraft(ta, data.errors);
         } else {
           state.skipLiveCheck = true;
-          stripCheck(ta);
+          await stripCheck(ta);
           state.skipLiveCheck = false;
           showGreenCheck(ta, draft);
         }

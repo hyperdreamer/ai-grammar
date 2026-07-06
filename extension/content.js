@@ -2122,7 +2122,7 @@
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
         if (!draft || draft.length < state.minChars) {
           showResultBadge("Too short (min " + state.minChars + " chars)");
-          stripCheck(ta);
+          await stripCheck(ta);
           return;
         }
         state.cancelLiveDraft?.();
@@ -2151,12 +2151,12 @@
           }
           if (data?.errors?.length > 0) {
             state.skipLiveCheck = true;
-            stripCheck(ta);
+            await stripCheck(ta);
             state.skipLiveCheck = false;
             highlightLiveDraft(ta, data.errors);
           } else {
             state.skipLiveCheck = true;
-            stripCheck(ta);
+            await stripCheck(ta);
             state.skipLiveCheck = false;
             showGreenCheck(ta, draft);
           }
