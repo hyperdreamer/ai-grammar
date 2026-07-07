@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from .config import DEFAULT_MAX_TEXT_CHARS, _debug, _load_debug, load_config
+from .config import DEFAULT_MAX_TEXT_CHARS, _debug, _load_debug, load_config, DEFAULT_TEMPERATURE_POLISH, DEFAULT_TEMPERATURE_TRANSLATE
 from .models import CheckRequest, TranslateRequest
 from .providers import _call_ai, _parse_errors, _parse_polished, _parse_translated, POLISH_SYSTEM_PROMPT, TRANSLATE_SYSTEM_PROMPT, _do_ai_call
 
@@ -173,7 +173,7 @@ async def polish_text(request: CheckRequest) -> Response:
             {"role": "system", "content": POLISH_SYSTEM_PROMPT},
             {"role": "user", "content": text},
         ],
-        "temperature": 0.3,
+        "temperature": config.get_temperature("polish", DEFAULT_TEMPERATURE_POLISH),
     }
     if request.max_tokens and request.max_tokens > 0:
         body_data["max_tokens"] = request.max_tokens
@@ -245,7 +245,7 @@ async def translate_text(request: TranslateRequest) -> Response:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": text},
         ],
-        "temperature": 0.3,
+        "temperature": config.get_temperature("translate", DEFAULT_TEMPERATURE_TRANSLATE),
     }
     if request.max_tokens and request.max_tokens > 0:
         body_data["max_tokens"] = request.max_tokens

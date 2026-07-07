@@ -115,6 +115,16 @@ ai:
   api_key: $OPENAI_API_KEY             # $ prefix = read from env var
 ```
 
+To change the AI temperature (defaults: check=0.1, polish=0.3, translate=0.3):
+```yaml
+ai:
+  temperature: 1              # global override for all endpoints
+  # ── or per-endpoint ──
+  endpoints:
+    check: 0.0
+    polish: 0.7
+```
+
 Works with any OpenAI-compatible API — OpenAI, Anthropic (via proxy), DeepSeek, local LLMs, etc.
 
 ## Usage

@@ -13,6 +13,11 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
 DEFAULT_MAX_TEXT_CHARS = 50_000
 
+# Default temperatures per endpoint (used when config doesn't override)
+DEFAULT_TEMPERATURE_CHECK = 0.1
+DEFAULT_TEMPERATURE_POLISH = 0.3
+DEFAULT_TEMPERATURE_TRANSLATE = 0.3
+
 
 # ---------------------------------------------------------------------------
 # Debug logging (timestamped stderr, gated by config.debug)
@@ -53,6 +58,17 @@ class AIConfig:
     api_key: str = ""
     api_base: str = "https://api.openai.com/v1"
     timeout: TimeoutConfig = TimeoutConfig()
+    temperature: float | None = None  # global override for all endpoints
+    endpoint_temperatures: dict[str, float] | None = None  # per-endpoint overrides
+
+    def get_temperature(self, endpoint: str, default: float) -> float:
+        """Return the temperature for *endpoint*, falling back through
+        global override → per-endpoint → caller-supplied default."""
+        if self.temperature is not None:
+            return self.temperature
+        if self.endpoint_temperatures and endpoint in self.endpoint_temperatures:
+            return self.endpoint_temperatures[endpoint]
+        return default
 
 
 @dataclass(frozen=True)
@@ -111,11 +127,24 @@ def load_config() -> AIConfig:
     if not api_base.rstrip("/").endswith("/v1"):
         api_base = api_base.rstrip("/") + "/v1"
 
+    # Temperature config: global override or per-endpoint
+    temperature = ai_section.get("temperature")
+    if temperature is not None:
+        temperature = float(temperature)
+    endpoint_temperatures = None
+    endpoints_raw = ai_section.get("endpoints", {})
+    if isinstance(endpoints_raw, dict) and endpoints_raw:
+        endpoint_temperatures = {
+            k: float(v) for k, v in endpoints_raw.items() if v is not None
+        }
+
     return AIConfig(
         model=ai_section.get("model", "gpt-4o-mini"),
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,
+        temperature=temperature,
+        endpoint_temperatures=endpoint_temperatures,
     )
 
 

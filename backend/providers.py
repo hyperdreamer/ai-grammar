@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 from fastapi import HTTPException
 
-from .config import AIConfig, _debug, _load_debug
+from .config import AIConfig, _debug, _load_debug, DEFAULT_TEMPERATURE_CHECK
 
 GRAMMAR_SYSTEM_PROMPT = """You are a grammar checker. Find issues in the text. Return ONLY a JSON array of objects with these fields:
 - "start": int, 0-indexed character offset
@@ -110,7 +110,7 @@ async def _call_ai(text: str, language: str, config: AIConfig, max_tokens: int |
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": text},
         ],
-        "temperature": 0.1,
+        "temperature": config.get_temperature("check", DEFAULT_TEMPERATURE_CHECK),
     }
     # Only include max_tokens if explicitly set (0 or None = unbounded)
     if max_tokens and max_tokens > 0:
