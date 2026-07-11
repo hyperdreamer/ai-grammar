@@ -15,6 +15,18 @@ const maxTokensInput = document.getElementById('max-tokens');
 const statusEl = document.getElementById('status');
 const testBtn = document.getElementById('test-page');
 const backendStatus = document.getElementById('backend-status');
+const settingsGear = document.getElementById('settings-gear');
+const settingsPanel = document.getElementById('backend-settings-panel');
+
+// ---------------------------------------------------------------------------
+// Settings gear toggle
+// ---------------------------------------------------------------------------
+
+settingsGear.addEventListener('click', () => {
+  const isOpen = !settingsPanel.classList.contains('hidden');
+  settingsPanel.classList.toggle('hidden', isOpen);
+  settingsGear.classList.toggle('active', !isOpen);
+});
 
 // ---------------------------------------------------------------------------
 // Load settings on open

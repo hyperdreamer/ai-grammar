@@ -179,10 +179,43 @@
     }
     .backend-status .dot.online { background: var(--ag-accent); }
     .backend-status .dot.offline { background: var(--ag-error); }
+
+    /* Hidden utility */
+    .hidden { display: none !important; }
+
+    /* Gear button */
+    .gear-btn {
+      background: none;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: var(--ag-text-dim);
+      font-size: 15px;
+      cursor: pointer;
+      padding: 2px 5px;
+      margin-left: auto;
+      line-height: 1;
+    }
+    .gear-btn:hover {
+      background: var(--ag-surface);
+      color: var(--ag-text-muted);
+    }
+    .gear-btn.active {
+      background: var(--ag-surface);
+      color: var(--ag-accent);
+    }
+
+    /* Backend settings panel */
+    .settings-panel {
+      margin-bottom: 14px;
+      padding: 8px 10px;
+      border: 1px solid var(--ag-border);
+      border-radius: 6px;
+      background: var(--ag-surface);
+    }
   </style>
 </head>
 <body>
-  <h1><span class="icon">🔍</span> AI Grammar Checker</h1>
+  <h1><span class="icon">🔍</span> AI Grammar Checker<button id="settings-gear" class="gear-btn" title="Backend Settings">⚙</button></h1>
 
   <div class="toggle-row">
     <label for="enabled">Enabled</label>
@@ -192,11 +225,13 @@
     </label>
   </div>
 
-  <div class="section">
-    <label for="host">Backend host</label>
-    <div class="row">
-      <input type="text" id="host" placeholder="127.0.0.1" value="127.0.0.1">
-      <input type="number" id="port" placeholder="8766" value="8766" style="max-width:80px;">
+  <div id="backend-settings-panel" class="settings-panel hidden">
+    <div class="section">
+      <label for="host">Backend host</label>
+      <div class="row">
+        <input type="text" id="host" placeholder="127.0.0.1" value="127.0.0.1">
+        <input type="number" id="port" placeholder="8766" value="8766" style="max-width:80px;">
+      </div>
     </div>
   </div>
 
