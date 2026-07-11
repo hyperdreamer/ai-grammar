@@ -501,16 +501,13 @@
     }
   }
 
-  /** Call the /polish backend. */
   async function callPolish(text, signal) {
-    const settings = await window.__aiGrammar.safeGetStorage({ grammarLanguage: 'auto' });
-    return await polishGrammar(text, { signal, language: settings.grammarLanguage || 'auto' });
+    return await polishGrammar(text, { signal, language: 'auto' });
   }
 
   /** Call the grammar backend directly via fetch (avoids SW round-trip). */
   async function callGrammarCheck(text, signal) {
-    const settings = await window.__aiGrammar.safeGetStorage({ grammarLanguage: 'auto' });
-    return await checkGrammar(text, { signal, language: settings.grammarLanguage || 'auto' });
+    return await checkGrammar(text, { signal, language: 'auto' });
   }
 
   // ── Idle-timer poll ───────────────────────────────────────────────────

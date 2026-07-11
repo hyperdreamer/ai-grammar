@@ -23,11 +23,6 @@ async function getBackendUrl() {
   return `http://${items.grammarHost}:${items.grammarPort}`;
 }
 
-async function getLanguage() {
-  const items = await chrome.storage.sync.get({ grammarLanguage: 'auto' });
-  return items.grammarLanguage;
-}
-
 async function getEnabled() {
   const items = await chrome.storage.sync.get({ grammarEnabled: true });
   return items.grammarEnabled;
@@ -103,13 +98,12 @@ async function handleCheck(msg, tabId) {
 
   try {
     const baseUrl = await getBackendUrl();
-    const language = await getLanguage();
     const url = `${baseUrl}/check?_=${Date.now()}`;
 
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, language }),
+      body: JSON.stringify({ text, language: 'auto' }),
       signal: controller.signal,
     });
 
@@ -142,7 +136,6 @@ async function getSettings() {
     grammarHost: DEFAULT_HOST,
     grammarPort: DEFAULT_PORT,
     grammarEnabled: true,
-    grammarLanguage: 'auto',
     grammarLiveDelay: 5,
     grammarLiveMinChars: 30,
     grammarMaxTokens: 4096,

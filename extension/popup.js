@@ -7,7 +7,6 @@ const DEFAULT_LIVE_MIN_CHARS = 30;
 const DEFAULT_MAX_TOKENS = 4096;
 
 const enabledToggle = document.getElementById('enabled');
-const languageSelect = document.getElementById('language');
 const hostInput = document.getElementById('host');
 const portInput = document.getElementById('port');
 const liveDelayInput = document.getElementById('live-delay');
@@ -25,7 +24,6 @@ async function init() {
   try {
     const settings = await chrome.runtime.sendMessage({ type: 'grammar:get-settings' });
     enabledToggle.checked = settings.grammarEnabled !== false;
-    languageSelect.value = settings.grammarLanguage || 'auto';
     hostInput.value = settings.grammarHost || DEFAULT_HOST;
     portInput.value = settings.grammarPort || DEFAULT_PORT;
     liveDelayInput.value = settings.grammarLiveDelay || DEFAULT_LIVE_DELAY;
@@ -34,7 +32,6 @@ async function init() {
   } catch {
     const stored = await chrome.storage.sync.get({
       grammarEnabled: true,
-      grammarLanguage: 'auto',
       grammarHost: DEFAULT_HOST,
       grammarPort: DEFAULT_PORT,
       grammarLiveDelay: DEFAULT_LIVE_DELAY,
@@ -42,7 +39,6 @@ async function init() {
       grammarMaxTokens: DEFAULT_MAX_TOKENS,
     });
     enabledToggle.checked = stored.grammarEnabled;
-    languageSelect.value = stored.grammarLanguage;
     hostInput.value = stored.grammarHost;
     portInput.value = stored.grammarPort;
     liveDelayInput.value = stored.grammarLiveDelay;
@@ -97,11 +93,6 @@ function showStatus(msg) {
 enabledToggle.addEventListener('change', async () => {
   await chrome.storage.sync.set({ grammarEnabled: enabledToggle.checked });
   showStatus(enabledToggle.checked ? 'Enabled ✓' : 'Disabled');
-});
-
-languageSelect.addEventListener('change', async () => {
-  await chrome.storage.sync.set({ grammarLanguage: languageSelect.value });
-  showStatus('Language saved ✓');
 });
 
 hostInput.addEventListener('change', saveHostPort);
