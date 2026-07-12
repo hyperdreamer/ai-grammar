@@ -98,18 +98,42 @@
     greenCheckTimers: /* @__PURE__ */ new Map()
     // container → timer (for cleanup)
   };
-  try {
-    state.fixPort = chrome.runtime.connect({ name: "grammar-fix" });
-    state.fixPort.onDisconnect.addListener(() => {
-      setTimeout(() => {
-        try {
-          state.fixPort = chrome.runtime.connect({ name: "grammar-fix" });
-        } catch {
-        }
-      }, 1e3);
-    });
-  } catch {
+  var bfcached = false;
+  window.addEventListener("pagehide", (event) => {
+    if (event.persisted) {
+      bfcached = true;
+    }
+  });
+  window.addEventListener("pageshow", (event) => {
+    bfcached = false;
+    if (event.persisted && !isPortAlive(state.fixPort)) {
+      connectFixPort();
+    }
+  });
+  function isPortAlive(port) {
+    try {
+      return port && !port.disconnected;
+    } catch {
+      return false;
+    }
   }
+  function connectFixPort() {
+    if (bfcached) return;
+    try {
+      state.fixPort = chrome.runtime.connect({ name: "grammar-fix" });
+      if (chrome.runtime.lastError) {
+        console.debug("[AI Grammar] Port connect failed:", chrome.runtime.lastError.message);
+        return;
+      }
+      state.fixPort.onDisconnect.addListener(() => {
+        if (bfcached) return;
+        setTimeout(connectFixPort, 1e3);
+      });
+    } catch (e) {
+      console.debug("[AI Grammar] Port connect threw:", e.message);
+    }
+  }
+  connectFixPort();
   async function safeGetStorage(defaults) {
     if (state.contextInvalidated) return defaults;
     try {

@@ -119,16 +119,42 @@ export const state = {
   greenCheckTimers: new Map(),  // container → timer (for cleanup)
 };
 
-// Persistent port initialization
-try {
-  state.fixPort = chrome.runtime.connect({ name: 'grammar-fix' });
-  state.fixPort.onDisconnect.addListener(() => {
-    // Reconnect on disconnect (worker restarted)
-    setTimeout(() => {
-      try { state.fixPort = chrome.runtime.connect({ name: 'grammar-fix' }); } catch {}
-    }, 1000);
-  });
-} catch {}
+// Persistent port initialization — bfcache-aware
+let bfcached = false;
+
+window.addEventListener('pagehide', (event) => {
+  if (event.persisted) { bfcached = true; }
+});
+
+window.addEventListener('pageshow', (event) => {
+  bfcached = false;
+  if (event.persisted && !isPortAlive(state.fixPort)) {
+    connectFixPort();
+  }
+});
+
+function isPortAlive(port) {
+  try { return port && !port.disconnected; } catch { return false; }
+}
+
+function connectFixPort() {
+  if (bfcached) return;
+  try {
+    state.fixPort = chrome.runtime.connect({ name: 'grammar-fix' });
+    if (chrome.runtime.lastError) {
+      console.debug('[AI Grammar] Port connect failed:', chrome.runtime.lastError.message);
+      return;
+    }
+    state.fixPort.onDisconnect.addListener(() => {
+      if (bfcached) return;  // bfcache-driven — pageshow will reconnect
+      setTimeout(connectFixPort, 1000);
+    });
+  } catch (e) {
+    console.debug('[AI Grammar] Port connect threw:', e.message);
+  }
+}
+
+connectFixPort();
 
 // -----------------------------------------------------------------------
 // Utility functions
