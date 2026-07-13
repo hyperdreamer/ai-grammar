@@ -146,6 +146,7 @@ function connectFixPort() {
       return;
     }
     state.fixPort.onDisconnect.addListener(() => {
+      const _err = chrome.runtime.lastError;  // checked — suppress "Unchecked" warning
       if (bfcached) return;  // bfcache-driven — pageshow will reconnect
       setTimeout(connectFixPort, 1000);
     });

@@ -126,6 +126,7 @@
         return;
       }
       state.fixPort.onDisconnect.addListener(() => {
+        const _err = chrome.runtime.lastError;  // checked — suppress "Unchecked" warning
         if (bfcached) return;
         setTimeout(connectFixPort, 1e3);
       });
