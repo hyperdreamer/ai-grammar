@@ -417,3 +417,26 @@ async def test_do_ai_call_unexpected_error(monkeypatch, debug, expected_call_cou
             assert exc_info.value.status_code == 502
             assert "Unexpected AI error" in exc_info.value.detail
             assert "RuntimeError" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("debug,expected_call_count", [(False, 0), (True, 1)])
+async def test_catch_all_handler_debug_gate(
+    monkeypatch, debug, expected_call_count
+):
+    """catch_all_handler gates traceback.print_exc behind _load_debug,
+    response payload unchanged."""
+    monkeypatch.setattr("backend.routes._load_debug", lambda: debug)
+
+    from backend.routes import catch_all_handler
+
+    mock_request = MagicMock()
+    exc = RuntimeError("simulated crash")
+
+    with patch("traceback.print_exc") as mock_print_exc:
+        resp = await catch_all_handler(mock_request, exc)
+
+    assert mock_print_exc.call_count == expected_call_count
+    assert resp.status_code == 500
+    payload = json.loads(resp.body)
+    assert payload == {"error": "Internal error: RuntimeError: simulated crash"}
