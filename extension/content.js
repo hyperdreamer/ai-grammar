@@ -34,7 +34,7 @@
   var GRAMMAR_CLASSES = ".ai-grammar-error, .ai-grammar-improvement, .ai-grammar-idiom";
   var state = {
     minChars: 30,
-    // read from storage (grammarMinChars)
+    // read from storage (grammarLiveMinChars)
     // Persistent port to background — keeps the service worker alive so
     // apply-fix messages are delivered even after the 30s idle timeout.
     fixPort: null,
@@ -126,7 +126,7 @@
         return;
       }
       state.fixPort.onDisconnect.addListener(() => {
-        const _err = chrome.runtime.lastError;  // checked — suppress "Unchecked" warning
+        const _err = chrome.runtime.lastError;
         if (bfcached) return;
         setTimeout(connectFixPort, 1e3);
       });

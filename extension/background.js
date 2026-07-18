@@ -176,12 +176,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 async function handleApplyFix(text, tabId) {
   if (!text || !tabId) return { ok: false, error: 'Missing text or tabId' };
 
+  let attached = false;
   try {
     // Attach debugger
     await new Promise((resolve, reject) => {
       chrome.debugger.attach({ tabId }, '1.3', () => {
         if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve();
+        else { attached = true; resolve(); }
       });
     });
 
@@ -219,7 +220,7 @@ async function handleApplyFix(text, tabId) {
     return { ok: true };
 
   } catch (e) {
-    await detachDebugger(tabId).catch(() => {});
+    if (attached) await detachDebugger(tabId).catch(() => {});
     return { ok: false, error: e.message };
   }
 }

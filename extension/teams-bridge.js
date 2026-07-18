@@ -24,7 +24,6 @@
   const MIN_CHARS_DEFAULT = 30;
   const POLL_INTERVAL_MS = 500; // how often the idle timer polls
   const AUTO_DISMISS_MS = 30_000; // auto-hide the float panel after
-  const CKEDITOR_INSTANCE_WAIT_MS = 8000; // max wait for ckeditorInstance
   const PANEL_ID = 'ag-teams-float';
 
   // ── State ─────────────────────────────────────────────────────────────
@@ -182,56 +181,6 @@
       return cand;
     }
     return null;
-  }
-
-  /** Wait for ckeditorInstance to appear on an element (CKEditor boots async).
-   *  CKEditor sets ckeditorInstance in the MAIN world, which is invisible
-   *  to the content script's isolated world.  We use chrome.scripting to
-   *  execute in the MAIN world and read the instance. */
-  function waitForInstance(el, timeoutMs = CKEDITOR_INSTANCE_WAIT_MS) {
-    return new Promise((resolve) => {
-      // Fast path: check if instance is somehow available directly
-      if (el.ckeditorInstance) return resolve(el.ckeditorInstance);
-
-      // Poll from the MAIN world via chrome.scripting.executeScript
-      let attempts = 0;
-      const maxAttempts = Math.ceil(timeoutMs / 500);
-      const iv = setInterval(() => {
-        attempts++;
-        try {
-          chrome.scripting.executeScript({
-            target: { tabId: chrome.devtools?.inspectedWindow?.tabId },
-            world: 'MAIN',
-            func: () => {
-              const el = document.querySelector('.ck-editor__editable[contenteditable="true"]');
-              return !!(el && el.ckeditorInstance);
-            },
-          }, (results) => {
-            if (chrome.runtime.lastError) {
-              // Fallback: try direct access
-              if (attempts >= maxAttempts) {
-                clearInterval(iv);
-                resolve(null);
-              }
-              return;
-            }
-            if (results?.[0]?.result) {
-              clearInterval(iv);
-              // Now we know instance exists — try to access it
-              resolve(el.ckeditorInstance || null);
-            } else if (attempts >= maxAttempts) {
-              clearInterval(iv);
-              resolve(null);
-            }
-          });
-        } catch (e) {
-          if (attempts >= maxAttempts) {
-            clearInterval(iv);
-            resolve(null);
-          }
-        }
-      }, 500);
-    });
   }
 
   // ── Attach / detach editor ────────────────────────────────────────────
@@ -832,7 +781,7 @@
       '  #' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-off { background: #fee2e2; color: #991b1b; }',
       '  #' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-off:hover { background: #fecaca !important; }',
       '}',
-    ].join('\\n');
+    ].join('\n');
     bar.appendChild(styleEl);
 
     // Grammar toggle — on/off with color indication (master switch, first)

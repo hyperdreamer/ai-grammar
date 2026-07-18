@@ -49,7 +49,7 @@ export const GRAMMAR_CLASSES = '.ai-grammar-error, .ai-grammar-improvement, .ai-
 // -----------------------------------------------------------------------
 
 export const state = {
-  minChars: 30,  // read from storage (grammarMinChars)
+  minChars: 30,  // read from storage (grammarLiveMinChars)
 
   // Persistent port to background — keeps the service worker alive so
   // apply-fix messages are delivered even after the 30s idle timeout.

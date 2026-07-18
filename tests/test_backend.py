@@ -379,3 +379,41 @@ async def test_do_ai_call_timeout(monkeypatch):
                 deadline=120,
             )
         assert exc_info.value.status_code == 504
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("debug,expected_call_count", [(False, 0), (True, 2)])
+async def test_do_ai_call_unexpected_error(monkeypatch, debug, expected_call_count):
+    """_do_ai_call suppresses/emits traceback per debug flag, preserves error."""
+    from backend.config import AIConfig, TimeoutConfig
+    import httpx
+
+    monkeypatch.setattr("backend.providers._load_debug", lambda: debug)
+
+    config = AIConfig(
+        model="test-model",
+        api_key="test-key",
+        api_base="https://api.test.com/v1",
+        timeout=TimeoutConfig(),
+    )
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.post = AsyncMock(side_effect=RuntimeError("simulated crash"))
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch("traceback.print_exc") as mock_print_exc:
+            from backend.providers import _do_ai_call
+
+            with pytest.raises(HTTPException) as exc_info:
+                await _do_ai_call(
+                    body={"test": True},
+                    headers={},
+                    timeout=httpx.Timeout(10),
+                    config=config,
+                    deadline=120,
+                )
+            assert mock_print_exc.call_count == expected_call_count
+            assert exc_info.value.status_code == 502
+            assert "Unexpected AI error" in exc_info.value.detail
+            assert "RuntimeError" in exc_info.value.detail
