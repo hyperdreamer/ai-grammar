@@ -94,7 +94,10 @@ export function removePendingBadge(category) {
 // Show a transient result badge (no spinner). Appears at the top of the stack
 // alongside any pending badges. Auto-dismisses after durationMs.
 export function showResultBadge(text, durationMs = 4000, type) {
-  if (state.resultBadgeTimer) { clearTimeout(state.resultBadgeTimer); state.resultBadgeTimer = null; }
+  if (state.resultBadgeTimer) {
+    clearTimeout(state.resultBadgeTimer);
+    state.resultBadgeTimer = null;
+  }
 
   // Remove any existing result badges
   for (const [key, entry] of state.activeBadges) {
@@ -130,6 +133,10 @@ export function showResultBadge(text, durationMs = 4000, type) {
 
 // Remove all badges (for conversation switch / cleanup)
 export function removeAllBadges() {
+  if (state.resultBadgeTimer) {
+    clearTimeout(state.resultBadgeTimer);
+    state.resultBadgeTimer = null;
+  }
   for (const [key, entry] of state.activeBadges) {
     entry.el.remove();
   }

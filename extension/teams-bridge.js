@@ -264,6 +264,13 @@
       changeDataUnbind = null;
     }
     teardownCKEditorBridge();
+    abortPolish();
+    abortTranslate();
+    if (fixAbortController) {
+      fixAbortController.abort();
+      fixAbortController = null;
+      window.__aiGrammar.removePendingBadge('fixing');
+    }
     // Abort in-flight check
     if (abortController) {
       abortController.abort();

@@ -61,6 +61,7 @@ function createSandbox() {
       removeEventListener() {},
       getComputedStyle() { return {}; },
     },
+    AbortController: function AbortController() { this.signal = { aborted: false }; this.abort = function() { this.signal.aborted = true; }; },
     navigator: { clipboard: { writeText() { return Promise.resolve(); } } },
     Event: function Event(type) { this.type = type; },
     // These are overridden after creation
@@ -205,6 +206,63 @@ assert.ok(COMMANDS, 'COMMANDS should be defined');
   console.log('  PASS: handleCommand lang/null shows correct badge');
 }
 
+// ── Test: COMMANDS.check.run contentEditable CDP await (skipLiveCheck fix) ──
+{
+  ctx.tryBeforeInput = async function() { return false; };
+
+  let cdpResolve;
+  const cdpPromise = new Promise(r => { cdpResolve = r; });
+  let cdpCalledWith = null;
+  ctx.applyFixCDP = function(text) {
+    cdpCalledWith = text;
+    return cdpPromise;
+  };
+
+  ctx.checkGrammar = async function() {
+    return { ok: true, errors: [] };
+  };
+
+  ctx.highlightLiveDraft = function() {};
+  ctx.showGreenCheck = function() {};
+  ctx.showPendingBadge = function() {};
+  ctx.removePendingBadge = function() {};
+  ctx.showResultBadge = function() {};
+
+  ctx.state.minChars = 1;
+  ctx.state.commandInFlight = false;
+  ctx.state.skipLiveCheck = false;
+  ctx.state.cancelLiveDraft = null;
+  ctx.state.activeCheckController = null;
+
+  const ta = {
+    tagName: 'DIV',
+    value: '',
+    textContent: 'Hello ?/check',
+    focus() {},
+    getBoundingClientRect() { return { top: 100, bottom: 120, left: 50, right: 350 }; },
+    dispatchEvent() {},
+  };
+
+  const runPromise = COMMANDS.check.run('', ta);
+
+  await new Promise(r => setTimeout(r, 0));
+
+  assert.strictEqual(ctx.state.skipLiveCheck, true,
+    'skipLiveCheck should remain true while CDP is pending');
+
+  cdpResolve();
+
+  await runPromise;
+
+  assert.strictEqual(ctx.state.skipLiveCheck, false,
+    'skipLiveCheck should be false after CDP resolves and check completes');
+
+  assert.ok(cdpCalledWith, 'applyFixCDP should have been called');
+  assert.ok(!cdpCalledWith.includes('?/check'),
+    'CDP should receive cleaned text without ?/check');
+
+  console.log('  PASS: COMMANDS.check.run contentEditable awaits CDP before releasing skipLiveCheck');
+}
 console.log('\n  All A1 tests passed.\n');
 
 })().catch(err => {

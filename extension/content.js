@@ -413,6 +413,10 @@
     }, durationMs);
   }
   function removeAllBadges() {
+    if (state.resultBadgeTimer) {
+      clearTimeout(state.resultBadgeTimer);
+      state.resultBadgeTimer = null;
+    }
     for (const [key, entry] of state.activeBadges) {
       entry.el.remove();
     }
@@ -2291,7 +2295,7 @@
           } else {
             if (await tryBeforeInput(cleaned, input)) {
             } else {
-              applyFixCDP(cleaned);
+              await applyFixCDP(cleaned);
             }
           }
         }

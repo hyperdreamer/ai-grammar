@@ -156,7 +156,7 @@ export const COMMANDS = {
           if (await tryBeforeInput(cleaned, input)) {
             // Success
           } else {
-            applyFixCDP(cleaned);
+            await applyFixCDP(cleaned);
           }
         }
       }

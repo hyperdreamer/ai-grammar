@@ -30,7 +30,7 @@ src = src.replace(/^(let|const)\s/gm, 'var ');
 src = src.replace(/^export\s+\{/gm, '// export stripped {');
 
 // Append export hook
-src += '\nglobalThis.__test = { showErrorFloat, removeErrorFloat, _errorFloatTimer };\n';
+src += '\nglobalThis.__test = { showErrorFloat, removeErrorFloat, removeAllBadges, _errorFloatTimer };\n';
 
 // ── Fake timers (controlled by tests) ──────────────────────────────────
 let _timerId = 0;
@@ -113,6 +113,7 @@ function createSandbox() {
       },
       createElement(tagName) { return this._makeEl(tagName); },
       getElementById(id) { return _bodyChildren.find(c => c.id === id) || null; },
+      querySelector(sel) { return null; },
       contains(el) { return _bodyChildren.includes(el); },
     },
     window: {
@@ -147,6 +148,8 @@ vm.runInContext(src, ctx, { filename: 'indicators.js' });
 const showErrorFloat = ctx.__test.showErrorFloat;
 const removeErrorFloat = ctx.__test.removeErrorFloat;
 
+const removeAllBadges = ctx.__test.removeAllBadges;
+assert.ok(typeof removeAllBadges === 'function', 'removeAllBadges should be a function');
 assert.ok(typeof showErrorFloat === 'function', 'showErrorFloat should be a function');
 assert.ok(typeof removeErrorFloat === 'function', 'removeErrorFloat should be a function');
 
@@ -220,4 +223,24 @@ assert.ok(typeof removeErrorFloat === 'function', 'removeErrorFloat should be a 
   console.log("  PASS: manual close/remove clears B's timer");
 }
 
+// Test 5: removeAllBadges cancels resultBadgeTimer and sets it null
+{
+  while (_pendingTimers.length) _pendingTimers.pop();
+
+  var badgeEl = sandbox._makeEl('div');
+  sandbox.state.activeBadges.set('result:test', { el: badgeEl });
+  sandbox.state.resultBadgeTimer = fakeSetTimeout(function() {}, 5000);
+  sandbox.state.badgeCounters.checking = 1;
+  assert.strictEqual(pendingTimerCount(), 1, 'Test5: resultBadgeTimer should be pending');
+  assert.ok(sandbox.state.resultBadgeTimer !== null, 'Test5: resultBadgeTimer should be set');
+
+  removeAllBadges();
+
+  assert.strictEqual(sandbox.state.resultBadgeTimer, null, 'Test5: resultBadgeTimer should be null after removeAllBadges');
+  assert.strictEqual(pendingTimerCount(), 0, 'Test5: timer should be cancelled');
+  assert.strictEqual(sandbox.state.activeBadges.size, 0, 'Test5: all badges removed');
+  assert.strictEqual(sandbox.state.badgeCounters.checking, 0, 'Test5: counters reset');
+
+  console.log('  PASS: removeAllBadges cancels resultBadgeTimer and sets it null');
+}
 console.log('\n  All indicators tests passed.\n');
