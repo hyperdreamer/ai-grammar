@@ -1,9 +1,9 @@
 /**
- * Real detachEditor abort-coverage test.
+ * Real detachEditor abort-coverage + command-panel lifecycle regression test.
  *
- * Loads the actual teams-bridge.js source (IIFE-stripped) via vm and verifies
- * detachEditor calls abortPolish, abortTranslate, and fixAbortController.abort
- * with proper cleanup.
+ * Loads the actual teams-bridge.js source (IIFE-stripped) via vm once and
+ * verifies detachEditor aborts in-flight work, then drives the command-panel
+ * lifecycle through real attachEditor / onEditorChange / syncCommandBar.
  *
  * Uses Node built-ins only — no new dependencies.
  */
@@ -42,8 +42,8 @@ src = src.replace(/\}\)\(\);?\s*$/, '');
 // Convert let/const to var (including indented) so variables are ctx-accessible
 src = src.replace(/^(\s*)(let|const)\s/gm, '$1var ');
 
-// Add export hooks
-src += '\nglobalThis.__test = { detachEditor, abortPolish, abortTranslate };\n';
+// Add export hooks — lifecycle functions included for real-path testing
+src += '\nglobalThis.__test = { detachEditor, abortPolish, abortTranslate, attachEditor, onEditorChange, syncCommandBar };\n';
 
 // ── Spy helpers ──────────────────────────────────────────────────────
 function makeSpy() {
@@ -54,12 +54,65 @@ function makeSpy() {
   return fn;
 }
 
+// ── DOM helpers for lifecycle tests ───────────────────────────────────
+const bodyChildren = [];
+
+function makeEl(tag) {
+  const el = {
+    tagName: tag.toUpperCase(),
+    id: '',
+    style: {},
+    className: '',
+    textContent: '',
+    parentNode: null,
+    children: [],
+    appendChild(child) { this.children.push(child); child.parentNode = this; },
+    remove() {
+      if (this.parentNode) {
+        const arr = this.parentNode === docBody ? bodyChildren : this.parentNode.children;
+        const idx = arr.indexOf(this);
+        if (idx >= 0) arr.splice(idx, 1);
+        this.parentNode = null;
+      }
+    },
+    addEventListener() {},
+    removeEventListener() {},
+    querySelector() { return null; },
+    setAttribute() {},
+    getBoundingClientRect() { return { top: 0, left: 0, right: 100, bottom: 100, width: 100, height: 100 }; },
+    contains(el) { return this.children.includes(el) || this.children.some(c => c.contains && c.contains(el)); },
+  };
+  return el;
+}
+
+// Editor used by lifecycle tests — referenced inside sandbox document.contains
+const lifecycleEditor = {
+  textContent: '',
+  tagName: 'DIV',
+  _listeners: {},
+  addEventListener(type, handler) { this._listeners[type] = handler; },
+  removeEventListener() {},
+  getBoundingClientRect() { return { top: 0, left: 0, right: 100, bottom: 100, width: 100, height: 100 }; },
+  contains() { return false; },
+};
+
 // ── Create sandbox ───────────────────────────────────────────────────
 const _removePendingBadge = makeSpy();
 const _abortPolishSpy = makeSpy();
 const _abortTranslateSpy = makeSpy();
 const _fixAbortSpy = makeSpy();
 const _grammarAbortSpy = makeSpy();
+
+let activeEl = null;
+
+const docBody = {
+  appendChild(el) { bodyChildren.push(el); el.parentNode = docBody; },
+  removeChild(el) {
+    const idx = bodyChildren.indexOf(el);
+    if (idx >= 0) bodyChildren.splice(idx, 1);
+  },
+  contains(el) { return bodyChildren.includes(el); },
+};
 
 const sandbox = {
   console: { debug() {}, log() {}, warn() {}, error() {} },
@@ -70,11 +123,19 @@ const sandbox = {
     readyState: 'complete',
     addEventListener() {},
     removeEventListener() {},
-    contains() { return true; },
+    contains(el) {
+      if (!el) return false;
+      if (el === lifecycleEditor) return true;
+      return bodyChildren.includes(el) || bodyChildren.some(c => c.contains && c.contains(el));
+    },
     querySelector() { return null; },
-    createElement() { return { style: {}, appendChild() {}, addEventListener() {} }; },
-    body: { appendChild() {}, removeChild() {} },
-    getElementById() { return null; },
+    createElement(tag) { return makeEl(tag); },
+    body: docBody,
+    getElementById(id) { return bodyChildren.find(c => c.id === id) || null; },
+    documentElement: { appendChild() {} },
+    head: { appendChild() {} },
+    get activeElement() { return activeEl; },
+    set activeElement(v) { activeEl = v; },
   },
   window: {
     __aiGrammar: {
@@ -90,7 +151,7 @@ const sandbox = {
     innerHeight: 800,
   },
   chrome: {
-    runtime: { id: 'test-ext-id' },
+    runtime: { id: 'test-ext-id', sendMessage(msg, cb) { if (cb) cb({ ok: true }); } },
     storage: {
       sync: { get() {}, set() {} },
       onChanged: { addListener() {}, removeListener() {} },
@@ -107,15 +168,16 @@ const sandbox = {
 const ctx = vm.createContext(sandbox);
 vm.runInContext(src, ctx, { filename: 'teams-bridge.js' });
 
-const detachEditor = ctx.__test.detachEditor;
-const abortPolish = ctx.__test.abortPolish;
-const abortTranslate = ctx.__test.abortTranslate;
+const { detachEditor, abortPolish, abortTranslate, attachEditor, onEditorChange, syncCommandBar } = ctx.__test;
 
 assert.ok(typeof detachEditor === 'function', 'detachEditor should be a function');
 assert.ok(typeof abortPolish === 'function', 'abortPolish should be a function');
 assert.ok(typeof abortTranslate === 'function', 'abortTranslate should be a function');
+assert.ok(typeof attachEditor === 'function', 'attachEditor should be a function');
+assert.ok(typeof onEditorChange === 'function', 'onEditorChange should be a function');
+assert.ok(typeof syncCommandBar === 'function', 'syncCommandBar should be a function');
 
-// ── Tests ───────────────────────────────────────────────────────────
+// ── Detach-abort tests ───────────────────────────────────────────────
 
 // Set up state so detachEditor aborts in-flight work
 ctx.editorElement = { removeEventListener() {}, tagName: 'DIV' };
@@ -166,4 +228,65 @@ console.log('  PASS: detachEditor aborts polish, translate, and fix');
   console.log('  PASS: detachEditor handles null controllers safely');
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Lifecycle regression: command-panel via real attachEditor / onEditorChange
+// ══════════════════════════════════════════════════════════════════════
+console.log('\n  --- command-panel lifecycle ---');
+
+// Reset state for lifecycle tests
+bodyChildren.length = 0;
+activeEl = null;
+ctx.commandBarEl = null;
+ctx.minChars = 30;
+ctx.grammarEnabled = true;
+ctx.editorFocusHandler = null;
+ctx.polishAbortController = null;
+ctx.translateAbortController = null;
+ctx.fixAbortController = null;
+
+// Attach via real attachEditor — captures focus/blur listeners on lifecycleEditor
+attachEditor(lifecycleEditor);
+assert.strictEqual(ctx.editorElement, lifecycleEditor, 'attachEditor sets editorElement');
+
+const focusHandler = lifecycleEditor._listeners.focus;
+const blurHandler = lifecycleEditor._listeners.blur;
+assert.ok(typeof focusHandler === 'function', 'focus listener installed');
+assert.ok(typeof blurHandler === 'function', 'blur listener installed');
+
+// Test 1: Focus empty editor — no bar
+activeEl = lifecycleEditor;
+focusHandler();
+assert.strictEqual(ctx.commandBarEl, null, 'empty editor: no command bar on focus');
+
+// Test 2: Type past minChars, onEditorChange — bar appears (no blur/refocus)
+lifecycleEditor.textContent = 'This is a long enough sentence to exceed the minimum character threshold.';
+onEditorChange();
+const firstBar = ctx.commandBarEl;
+assert.ok(firstBar !== null, 'bar appears after typing past minChars');
+assert.strictEqual(firstBar.id, 'ag-teams-cmds', 'bar has correct id');
+
+// Test 3: Another edit — same bar object, no duplicate
+onEditorChange();
+assert.strictEqual(ctx.commandBarEl, firstBar, 'no duplicate bar on subsequent edits');
+assert.ok(bodyChildren.includes(firstBar), 'bar remains in document');
+
+// Test 4: Short text — bar dismisses
+lifecycleEditor.textContent = 'short';
+onEditorChange();
+assert.strictEqual(ctx.commandBarEl, null, 'bar dismissed when text below minChars');
+assert.ok(!bodyChildren.includes(firstBar), 'bar removed from document');
+
+// Test 5: Blur dismisses, focus with sufficient text restores bar
+lifecycleEditor.textContent = 'This is a long enough sentence to exceed the minimum character threshold.';
+// blurHandler uses setTimeout(150ms) — skip real timeout, call sync directly
+ctx.commandBarEl = null;
+activeEl = null;
+syncCommandBar();  // simulate post-blur: activeElement ≠ editor → no bar
+assert.strictEqual(ctx.commandBarEl, null, 'blur: bar dismissed');
+
+activeEl = lifecycleEditor;
+focusHandler();
+assert.ok(ctx.commandBarEl !== null, 'focus with sufficient text shows bar');
+
+console.log('  PASS: command-panel lifecycle — all scenarios');
 console.log('\n  All teams-bridge tests passed.\n');

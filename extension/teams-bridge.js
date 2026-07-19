@@ -228,10 +228,7 @@
       element.removeEventListener('blur', editorFocusHandler.onBlur);
     }
     const onFocus = () => {
-      const text = editorGetPlainText();
-      if (text && text.length >= minChars) {
-        showCommandBar();
-      }
+      syncCommandBar();
     };
     const onBlur = () => {
       // Delay so click events on command bar buttons fire before dismiss
@@ -381,6 +378,9 @@
       fixAbortController = null;
       window.__aiGrammar.removePendingBadge('fixing');
     }
+
+    // Show command bar if editor is focused with enough text
+    syncCommandBar();
   }
 
   // ── Grammar check pipeline ────────────────────────────────────────────
@@ -504,6 +504,9 @@
           fixAbortController = null;
           window.__aiGrammar.removePendingBadge('fixing');
         }
+
+        // Show command bar if editor is focused with enough text
+        syncCommandBar();
       }
 
       // Clear state if editor text was emptied externally
@@ -515,8 +518,8 @@
       }
 
       // Show/hide command bar based on text state
-      // Note: showing is now handled by the focus event on the editor.
-      // The poll loop only dismisses when text is too short or editor unfocused.
+      // Note: showing is handled by syncCommandBar on focus / change events.
+      // The poll loop dismisses when text is too short.
       if (!currentText || currentText.length < minChars) {
         dismissCommandBar();
       }
@@ -866,6 +869,24 @@
     if (commandBarEl) {
       if (document.contains(commandBarEl)) commandBarEl.remove();
       commandBarEl = null;
+    }
+  }
+
+  /**
+   * Synchronize command-bar visibility with current editor state.
+   * Shows the bar when editor is focused with enough text; dismisses
+   * otherwise.  Guards !commandBarEl before showing to avoid recreating
+   * the bar on every keystroke (showCommandBar itself dismisses first).
+   */
+  function syncCommandBar() {
+    if (!editorElement || !document.contains(editorElement)) return;
+    // Only sync when the editor is focused — blur handling owns dismissal
+    if (document.activeElement !== editorElement) return;
+    const text = editorGetPlainText();
+    if (text && text.length >= minChars) {
+      if (!commandBarEl) showCommandBar();
+    } else {
+      dismissCommandBar();
     }
   }
 
