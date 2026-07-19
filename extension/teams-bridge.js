@@ -351,9 +351,6 @@
       window.removeEventListener('message', ckeBridgeMsgHandler);
       ckeBridgeMsgHandler = null;
     }
-    // Remove the injected bridge script from the page DOM
-    const scriptEl = document.getElementById('ag-cke-bridge-script');
-    if (scriptEl) scriptEl.remove();
   }
 
   // ── Editor change handler ─────────────────────────────────────────────

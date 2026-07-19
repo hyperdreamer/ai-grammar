@@ -625,7 +625,7 @@
     </style>
     <div class="agf-header">
       <span>\u{1F50D} ${errors.length} error${errors.length > 1 ? "s" : ""} found</span>
-      <button class="agf-close" onclick="document.getElementById('ai-grammar-float').remove()">\u2715</button>
+      <button class="agf-close">\u2715</button>
     </div>
     ${errors.map((e) => `
       <div class="agf-item">
@@ -638,6 +638,7 @@
     `).join("")}
   `;
     document.body.appendChild(panel);
+    panel.querySelector(".agf-close")?.addEventListener("click", removeErrorFloat);
     if (anchorEl && document.contains(anchorEl)) {
       const anchorRect = anchorEl.getBoundingClientRect();
       const panelRect = panel.getBoundingClientRect();
@@ -2534,6 +2535,10 @@
         }
         showResultBadge(`Polished: "${polished.slice(0, 80)}${polished.length > 80 ? "..." : ""}"`, 1e4);
         state.commandInFlight = false;
+      } else if (cmdName === "check" && !ta) {
+        showResultBadge("Cannot check \u2014 no editable field found");
+      } else if (cmdName === "lang" && !ta) {
+        showResultBadge("Cannot translate \u2014 no editable field found");
       } else {
         await cmd.run(args);
       }

@@ -407,7 +407,7 @@ export function showErrorFloat(errors, anchorEl = null) {
     </style>
     <div class="agf-header">
       <span>🔍 ${errors.length} error${errors.length > 1 ? 's' : ''} found</span>
-      <button class="agf-close" onclick="document.getElementById('ai-grammar-float').remove()">✕</button>
+      <button class="agf-close">✕</button>
     </div>
     ${errors.map(e => `
       <div class="agf-item">
@@ -420,6 +420,9 @@ export function showErrorFloat(errors, anchorEl = null) {
     `).join('')}
   `;
   document.body.appendChild(panel);
+
+  // Attach close listener via JS to avoid CSP-blocked inline onclick
+  panel.querySelector('.agf-close')?.addEventListener('click', removeErrorFloat);
 
   if (anchorEl && document.contains(anchorEl)) {
     const anchorRect = anchorEl.getBoundingClientRect();

@@ -31,7 +31,7 @@ src = src.replace(/^export\s+\{/gm, '// export stripped {');
 
 // Append a VM-accessible export assignment so tests can read the real
 // declarations without polluting the production source.
-src += '\nglobalThis.__test = { applyPaletteCommand, COMMANDS };\n';
+src += '\nglobalThis.__test = { applyPaletteCommand, COMMANDS, handleCommand };\n';
 
 // ── Create sandbox with required globals ──────────────────────────────
 function createSandbox() {
@@ -63,17 +63,26 @@ function createSandbox() {
     },
     navigator: { clipboard: { writeText() { return Promise.resolve(); } } },
     Event: function Event(type) { this.type = type; },
+    // These are overridden after creation
+    showPendingBadge() {},
+    removePendingBadge() {},
+    showGreenCheck() {},
+    state: { minChars: 10, commandInFlight: false },
   };
 }
 
 // ── Run the transformed source ────────────────────────────────────────
 const sandbox = createSandbox();
+let _badgeCapture = null;
+// Override showResultBadge after sandbox creation so closure captures _badgeCapture
+sandbox.showResultBadge = function(text) { _badgeCapture = text; };
 const ctx = vm.createContext(sandbox);
 vm.runInContext(src, ctx, { filename: 'commands.js' });
 
 // Access the real functions via the VM-exported test hook
 const applyPaletteCommand = ctx.__test.applyPaletteCommand;
 const COMMANDS = ctx.__test.COMMANDS;
+const handleCommand = ctx.__test.handleCommand;
 
 assert.ok(typeof applyPaletteCommand === 'function', 'applyPaletteCommand should be a function');
 assert.ok(COMMANDS, 'COMMANDS should be defined');
@@ -170,6 +179,30 @@ assert.ok(COMMANDS, 'COMMANDS should be defined');
   assert.strictEqual(capturedTa, ta, 'COMMANDS.polish.run should receive ta');
 
   console.log('  PASS: applyPaletteCommand passes target for polish command');
+}
+
+// ── Test: handleCommand check with null target shows badge, no throw ──
+{
+  _badgeCapture = null;
+  let handled = await handleCommand('Hello ?/check', null);
+
+  assert.strictEqual(handled, true, 'handleCommand should return true');
+  assert.strictEqual(_badgeCapture, 'Cannot check \u2014 no editable field found',
+    'Should show correct badge for check with null target');
+
+  console.log('  PASS: handleCommand check/null shows correct badge');
+}
+
+// ── Test: handleCommand lang with null target shows badge, no throw ──
+{
+  _badgeCapture = null;
+  let handled = await handleCommand('Hello ?/lang en', null);
+
+  assert.strictEqual(handled, true, 'handleCommand should return true');
+  assert.strictEqual(_badgeCapture, 'Cannot translate \u2014 no editable field found',
+    'Should show correct badge for lang with null target');
+
+  console.log('  PASS: handleCommand lang/null shows correct badge');
 }
 
 console.log('\n  All A1 tests passed.\n');

@@ -455,6 +455,10 @@ export async function handleCommand(text, ta = null) {
       }
       showResultBadge(`Polished: "${polished.slice(0, 80)}${polished.length > 80 ? '...' : ''}"`, 10000);
       state.commandInFlight = false;
+    } else if (cmdName === 'check' && !ta) {
+      showResultBadge('Cannot check — no editable field found');
+    } else if (cmdName === 'lang' && !ta) {
+      showResultBadge('Cannot translate — no editable field found');
     } else {
       await cmd.run(args);
     }
