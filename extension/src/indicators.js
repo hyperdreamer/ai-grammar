@@ -1,6 +1,9 @@
 import { state, escapeHtml } from './state.js';
 import { isIgnored } from './dom-utils.js';
 
+
+// Timer ownership for the error float auto-dismiss (generation-safe)
+let _errorFloatTimer = null;
 // -----------------------------------------------------------------------
 // Status badge — stacked vertically like desktop notifications
 // -----------------------------------------------------------------------
@@ -442,11 +445,23 @@ export function showErrorFloat(errors, anchorEl = null) {
     panel.style.right = 'auto';
   }
 
-  // Auto-dismiss after 30 seconds
-  setTimeout(removeErrorFloat, 30_000);
+  // Auto-dismiss after 30 seconds — generation-safe: only acts if still
+  // the currently-owned timer, preventing a stale callback from removing
+  // a newer panel that replaced this one.
+  const scheduled = setTimeout(() => {
+    if (_errorFloatTimer === scheduled) {
+      _errorFloatTimer = null;
+      removeErrorFloat();
+    }
+  }, 30_000);
+  _errorFloatTimer = scheduled;
 }
 
 export function removeErrorFloat() {
+  if (_errorFloatTimer) {
+    clearTimeout(_errorFloatTimer);
+    _errorFloatTimer = null;
+  }
   const panel = document.getElementById('ai-grammar-float');
   if (panel) panel.remove();
 }

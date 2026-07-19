@@ -316,6 +316,7 @@
   }
 
   // src/indicators.js
+  var _errorFloatTimer = null;
   function ensureBadgeStack() {
     let stack = document.querySelector(".ag-badge-stack");
     if (!stack) {
@@ -656,9 +657,19 @@
       panel.style.bottom = "auto";
       panel.style.right = "auto";
     }
-    setTimeout(removeErrorFloat, 3e4);
+    const scheduled = setTimeout(() => {
+      if (_errorFloatTimer === scheduled) {
+        _errorFloatTimer = null;
+        removeErrorFloat();
+      }
+    }, 3e4);
+    _errorFloatTimer = scheduled;
   }
   function removeErrorFloat() {
+    if (_errorFloatTimer) {
+      clearTimeout(_errorFloatTimer);
+      _errorFloatTimer = null;
+    }
     const panel = document.getElementById("ai-grammar-float");
     if (panel) panel.remove();
   }

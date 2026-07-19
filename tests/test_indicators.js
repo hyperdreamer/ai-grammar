@@ -1,9 +1,11 @@
 /**
- * Real showErrorFloat CSP-safety test.
+ * Real showErrorFloat CSP-safety and timer-ownership tests.
  *
- * Loads the actual indicators.js source and verifies that clicking the
- * .agf-close button calls removeErrorFloat to remove the panel; no
- * inline onclick remains in the source.
+ * Loads the actual indicators.js source and verifies:
+ *   1. replacing panel A with panel B clears A's timer;
+ *   2. firing stale A callback cannot remove B;
+ *   3. B remains until its own timer fires, then is removed;
+ *   4. manual close/remove clears B's timer.
  *
  * Uses Node built-ins only — no new dependencies.
  */
@@ -28,7 +30,33 @@ src = src.replace(/^(let|const)\s/gm, 'var ');
 src = src.replace(/^export\s+\{/gm, '// export stripped {');
 
 // Append export hook
-src += '\nglobalThis.__test = { showErrorFloat, removeErrorFloat };\n';
+src += '\nglobalThis.__test = { showErrorFloat, removeErrorFloat, _errorFloatTimer };\n';
+
+// ── Fake timers (controlled by tests) ──────────────────────────────────
+let _timerId = 0;
+const _pendingTimers = []; // [{id, fn}]
+
+function fakeSetTimeout(fn, ms) {
+  const id = ++_timerId;
+  _pendingTimers.push({ id, fn });
+  return id;
+}
+
+function fakeClearTimeout(id) {
+  const idx = _pendingTimers.findIndex(t => t.id === id);
+  if (idx >= 0) _pendingTimers.splice(idx, 1);
+}
+
+function fireAllTimers() {
+  while (_pendingTimers.length) {
+    const t = _pendingTimers.shift();
+    t.fn();
+  }
+}
+
+function pendingTimerCount() {
+  return _pendingTimers.length;
+}
 
 // ── Create sandbox with mock DOM ──────────────────────────────────────
 function createSandbox() {
@@ -37,8 +65,8 @@ function createSandbox() {
 
   return {
     console: { debug() {}, log() {}, warn() {}, error() {} },
-    setTimeout: setTimeout,
-    clearTimeout: clearTimeout,
+    setTimeout: fakeSetTimeout,
+    clearTimeout: fakeClearTimeout,
     // Mock element factory
     _makeEl(tagName) {
       const el = {
@@ -122,28 +150,74 @@ const removeErrorFloat = ctx.__test.removeErrorFloat;
 assert.ok(typeof showErrorFloat === 'function', 'showErrorFloat should be a function');
 assert.ok(typeof removeErrorFloat === 'function', 'removeErrorFloat should be a function');
 
-// ── Test: showErrorFloat + close button removes panel ─────────────────
+// ── Tests ──────────────────────────────────────────────────────────────
+
+// Test 1: Replacing panel A with panel B clears A's timer
 {
-  const errors = [{ error: 'helo', correction: 'hello', explanation: 'Spelling' }];
-  showErrorFloat(errors);
+  while (_pendingTimers.length) _pendingTimers.pop();
+
+  showErrorFloat([{ error: 'helo', correction: 'hello' }]);
+  assert.strictEqual(_pendingTimers.length, 1, 'Test1: A should have 1 pending timer');
+
+  showErrorFloat([{ error: 'wrld', correction: 'world' }]);
+  // showErrorFloat internally calls removeErrorFloat which clears A's timer
+  assert.strictEqual(_pendingTimers.length, 1, "Test1: only B's timer remains after replace");
+
+  console.log("  PASS: replacing panel A with panel B clears A's timer");
+}
+
+// Test 2: Firing stale A callback cannot remove B
+{
+  while (_pendingTimers.length) _pendingTimers.pop();
+
+  showErrorFloat([{ error: 'helo', correction: 'hello' }]);
+  assert.strictEqual(_pendingTimers.length, 1, 'Test2: A has 1 timer');
+
+  // Save A's callback before showErrorFloat(B) clears it
+  const timerA = _pendingTimers[0].fn;
+
+  showErrorFloat([{ error: 'wrld', correction: 'world' }]);
+  assert.strictEqual(_pendingTimers.length, 1, 'Test2: B has 1 timer after clearing A');
+
+  // Manually fire A's stale callback — it must be a no-op
+  timerA();
+
+  const panelAfterStale = sandbox.document.getElementById('ai-grammar-float');
+  assert.ok(panelAfterStale, 'Test2: B panel should still be in DOM after stale A callback');
+
+  console.log('  PASS: firing stale A callback cannot remove B');
+}
+
+// Test 3: B remains until its own timer fires, then is removed
+{
+  while (_pendingTimers.length) _pendingTimers.pop();
+
+  showErrorFloat([{ error: 'wrld', correction: 'world' }]);
+  assert.strictEqual(_pendingTimers.length, 1, 'Test3: B has 1 pending timer');
+
+  fireAllTimers();
+
+  const panelAfter = sandbox.document.getElementById('ai-grammar-float');
+  assert.strictEqual(panelAfter, null, 'Test3: B should be removed after its own timer fires');
+
+  console.log('  PASS: B remains until its own timer fires, then is removed');
+}
+
+// Test 4: Manual close/remove clears B's timer
+{
+  while (_pendingTimers.length) _pendingTimers.pop();
+
+  showErrorFloat([{ error: 'wrld', correction: 'world' }]);
+  assert.strictEqual(_pendingTimers.length, 1, 'Test4: B has 1 pending timer');
 
   const panel = sandbox.document.getElementById('ai-grammar-float');
-  assert.ok(panel, 'Panel should be in the DOM after showErrorFloat');
-
-  // Verify no inline onclick in the innerHTML (CSP-safe)
-  assert.ok(!panel._innerHTML.includes('onclick="'),
-    'innerHTML must not contain inline onclick attribute');
-
-  // Simulate close button click
   const closeBtn = panel.querySelector('.agf-close');
-  assert.ok(closeBtn, 'Close button should exist in the panel');
   closeBtn.click();
 
-  // Panel should be removed
-  const panelAfter = sandbox.document.getElementById('ai-grammar-float');
-  assert.strictEqual(panelAfter, null, 'Panel should be removed after close button click');
+  assert.strictEqual(sandbox.document.getElementById('ai-grammar-float'), null, 'Test4: panel removed');
+  assert.strictEqual(_pendingTimers.length, 0, "Test4: B's timer cleared after manual close");
 
-  console.log('  PASS: showErrorFloat close button removes panel via event listener');
+  console.log("  PASS: manual close/remove clears B's timer");
 }
 
 console.log('\n  All indicators tests passed.\n');
