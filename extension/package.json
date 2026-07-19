@@ -4,7 +4,8 @@
   "private": true,
   "description": "AI Grammar Checker Chrome Extension — build system for content.js",
   "scripts": {
-    "build": "esbuild src/content.js --bundle --outfile=content.js --format=iife"
+    "build": "esbuild src/content.js --bundle --outfile=content.js --format=iife",
+    "test": "node ../tests/test_commands.js && node ../tests/test_cke_bridge.js"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

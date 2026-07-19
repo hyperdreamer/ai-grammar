@@ -2691,7 +2691,7 @@
       }
     }
     try {
-      await COMMANDS[cmdName].run("");
+      await COMMANDS[cmdName].run("", ta);
     } catch (err) {
       showResultBadge(`Command failed: ${err.message}`);
     }

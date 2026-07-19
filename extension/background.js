@@ -5,6 +5,7 @@
 // - Manage per-tab check state
 // - Handle keyboard shortcut (check selected text)
 
+importScripts('src/cke-bridge-installer.js');
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8766;
 
@@ -256,40 +257,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     chrome.scripting.executeScript({
       target: { tabId: sender.tab.id },
       world: 'MAIN',
-      func: () => {
-        if (window.__agCKEBridge) return;
-        window.__agCKEBridge = true;
-        const POLL_MS = 500;
-        (function poll() {
-          const el = document.querySelector('.ck-editor__editable[contenteditable="true"]');
-          const instance = el && el.ckeditorInstance;
-          if (!instance) { setTimeout(poll, POLL_MS); return; }
-          try {
-            instance.model.document.on('change:data', function() {
-              try {
-                window.postMessage({source:'ag-cke-bridge', type:'change'}, '*');
-              } catch(e) {}
-            });
-          } catch(e) {
-            setTimeout(poll, POLL_MS);
-          }
-        })();
-
-        // Also expose an apply-fix helper for the content script
-        window.__agCKEApply = function(text) {
-          const el = document.querySelector('.ck-editor__editable[contenteditable="true"]');
-          const instance = el && el.ckeditorInstance;
-          if (!instance) return false;
-          instance.model.change(writer => {
-            const root = instance.model.document.getRoot();
-            writer.remove(writer.createRangeIn(root));
-            const p = writer.createElement('paragraph');
-            writer.append(p, root);
-            writer.appendText(text, {}, p);
-          });
-          return true;
-        };
-      }
+      func: installCKEBridge
     }).then(() => sendResponse({ok: true})).catch(e => sendResponse({ok: false, error: e.message}));
     return true;
   }

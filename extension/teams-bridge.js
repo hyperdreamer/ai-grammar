@@ -314,13 +314,15 @@
     const bridgeCode = (
       '(function(){' +
       'if(window.__agCKEBridge)return;window.__agCKEBridge=true;' +
-      'var POLL_MS=500;(function poll(){' +
-      'var el=document.querySelector(\'.ck-editor__editable[contenteditable="true"]\');' +
-      'var instance=el&&el.ckeditorInstance;' +
-      'if(!instance){setTimeout(poll,POLL_MS);return;}' +
-      'try{instance.model.document.on(\'change:data\',function(){' +
-      'try{window.postMessage({source:"ag-cke-bridge",type:"change"},"*");}catch(e){}' +
-      '});}catch(e){setTimeout(poll,POLL_MS);}' +
+      'var POLL_MS=500;var cur=null;var h=null;' +
+      'function f(){try{window.postMessage({source:"ag-cke-bridge",type:"change"},"*");}catch(e){}}' +
+      '(function poll(){' +
+      'var ins=null;try{var el=document.querySelector(\'.ck-editor__editable[contenteditable="true"]\');' +
+      'ins=el&&el.ckeditorInstance||null;}catch(e){}' +
+      'if(ins!==cur){if(cur&&h){try{cur.model.document.off(\'change:data\',h);}catch(e){}h=null;}cur=null;' +
+      'if(ins){h=f;try{ins.model.document.on(\'change:data\',h);cur=ins;}catch(e){h=null;}}' +
+      '}' +
+      'setTimeout(poll,' + 'POLL_MS' + ');' +
       '})();})()'
     );
     const blob = new Blob([bridgeCode], { type: 'application/javascript' });

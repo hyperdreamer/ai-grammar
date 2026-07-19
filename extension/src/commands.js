@@ -635,7 +635,7 @@ async function applyPaletteCommand(cmdName) {
 
   // Execute the command
   try {
-    await COMMANDS[cmdName].run('');
+    await COMMANDS[cmdName].run('', ta);
   } catch (err) {
     showResultBadge(`Command failed: ${err.message}`);
   }
@@ -851,4 +851,3 @@ async function commitLanguageSelection(code) {
     }
   }, 600);
 }
-
