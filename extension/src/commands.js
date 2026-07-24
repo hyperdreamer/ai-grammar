@@ -203,7 +203,7 @@ export const COMMANDS = {
           state.skipLiveCheck = true;
           await stripCheck(ta);
           state.skipLiveCheck = false;
-          showGreenCheck(ta, draft);
+          showGreenCheck(ta, draft, { scope: 'live-draft' });
         }
       } catch (e) {
         const reason = e.message?.includes('Extension context invalidated')

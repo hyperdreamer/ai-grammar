@@ -270,24 +270,33 @@ function getLastCharRect(container, text) {
   }
 }
 
-export function showGreenCheck(container, checkedText) {
+/**
+ * Show a green checkmark next to a container with fully checked text.
+ *
+ * @param {Element} container  The editable element or static message container.
+ * @param {string}  checkedText The text that was checked (for last-char positioning).
+ * @param {object}  [options]
+ * @param {'live-draft'|'static'} [options.scope='static']
+ *   - 'live-draft': anchor to top-right of container, removed on next edit.
+ *   - 'static':     anchor after last character, permanent until explicit removal.
+ */
+export function showGreenCheck(container, checkedText, { scope = 'static' } = {}) {
   if (!container) return;
   if (!isConnectedToDocument(container)) return;
   removeGreenCheck(container);
 
-  // Always use fixed-position — inline appendChild gets stripped by React re-renders
-  // contentEditable is inherited — descendants of a contentEditable element
-  // return true for .isContentEditable even though they're not directly editable.
-  // Use .contentEditable === 'true' to only match elements with the attribute set.
-  const isEditable = container.tagName === 'TEXTAREA' || container.contentEditable === 'true';
+  // Always use fixed-position — inline appendChild gets stripped by React re-renders.
+  // Live-draft: top-right corner anchor (quick glance, removed on next keystroke).
+  // Static:     after the last character of the checked text.
+  const isLiveDraft = scope === 'live-draft';
   const check = document.createElement('div');
   check.className = 'ai-grammar-ok-ta';
   check.textContent = '✓';
   check.setAttribute('data-ag-ok-for', '');
 
   const rect = container.getBoundingClientRect();
-  if (isEditable) {
-    // Textareas: anchor to top-right of the container (can't walk text nodes).
+  if (isLiveDraft) {
+    // Live editors: anchor to top-right of the container (can't walk text nodes).
     check.style.top = (rect.top + 4) + 'px';
     check.style.left = (rect.right - 28) + 'px';
   } else {
@@ -303,7 +312,7 @@ export function showGreenCheck(container, checkedText) {
   const reposition = () => {
     if (!isConnectedToDocument(check)) return;
     const r = container.getBoundingClientRect();
-    if (isEditable) {
+    if (isLiveDraft) {
       check.style.top = (r.top + 4) + 'px';
       check.style.left = (r.right - 28) + 'px';
     } else {
@@ -316,8 +325,10 @@ export function showGreenCheck(container, checkedText) {
   window.addEventListener('scroll', reposition, true);
   check._agReposition = reposition;
 
-  // Permanent until explicit cleanup (editable checks are removed on input)
-  state.greenCheckTimers.set(container, { el: check, timers: [], cleanup: () => {
+  // Store scope for semantic lifecycle management.
+  // Live-draft checks are removed on next edit; static checks remain
+  // until explicitly cleared.
+  state.greenCheckTimers.set(container, { el: check, scope, timers: [], cleanup: () => {
     window.removeEventListener('resize', reposition);
     window.removeEventListener('scroll', reposition, true);
   }});
@@ -339,12 +350,14 @@ export function removeAllGreenChecks() {
   }
 }
 
-/** Only clear green checks on editable elements (textareas, contentEditable).
- *  Leaves post-submit paragraph checks untouched — those are permanent.
- *  Uses .contentEditable === 'true' (not inherited .isContentEditable). */
-export function removeEditableGreenChecks() {
-  for (const [container] of state.greenCheckTimers) {
-    if (container.tagName === 'TEXTAREA' || container.contentEditable === 'true') {
+/** Remove green checkmarks with scope 'live-draft'.
+ *  Leaves static (post-submit/selection) checks untouched.
+ *  Does not inspect DOM attributes — relies on the scope recorded
+ *  at creation time, so it works for any editable control
+ *  (textarea, contentEditable, plaintext-only, CodeMirror, etc.). */
+export function removeLiveDraftGreenChecks() {
+  for (const [container, entry] of state.greenCheckTimers) {
+    if (entry.scope === 'live-draft') {
       removeGreenCheck(container);
     }
   }

@@ -8,7 +8,7 @@ import { hideTooltip } from './tooltip.js';
 import { removeMessageOverlay } from './highlight.js';
 import {
   removeErrorFloat,
-  removeEditableGreenChecks,
+  removeLiveDraftGreenChecks,
   removeAllBadges,
 } from './indicators.js';
 
@@ -21,7 +21,7 @@ export function clearConversationScopedState({ updateKey = true } = {}) {
   clearLiveDraftHighlights();
   hideTooltip();
   removeErrorFloat();
-  removeEditableGreenChecks();
+  removeLiveDraftGreenChecks();
   removeAllBadges();
   for (const container of [...state.messageOverlays.keys()]) {
     removeMessageOverlay(container);

@@ -8,7 +8,7 @@ import {
 import {
   showErrorFloat,
   showGreenCheck,
-  removeEditableGreenChecks,
+  removeLiveDraftGreenChecks,
   removeErrorFloat,
   showPendingBadge,
   removePendingBadge,
@@ -406,6 +406,7 @@ export function setupLiveDraftCheck() {
   let liveCheckTarget = null;
   let liveDelay = 5000;       // ms, read from storage
   let liveCheckInFlight = false;
+  let draftRevision = 0;      // monotonically increasing; invalidates stale responses
 
   function abortLiveDraftCheck({ removeBadge = true } = {}) {
     if (!liveCheckInFlight) return;
@@ -417,6 +418,7 @@ export function setupLiveDraftCheck() {
 
   // Expose cancel so ?/fix can abort pending live checks
   state.cancelLiveDraft = () => {
+    draftRevision++;
     liveCheckTarget = null;
     abortLiveDraftCheck();
     removeErrorFloat();
@@ -474,6 +476,12 @@ export function setupLiveDraftCheck() {
   async function checkLiveDraft(ta, text, conversationKey = getConversationKey()) {
     // Don't start a grammar check while a command (fix/polish) is running
     if (state.commandInFlight) return;
+
+    // Capture the revision at check time.  Only this revision's check
+    // may update UI — newer edits increment draftRevision and invalidate
+    // any in-flight response from a previous revision.
+    const checkedRevision = draftRevision;
+
     try {
       abortLiveDraftCheck();
       showPendingBadge('checking', 'Checking grammar...');
@@ -498,6 +506,12 @@ export function setupLiveDraftCheck() {
         signal: state.activeCheckController.signal,
       });
       const data = await resp.json();
+
+      // Guard: newer edit or check has invalidated this revision.
+      if (checkedRevision !== draftRevision) {
+        return;
+      }
+
       if (liveCheckInFlight) {
         liveCheckInFlight = false;
         state.activeCheckController = null;
@@ -516,9 +530,13 @@ export function setupLiveDraftCheck() {
       if (data?.errors?.length > 0) {
         highlightLiveDraft(ta, data.errors);
       } else {
-        showGreenCheck(ta, text);
+        showGreenCheck(ta, text, { scope: 'live-draft' });
       }
     } catch (err) {
+      // A superseded request must not clear the newer request's controller,
+      // pending badge, or in-flight state when its abort settles late.
+      if (checkedRevision !== draftRevision) return;
+
       if (err.name === 'AbortError') {
         console.debug('[AI Grammar] Live check aborted');
         // Clean up state that the normal success path would handle.
@@ -540,13 +558,19 @@ export function setupLiveDraftCheck() {
     const ta = getEventEditableTarget(e);
     if (!ta) return;
 
+    // Invalidate live-draft indicators and revision first — must happen
+    // even when skipLiveCheck suppresses automatic rechecking (the flag
+    // only prevents re-triggering caused by extension-generated edits;
+    // it must not preserve stale visual status).
+    removeLiveDraftGreenChecks();
+    draftRevision++;
+
     // Skip if a fix/polish command is in flight — don't clear its overlay.
     if (state.skipLiveCheck) return;
 
     // Clear live draft highlights and abort any in-flight live-draft check.
     clearLiveDraftHighlights();
     removeErrorFloat();
-    removeEditableGreenChecks();
     abortLiveDraftCheck();
 
     // Skip placeholder-only text or empty value — and clear highlights
@@ -568,17 +592,19 @@ export function setupLiveDraftCheck() {
     const ta = getEventEditableTarget(e);
     if (!ta) return;
     liveCheckTarget = null;
+    removeLiveDraftGreenChecks();
+    draftRevision++;
     clearLiveDraftHighlights();
     removeErrorFloat();
-    removeEditableGreenChecks();
     abortLiveDraftCheck();
   }, true);
 
   document.addEventListener('submit', () => {
     liveCheckTarget = null;
+    removeLiveDraftGreenChecks();
+    draftRevision++;
     clearLiveDraftHighlights();
     removeErrorFloat();
-    removeEditableGreenChecks();
     abortLiveDraftCheck();
   }, true);
 }

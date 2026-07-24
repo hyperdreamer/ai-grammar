@@ -30,7 +30,7 @@ src = src.replace(/^(let|const)\s/gm, 'var ');
 src = src.replace(/^export\s+\{/gm, '// export stripped {');
 
 // Append export hook
-src += '\nglobalThis.__test = { showErrorFloat, removeErrorFloat, removeAllBadges, _errorFloatTimer };\n';
+src += '\nglobalThis.__test = { showErrorFloat, removeErrorFloat, removeAllBadges, showGreenCheck, removeGreenCheck, removeLiveDraftGreenChecks, removeAllGreenChecks, _errorFloatTimer };\n';
 
 // ── Fake timers (controlled by tests) ──────────────────────────────────
 let _timerId = 0;
@@ -56,6 +56,20 @@ function fireAllTimers() {
 
 function pendingTimerCount() {
   return _pendingTimers.length;
+}
+
+// ── Helpers for green-check tests ─────────────────────────────────────
+function createMockContainer(tagName = 'DIV', overrides = {}) {
+  return {
+    tagName,
+    contentEditable: 'inherit',
+    isContentEditable: false,
+    getBoundingClientRect() { return { top: 100, bottom: 200, left: 100, right: 300, width: 200, height: 100 }; },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+    removeEventListener() {},
+    ...overrides,
+  };
 }
 
 // ── Create sandbox with mock DOM ──────────────────────────────────────
@@ -101,6 +115,7 @@ function createSandbox() {
           return { top: 100, bottom: 200, left: 100, right: 300, width: 200, height: 100 };
         },
         addEventListener() {},
+        setAttribute() {},
         remove() { this._removed = true; const i = _bodyChildren.indexOf(this); if (i >= 0) _bodyChildren.splice(i, 1); },
         appendChild(c) { this.children.push(c); },
         offsetHeight: 100,
@@ -135,6 +150,7 @@ function createSandbox() {
     },
     escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c)); },
     isIgnored() { return false; },
+    isConnectedToDocument() { return true; },
   };
 }
 
@@ -243,4 +259,122 @@ assert.ok(typeof removeErrorFloat === 'function', 'removeErrorFloat should be a 
 
   console.log('  PASS: removeAllBadges cancels resultBadgeTimer and sets it null');
 }
+
+// ── Scope-based green-check lifecycle tests ───────────────────────────
+const showGreenCheck = ctx.__test.showGreenCheck;
+const removeGreenCheck = ctx.__test.removeGreenCheck;
+const removeLiveDraftGreenChecks = ctx.__test.removeLiveDraftGreenChecks;
+const removeAllGreenChecks = ctx.__test.removeAllGreenChecks;
+
+// Test 6: live-draft green check is removed by removeLiveDraftGreenChecks
+{
+  removeAllGreenChecks();
+
+  const textarea = createMockContainer('TEXTAREA');
+  showGreenCheck(textarea, 'hello', { scope: 'live-draft' });
+  assert.strictEqual(sandbox.state.greenCheckTimers.size, 1, 'Test6: should have 1 green check');
+  const entry = sandbox.state.greenCheckTimers.get(textarea);
+  assert.strictEqual(entry.scope, 'live-draft', 'Test6: scope should be live-draft');
+
+  removeLiveDraftGreenChecks();
+  assert.strictEqual(sandbox.state.greenCheckTimers.size, 0, 'Test6: live-draft check should be removed');
+
+  console.log('  PASS: live-draft green check removed by removeLiveDraftGreenChecks');
+}
+
+// Test 7: static green check survives removeLiveDraftGreenChecks
+{
+  removeAllGreenChecks();
+
+  const div = createMockContainer('DIV');
+  showGreenCheck(div, 'world', { scope: 'static' });
+  assert.strictEqual(sandbox.state.greenCheckTimers.size, 1, 'Test7: should have 1 green check');
+
+  removeLiveDraftGreenChecks();
+  assert.strictEqual(sandbox.state.greenCheckTimers.size, 1, 'Test7: static check should survive live-draft cleanup');
+
+  removeAllGreenChecks();
+  assert.strictEqual(sandbox.state.greenCheckTimers.size, 0, 'Test7: removeAllGreenChecks clears static too');
+
+  console.log('  PASS: static green check survives removeLiveDraftGreenChecks');
+}
+
+// Test 8: live-draft entry removed by scope, not DOM attribute
+// Regression: contenteditable="plaintext-only" should also be cleaned up.
+{
+  removeAllGreenChecks();
+
+  // Simulate a plaintext-only contentEditable — isContentEditable = true but
+  // contentEditable is 'plaintext-only', not 'true'.
+  const plaintextDiv = createMockContainer('DIV', {
+    contentEditable: 'plaintext-only',
+    isContentEditable: true,
+  });
+  showGreenCheck(plaintextDiv, 'hello', { scope: 'live-draft' });
+  assert.strictEqual(sandbox.state.greenCheckTimers.size, 1, 'Test8: should have 1 green check');
+
+  // Old removeEditableGreenChecks would miss this because contentEditable !== 'true'.
+  // New removeLiveDraftGreenChecks must catch it via scope.
+  removeLiveDraftGreenChecks();
+  assert.strictEqual(sandbox.state.greenCheckTimers.size, 0,
+    'Test8: plaintext-only live-draft must be removed via scope, not DOM attr');
+
+  console.log('  PASS: plaintext-only contentEditable green check removed by scope');
+}
+
+// Test 9: mixed live-draft + static — only live-draft removed
+{
+  removeAllGreenChecks();
+
+  const ta = createMockContainer('TEXTAREA');
+  const div = createMockContainer('DIV');
+
+  showGreenCheck(ta, 'draft', { scope: 'live-draft' });
+  showGreenCheck(div, 'static', { scope: 'static' });
+  assert.strictEqual(sandbox.state.greenCheckTimers.size, 2, 'Test9: should have 2 green checks');
+
+  removeLiveDraftGreenChecks();
+  assert.strictEqual(sandbox.state.greenCheckTimers.size, 1, 'Test9: only live-draft removed');
+  assert.ok(sandbox.state.greenCheckTimers.has(div), 'Test9: static check should remain');
+
+  removeAllGreenChecks();
+
+  console.log('  PASS: mixed scope — only live-draft removed by removeLiveDraftGreenChecks');
+}
+
+// Test 10: cleanup removes reposition listeners and deletes map entry
+{
+  removeAllGreenChecks();
+
+  let resizeRemoved = false;
+  let scrollRemoved = false;
+  const originalAdd = sandbox.window.addEventListener;
+  const originalRemove = sandbox.window.removeEventListener;
+
+  sandbox.window.addEventListener = function(type) {
+    // no-op during add
+  };
+  sandbox.window.removeEventListener = function(type) {
+    if (type === 'resize') resizeRemoved = true;
+    if (type === 'scroll') scrollRemoved = true;
+  };
+
+  const ta = createMockContainer('TEXTAREA');
+  showGreenCheck(ta, 'test', { scope: 'live-draft' });
+
+  // Reset mock for remove assertions
+  sandbox.window.addEventListener = originalAdd;
+
+  assert.strictEqual(sandbox.state.greenCheckTimers.size, 1, 'Test10: should have 1 check');
+
+  removeGreenCheck(ta);
+  assert.strictEqual(sandbox.state.greenCheckTimers.size, 0, 'Test10: entry deleted from map');
+  assert.ok(resizeRemoved, 'Test10: resize listener removed');
+  assert.ok(scrollRemoved, 'Test10: scroll listener removed');
+
+  sandbox.window.removeEventListener = originalRemove;
+
+  console.log('  PASS: removeGreenCheck cleans up listeners and deletes map entry');
+}
+
 console.log('\n  All indicators tests passed.\n');

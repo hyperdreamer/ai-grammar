@@ -659,17 +659,17 @@
       return fallback;
     }
   }
-  function showGreenCheck(container, checkedText) {
+  function showGreenCheck(container, checkedText, { scope = "static" } = {}) {
     if (!container) return;
     if (!isConnectedToDocument(container)) return;
     removeGreenCheck(container);
-    const isEditable2 = container.tagName === "TEXTAREA" || container.contentEditable === "true";
+    const isLiveDraft = scope === "live-draft";
     const check = document.createElement("div");
     check.className = "ai-grammar-ok-ta";
     check.textContent = "\u2713";
     check.setAttribute("data-ag-ok-for", "");
     const rect = container.getBoundingClientRect();
-    if (isEditable2) {
+    if (isLiveDraft) {
       check.style.top = rect.top + 4 + "px";
       check.style.left = rect.right - 28 + "px";
     } else {
@@ -681,7 +681,7 @@
     const reposition = () => {
       if (!isConnectedToDocument(check)) return;
       const r = container.getBoundingClientRect();
-      if (isEditable2) {
+      if (isLiveDraft) {
         check.style.top = r.top + 4 + "px";
         check.style.left = r.right - 28 + "px";
       } else {
@@ -693,7 +693,7 @@
     window.addEventListener("resize", reposition);
     window.addEventListener("scroll", reposition, true);
     check._agReposition = reposition;
-    state.greenCheckTimers.set(container, { el: check, timers: [], cleanup: () => {
+    state.greenCheckTimers.set(container, { el: check, scope, timers: [], cleanup: () => {
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", reposition, true);
     } });
@@ -707,9 +707,9 @@
       state.greenCheckTimers.delete(container);
     }
   }
-  function removeEditableGreenChecks() {
-    for (const [container] of state.greenCheckTimers) {
-      if (container.tagName === "TEXTAREA" || container.contentEditable === "true") {
+  function removeLiveDraftGreenChecks() {
+    for (const [container, entry] of state.greenCheckTimers) {
+      if (entry.scope === "live-draft") {
         removeGreenCheck(container);
       }
     }
@@ -1179,6 +1179,7 @@
     let liveCheckTarget = null;
     let liveDelay = 5e3;
     let liveCheckInFlight = false;
+    let draftRevision = 0;
     function abortLiveDraftCheck({ removeBadge = true } = {}) {
       if (!liveCheckInFlight) return;
       state.activeCheckController?.abort();
@@ -1187,6 +1188,7 @@
       if (removeBadge && !state.commandInFlight) removePendingBadge("checking");
     }
     state.cancelLiveDraft = () => {
+      draftRevision++;
       liveCheckTarget = null;
       abortLiveDraftCheck();
       removeErrorFloat();
@@ -1228,6 +1230,7 @@
     }, 500);
     async function checkLiveDraft(ta, text, conversationKey = getConversationKey()) {
       if (state.commandInFlight) return;
+      const checkedRevision = draftRevision;
       try {
         abortLiveDraftCheck();
         showPendingBadge("checking", "Checking grammar...");
@@ -1248,6 +1251,9 @@
           signal: state.activeCheckController.signal
         });
         const data = await resp.json();
+        if (checkedRevision !== draftRevision) {
+          return;
+        }
         if (liveCheckInFlight) {
           liveCheckInFlight = false;
           state.activeCheckController = null;
@@ -1265,9 +1271,10 @@
         if (data?.errors?.length > 0) {
           highlightLiveDraft(ta, data.errors);
         } else {
-          showGreenCheck(ta, text);
+          showGreenCheck(ta, text, { scope: "live-draft" });
         }
       } catch (err) {
+        if (checkedRevision !== draftRevision) return;
         if (err.name === "AbortError") {
           console.debug("[AI Grammar] Live check aborted");
           if (liveCheckInFlight) {
@@ -1284,10 +1291,11 @@
     document.addEventListener("input", (e) => {
       const ta = getEventEditableTarget(e);
       if (!ta) return;
+      removeLiveDraftGreenChecks();
+      draftRevision++;
       if (state.skipLiveCheck) return;
       clearLiveDraftHighlights();
       removeErrorFloat();
-      removeEditableGreenChecks();
       abortLiveDraftCheck();
       const raw = getLiveDraftText(ta);
       if (!raw || raw === ta.placeholder) {
@@ -1304,16 +1312,18 @@
       const ta = getEventEditableTarget(e);
       if (!ta) return;
       liveCheckTarget = null;
+      removeLiveDraftGreenChecks();
+      draftRevision++;
       clearLiveDraftHighlights();
       removeErrorFloat();
-      removeEditableGreenChecks();
       abortLiveDraftCheck();
     }, true);
     document.addEventListener("submit", () => {
       liveCheckTarget = null;
+      removeLiveDraftGreenChecks();
+      draftRevision++;
       clearLiveDraftHighlights();
       removeErrorFloat();
-      removeEditableGreenChecks();
       abortLiveDraftCheck();
     }, true);
   }
@@ -1848,7 +1858,7 @@
       if (!data?.errors) return;
       const errors = data.errors;
       if (errors.length === 0) {
-        showGreenCheck(container, text);
+        showGreenCheck(container, text, { scope: "static" });
         return;
       }
       state.isHighlighting = true;
@@ -2375,7 +2385,7 @@
     clearLiveDraftHighlights();
     hideTooltip();
     removeErrorFloat();
-    removeEditableGreenChecks();
+    removeLiveDraftGreenChecks();
     removeAllBadges();
     for (const container of [...state.messageOverlays.keys()]) {
       removeMessageOverlay(container);
@@ -2636,7 +2646,7 @@
             state.skipLiveCheck = true;
             await stripCheck(ta);
             state.skipLiveCheck = false;
-            showGreenCheck(ta, draft);
+            showGreenCheck(ta, draft, { scope: "live-draft" });
           }
         } catch (e) {
           const reason = e.message?.includes("Extension context invalidated") ? "Extension reloaded \u2014 please reload this page" : e.message;

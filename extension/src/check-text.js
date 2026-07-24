@@ -71,7 +71,7 @@ export async function checkText(text, container, conversationKey = getConversati
     if (!data?.errors) return;
     const errors = data.errors;
     if (errors.length === 0) {
-      showGreenCheck(container, text);
+      showGreenCheck(container, text, { scope: 'static' });
       return;
     }
 
