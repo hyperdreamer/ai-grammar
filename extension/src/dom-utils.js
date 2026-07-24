@@ -7,6 +7,70 @@ import {
   USER_TEXT_TTL_MS,
   USER_TEXT_MIN_MATCH,
 } from './state.js';
+import { getCodeMirrorText, isCodeMirrorEditor } from './codemirror-bridge.js';
+
+// -----------------------------------------------------------------------
+// DOM compatibility helpers
+// -----------------------------------------------------------------------
+
+/**
+ * Return whether an element is mounted, including when it lives in a shadow
+ * tree. `document.contains()` excludes shadow descendants in Chromium.
+ */
+export function isConnectedToDocument(el) {
+  return !!el && (el.isConnected === true || document.contains(el));
+}
+
+/**
+ * Read a control's logical draft text. CodeMirror renders each logical line in
+ * a separate element, so its textContent would silently remove newlines.
+ */
+export function getEditableText(el) {
+  if (!el) return '';
+  if (isCodeMirrorEditor(el)) return getCodeMirrorText(el);
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') return el.value || '';
+  return el.textContent || '';
+}
+
+/**
+ * Resolve the editable element that originated a document-level event.
+ * Composed events from an open shadow tree are retargeted to its host, so
+ * `event.target` alone cannot identify a nested textarea/contentEditable.
+ */
+export function getEventEditableTarget(event) {
+  const path = typeof event?.composedPath === 'function'
+    ? event.composedPath()
+    : [event?.target];
+
+  for (const node of path) {
+    if (!node || node.nodeType !== 1) continue;
+    if (node.tagName === 'TEXTAREA') return node;
+    if (!node.isContentEditable) continue;
+
+    // Events can originate in a formatting child of an editor. Use the
+    // contenteditable owner so callers operate on the full draft.
+    const owner = node.closest?.('[contenteditable]');
+    return owner?.isContentEditable ? owner : node;
+  }
+
+  return null;
+}
+
+/**
+ * Follow focus through open shadow roots. At document level, activeElement is
+ * only the outer host (for example, <pi-webui-app>), not its focused editor.
+ */
+export function getDeepActiveElement(root = document) {
+  let active = root?.activeElement || null;
+  const visited = new Set();
+
+  while (active?.shadowRoot?.activeElement && !visited.has(active)) {
+    visited.add(active);
+    active = active.shadowRoot.activeElement;
+  }
+
+  return active;
+}
 
 // -----------------------------------------------------------------------
 // Text block detection

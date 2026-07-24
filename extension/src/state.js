@@ -67,6 +67,7 @@ export const state = {
   liveHighlightTarget: null,
   liveHighlightRestore: null,
   liveHighlightScrollHandler: null,
+  liveHighlightScrollTarget: null,
   liveHighlightMouseMoveHandler: null,
   liveHighlightMouseLeaveHandler: null,
   liveHighlightReposition: null,

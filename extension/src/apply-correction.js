@@ -2,6 +2,8 @@ import { state, getWhatsAppBridge } from './state.js';
 import { hideTooltip } from './tooltip.js';
 import { showResultBadge } from './indicators.js';
 import { clearLiveDraftHighlights } from './live-draft.js';
+import { getDeepActiveElement, getEditableText, isConnectedToDocument } from './dom-utils.js';
+import { isCodeMirrorEditor, replaceCodeMirrorText } from './codemirror-bridge.js';
 
 // -----------------------------------------------------------------------
 // Apply correction
@@ -12,15 +14,10 @@ export function applyCorrection(errorEl) {
   if (!correction) return;
 
   if (errorEl.hasAttribute('data-live-draft')) {
-    let ta = state.liveHighlightTarget;
-    // Fallback: if liveHighlightTarget wasn't set (overlay injected externally
-    // e.g. by test scripts), find the contentEditable from the DOM.
-    if (!ta) {
-      ta = document.querySelector('footer div[contenteditable="true"][role="textbox"]')
-        || document.querySelector('[contenteditable="true"][role="textbox"]')
-        || document.querySelector('[contenteditable="true"]');
-    }
-    if (!ta || !document.contains(ta)) { hideTooltip(); return; }
+    // Prefer the target recorded by the live-draft checker. The fallback also
+    // follows focus through open shadow roots for component-based editors.
+    const ta = findEditableTarget(state.liveHighlightTarget);
+    if (!ta) { hideTooltip(); return; }
 
     // Collect all error spans from the live-draft overlay and apply
     // every correction at once.  Sort by start offset descending so
@@ -38,10 +35,10 @@ export function applyCorrection(errorEl) {
         .filter(f => Number.isInteger(f.start) && Number.isInteger(f.end) && f.correction)
         .sort((a, b) => b.start - a.start); // descending for safe in-place edits
 
-      let text = (ta.value || ta.textContent || '').replace(/\u200B/g, '');
-      for (const f of fixes) {
-        text = text.slice(0, f.start) + f.correction + text.slice(f.end);
-      }
+      const originalText = ta.tagName === 'TEXTAREA'
+        ? ta.value.replace(/\u200B/g, '')
+        : editableText(ta);
+      const text = applyCorrectionsToText(originalText, fixes);
       if (ta.tagName === 'TEXTAREA') {
         ta.value = text;
         ta.selectionStart = ta.selectionEnd = text.length;
@@ -52,73 +49,14 @@ export function applyCorrection(errorEl) {
           data: text,
         }));
       } else if (ta.isContentEditable) {
-        // Dismiss tooltip and remove overlay immediately so the user
-        // sees instant feedback; the text replacement follows after
-        // a double rAF to let Lexical reinitialize after focus.
-        // Suppress live-draft checks while we apply the fix so the
-        // text replacement doesn't trigger a new auto-check.
+        // Remove the interactive overlay immediately, then use the same
+        // editor-native replacement path as ?/fix. CodeMirror observes the
+        // browser-native edit while Lexical retains its CDP fallback.
         hideTooltip();
         clearLiveDraftHighlights();
         state.skipLiveCheck = true;
         state.cancelLiveDraft?.();
-        ta.focus();
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            // Re-query: ta may have been detached by React re-render
-            const el = document.querySelector(
-              'footer div[contenteditable="true"][role="textbox"]'
-            ) || document.querySelector('[contenteditable="true"][role="textbox"]')
-              || document.querySelector('[contenteditable="true"]');
-            if (el && document.contains(el)) {
-              const before = (el.textContent || el.innerText || '').replace(/\u200B/g, '');
-              el.focus();
-              const sel = window.getSelection();
-              const range = document.createRange();
-              range.selectNodeContents(el);
-              sel.removeAllRanges();
-              sel.addRange(range);
-              el.dispatchEvent(new InputEvent('beforeinput', {
-                bubbles: true, cancelable: true,
-                inputType: 'insertReplacementText', data: text,
-              }));
-              // Lexical processes beforeinput asynchronously (React batch).
-              // Check after one more frame to see if the text actually changed.
-              requestAnimationFrame(() => {
-                const after = (el.textContent || el.innerText || '').replace(/\u200B/g, '');
-                if (after !== before) {
-                  showResultBadge('✓ Fixed!', 3000);
-                } else {
-                  console.debug('[AI Grammar] beforeinput had no effect, falling back to CDP',
-                    { before, after, text: text.replace(/\u200B/g, '') });
-                  applyFixCDP(text).then(success => {
-                    if (success) {
-                      showResultBadge('✓ Fixed!', 3000);
-                    } else {
-                      navigator.clipboard.writeText(text).catch(() => {});
-                      showResultBadge('Copied to clipboard — paste (Ctrl+V) to apply', 4000);
-                    }
-                    state.skipLiveCheck = false;
-                  });
-                  return;
-                }
-                state.skipLiveCheck = false;
-              });
-            } else {
-              console.debug('[AI Grammar] contentEditable not found, falling back to CDP');
-              applyFixCDP(text).then(success => {
-                if (success) {
-                  showResultBadge('✓ Fixed!', 3000);
-                } else {
-                  navigator.clipboard.writeText(text).catch(() => {});
-                  showResultBadge('Copied to clipboard — paste (Ctrl+V) to apply', 4000);
-                }
-                state.skipLiveCheck = false;
-              });
-              return;
-            }
-            state.skipLiveCheck = false;
-          });
-        });
+        void applyLiveDraftContentEditableText(text, ta);
       }
     }
     hideTooltip();
@@ -136,40 +74,109 @@ export function applyCorrection(errorEl) {
 }
 
 // -----------------------------------------------------------------------
-// Apply fix — try beforeinput event first, CDP fallback for Lexical
+// Apply fix — editor-native replacement before the CDP fallback
 // -----------------------------------------------------------------------
 
+function isEditableTarget(el) {
+  return !!el
+    && (el.tagName === 'TEXTAREA' || el.isContentEditable)
+    && isConnectedToDocument(el);
+}
+
+function findEditableTarget(preferred) {
+  if (isEditableTarget(preferred)) return preferred;
+
+  const active = getDeepActiveElement();
+  if (isEditableTarget(active)) return active;
+
+  // Preserve the existing light-DOM fallback for pages that replace their
+  // editor during a React render.
+  const fallback = document.querySelector('footer div[contenteditable="true"][role="textbox"]')
+    || document.querySelector('[contenteditable="true"][role="textbox"]')
+    || document.querySelector('[contenteditable="true"]');
+  return isEditableTarget(fallback) ? fallback : null;
+}
+
+function editableText(el) {
+  return getEditableText(el).replace(/\u200B/g, '');
+}
+
+async function applyLiveDraftContentEditableText(text, target) {
+  try {
+    const applied = await tryBeforeInput(text, target);
+    if (applied) {
+      showResultBadge('✓ Fixed!', 3000);
+      return;
+    }
+
+    const appliedByCDP = await applyFixCDP(text);
+    if (appliedByCDP) {
+      showResultBadge('✓ Fixed!', 3000);
+    } else {
+      navigator.clipboard.writeText(text).catch(() => {});
+      showResultBadge('Copied to clipboard — paste (Ctrl+V) to apply', 4000);
+    }
+  } finally {
+    state.skipLiveCheck = false;
+  }
+}
+
+function selectEditableContents(el) {
+  const selection = window.getSelection();
+  if (!selection) return false;
+
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
+}
+
+function tryExecCommandReplacement(el, text) {
+  if (typeof document.execCommand !== 'function' || !selectEditableContents(el)) return false;
+  return document.execCommand('insertText', false, text) === true;
+}
+
 /**
- * Try dispatching a beforeinput event with insertReplacementText.
- * Lexical editors process this event type natively without checking
- * isTrusted, so this works without CDP or debugger on many editors.
- * Returns true if the text was successfully inserted.
+ * Use the CodeMirror adapter for its native contenteditable transaction.
+ * Other editors receive beforeinput first, then a scoped native edit before
+ * the existing CDP fallback.
  */
 export function tryBeforeInput(text, ta) {
   return new Promise((resolve) => {
     try {
-      ta.focus();
-      // Double rAF: let Lexical's React batch re-establish internal focus
-      // state after a floating palette may have stolen it.
+      const target = findEditableTarget(ta);
+      if (!target) {
+        resolve(false);
+        return;
+      }
+      target.focus();
+
+      // Double rAF: let React/Lexical re-establish internal focus after a
+      // floating palette may have temporarily taken it.
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          // Re-query — ta may have been detached by React re-render
-          const el = document.querySelector(
-            'footer div[contenteditable="true"][role="textbox"]'
-          ) || document.querySelector('[contenteditable="true"][role="textbox"]')
-            || document.querySelector('[contenteditable="true"]');
-          if (!el || !document.contains(el)) {
+          const el = findEditableTarget(target);
+          if (!el) {
             resolve(false);
             return;
           }
-          const before = (el.textContent || el.innerText || '').replace(/\u200B/g, '');
-          el.focus();
-          const sel = window.getSelection();
-          const range = document.createRange();
-          range.selectNodeContents(el);
-          sel.removeAllRanges();
-          sel.addRange(range);
+          const before = editableText(el);
 
+          if (isCodeMirrorEditor(el)) {
+            // CodeMirror ignores synthetic beforeinput events. Its public
+            // contenteditable surface accepts a native insertText command,
+            // which updates the real document without touching internals.
+            const inserted = replaceCodeMirrorText(el, text);
+            requestAnimationFrame(() => {
+              const afterCodeMirrorEdit = editableText(el);
+              resolve((inserted && afterCodeMirrorEdit !== before) || afterCodeMirrorEdit === text);
+            });
+            return;
+          }
+
+          el.focus();
+          selectEditableContents(el);
           el.dispatchEvent(new InputEvent('beforeinput', {
             bubbles: true,
             cancelable: true,
@@ -177,11 +184,20 @@ export function tryBeforeInput(text, ta) {
             data: text,
           }));
 
-          // Lexical processes beforeinput asynchronously (React batch).
-          // Check after one more frame to verify the text actually changed.
+          // Lexical processes beforeinput asynchronously. Editors that do
+          // not handle that event can still accept a native DOM edit.
           requestAnimationFrame(() => {
-            const after = (el.textContent || el.innerText || '').replace(/\u200B/g, '');
-            resolve(after !== before);
+            const afterBeforeInput = editableText(el);
+            if (afterBeforeInput !== before || afterBeforeInput === text) {
+              resolve(true);
+              return;
+            }
+
+            const inserted = tryExecCommandReplacement(el, text);
+            requestAnimationFrame(() => {
+              const afterExecCommand = editableText(el);
+              resolve((inserted && afterExecCommand !== before) || afterExecCommand === text);
+            });
           });
         });
       });
@@ -212,6 +228,7 @@ export function applyFixCDP(text) {
  */
 export function applyCorrectionsToText(text, errors) {
   if (!Array.isArray(errors) || !errors.length) return text;
+  const seenFixes = new Set();
   const fixes = errors
     .map((e) => ({
       start: Math.max(0, Number(e.start) || 0),
@@ -219,7 +236,13 @@ export function applyCorrectionsToText(text, errors) {
       correction: e.correction || '',
     }))
     .filter((f) => f.start < f.end && f.correction)
-    .sort((a, b) => b.start - a.start); // descending — safe in-place edits
+    .sort((a, b) => b.start - a.start) // descending — safe in-place edits
+    .filter((fix) => {
+      const key = `${fix.start}:${fix.end}:${fix.correction}`;
+      if (seenFixes.has(key)) return false;
+      seenFixes.add(key);
+      return true;
+    });
 
   let out = text;
   for (const f of fixes) {

@@ -1,5 +1,5 @@
 import { state, escapeHtml } from './state.js';
-import { isIgnored } from './dom-utils.js';
+import { isConnectedToDocument, isIgnored } from './dom-utils.js';
 
 
 // Timer ownership for the error float auto-dismiss (generation-safe)
@@ -272,7 +272,7 @@ function getLastCharRect(container, text) {
 
 export function showGreenCheck(container, checkedText) {
   if (!container) return;
-  if (!document.contains(container)) return;
+  if (!isConnectedToDocument(container)) return;
   removeGreenCheck(container);
 
   // Always use fixed-position — inline appendChild gets stripped by React re-renders
@@ -301,7 +301,7 @@ export function showGreenCheck(container, checkedText) {
 
   // Reposition on scroll/resize
   const reposition = () => {
-    if (!document.contains(check)) return;
+    if (!isConnectedToDocument(check)) return;
     const r = container.getBoundingClientRect();
     if (isEditable) {
       check.style.top = (r.top + 4) + 'px';
@@ -328,7 +328,7 @@ export function removeGreenCheck(container) {
     const entry = state.greenCheckTimers.get(container);
     entry.timers.forEach(clearTimeout);
     if (entry.cleanup) entry.cleanup();
-    if (entry.el && document.contains(entry.el)) entry.el.remove();
+    if (entry.el && isConnectedToDocument(entry.el)) entry.el.remove();
     state.greenCheckTimers.delete(container);
   }
 }
@@ -361,7 +361,7 @@ export function showErrorFloat(errors, anchorEl = null) {
   panel.id = 'ai-grammar-float';
   // Position below anchor if provided, otherwise bottom-right
   let posStyle = '';
-  if (anchorEl && document.contains(anchorEl)) {
+  if (anchorEl && isConnectedToDocument(anchorEl)) {
     const rect = anchorEl.getBoundingClientRect();
     posStyle = `top: ${Math.min(window.innerHeight - 8, rect.bottom + 8)}px; left: ${Math.max(8, rect.left)}px;`;
   }
@@ -434,7 +434,7 @@ export function showErrorFloat(errors, anchorEl = null) {
   // Attach close listener via JS to avoid CSP-blocked inline onclick
   panel.querySelector('.agf-close')?.addEventListener('click', removeErrorFloat);
 
-  if (anchorEl && document.contains(anchorEl)) {
+  if (anchorEl && isConnectedToDocument(anchorEl)) {
     const anchorRect = anchorEl.getBoundingClientRect();
     const panelRect = panel.getBoundingClientRect();
     const gap = 8;

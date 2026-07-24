@@ -68,6 +68,7 @@ function createSandbox() {
     showPendingBadge() {},
     removePendingBadge() {},
     showGreenCheck() {},
+    getEditableText(el) { return el?.value || el?.textContent || ''; },
     state: { minChars: 10, commandInFlight: false },
   };
 }

@@ -5,7 +5,7 @@
   "description": "AI Grammar Checker Chrome Extension — build system for content.js",
   "scripts": {
     "build": "esbuild src/content.js --bundle --outfile=content.js --format=iife",
-    "test": "node ../tests/test_commands.js && node ../tests/test_cke_bridge.js && node ../tests/test_indicators.js && node ../tests/test_teams_bridge.js"
+    "test": "node ../tests/test_shadow_dom.js && node ../tests/test_codemirror_bridge.js && node ../tests/test_apply_correction.js && node ../tests/test_commands.js && node ../tests/test_cke_bridge.js && node ../tests/test_indicators.js && node ../tests/test_teams_bridge.js"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

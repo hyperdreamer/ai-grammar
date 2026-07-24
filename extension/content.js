@@ -52,6 +52,7 @@
     liveHighlightTarget: null,
     liveHighlightRestore: null,
     liveHighlightScrollHandler: null,
+    liveHighlightScrollTarget: null,
     liveHighlightMouseMoveHandler: null,
     liveHighlightMouseLeaveHandler: null,
     liveHighlightReposition: null,
@@ -289,7 +290,151 @@
     state.currentErrorEl = null;
   }
 
+  // src/codemirror-bridge.js
+  function hasClass(element, className) {
+    return element?.classList?.contains?.(className) === true;
+  }
+  function isEditable(element) {
+    const contentEditable = element?.contentEditable;
+    return element?.isContentEditable === true || typeof contentEditable === "string" && contentEditable.toLowerCase() === "true";
+  }
+  function getCodeMirrorParts(element) {
+    if (!element || !isEditable(element) || !hasClass(element, "cm-content")) {
+      return null;
+    }
+    const editor = element.closest?.(".cm-editor");
+    const scroller = element.closest?.(".cm-scroller");
+    if (!hasClass(editor, "cm-editor") || !hasClass(scroller, "cm-scroller")) {
+      return null;
+    }
+    return { content: element, editor, scroller };
+  }
+  function isCodeMirrorEditor(element) {
+    return getCodeMirrorParts(element) !== null;
+  }
+  function getLogicalLines(content) {
+    const directChildren = Array.from(content.children || []);
+    const directLines = directChildren.filter((child) => hasClass(child, "cm-line"));
+    if (directLines.length) return directLines;
+    return Array.from(content.querySelectorAll?.(":scope > .cm-line") || []);
+  }
+  function isNonDocumentNode(node) {
+    if (node?.nodeType !== 1) return false;
+    if (hasClass(node, "cm-placeholder") || hasClass(node, "cm-widgetBuffer")) return true;
+    const contentEditable = node.getAttribute?.("contenteditable");
+    return typeof contentEditable === "string" && contentEditable.toLowerCase() === "false";
+  }
+  function getLogicalLineText(line) {
+    const children = Array.from(line.childNodes || []);
+    if (!children.length) return line.textContent || "";
+    const chunks = [];
+    const visit = (node) => {
+      if (node?.nodeType === 3) {
+        chunks.push(node.nodeValue || "");
+        return;
+      }
+      if (!node || node.nodeType !== 1 || isNonDocumentNode(node)) return;
+      for (const child of Array.from(node.childNodes || [])) visit(child);
+    };
+    for (const child of children) visit(child);
+    return chunks.join("");
+  }
+  function getCodeMirrorText(element) {
+    const parts = getCodeMirrorParts(element);
+    if (!parts) return "";
+    return getLogicalLines(parts.content).map(getLogicalLineText).join("\n");
+  }
+  function getCodeMirrorScrollContainer(element) {
+    return getCodeMirrorParts(element)?.scroller || null;
+  }
+  function getCodeMirrorOverlayGeometry(element) {
+    const parts = getCodeMirrorParts(element);
+    if (!parts?.content?.getBoundingClientRect || !parts.scroller?.getBoundingClientRect) {
+      return null;
+    }
+    const viewportRect = parts.scroller.getBoundingClientRect();
+    const contentRect = parts.content.getBoundingClientRect();
+    if (![
+      viewportRect.left,
+      viewportRect.top,
+      viewportRect.width,
+      viewportRect.height,
+      contentRect.left,
+      contentRect.top,
+      contentRect.width,
+      contentRect.height
+    ].every(Number.isFinite)) {
+      return null;
+    }
+    return {
+      viewport: {
+        left: viewportRect.left,
+        top: viewportRect.top,
+        width: viewportRect.width,
+        height: viewportRect.height
+      },
+      content: {
+        left: contentRect.left - viewportRect.left,
+        top: contentRect.top - viewportRect.top,
+        width: contentRect.width,
+        height: contentRect.height
+      }
+    };
+  }
+  function selectCodeMirrorContents(element) {
+    if (typeof document === "undefined" || typeof document.createRange !== "function") return false;
+    const rootSelection = element.getRootNode?.().getSelection?.();
+    const selection = rootSelection || document.getSelection?.();
+    if (!selection) return false;
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  }
+  function replaceCodeMirrorText(element, text) {
+    if (!isCodeMirrorEditor(element) || typeof text !== "string") return false;
+    if (typeof document === "undefined" || typeof document.execCommand !== "function") return false;
+    element.focus?.();
+    if (!selectCodeMirrorContents(element)) return false;
+    try {
+      const inserted = document.execCommand("insertText", false, text) === true;
+      return inserted || getCodeMirrorText(element) === text.replace(/\r\n?/g, "\n");
+    } catch {
+      return false;
+    }
+  }
+
   // src/dom-utils.js
+  function isConnectedToDocument(el) {
+    return !!el && (el.isConnected === true || document.contains(el));
+  }
+  function getEditableText(el) {
+    if (!el) return "";
+    if (isCodeMirrorEditor(el)) return getCodeMirrorText(el);
+    if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") return el.value || "";
+    return el.textContent || "";
+  }
+  function getEventEditableTarget(event) {
+    const path = typeof event?.composedPath === "function" ? event.composedPath() : [event?.target];
+    for (const node of path) {
+      if (!node || node.nodeType !== 1) continue;
+      if (node.tagName === "TEXTAREA") return node;
+      if (!node.isContentEditable) continue;
+      const owner = node.closest?.("[contenteditable]");
+      return owner?.isContentEditable ? owner : node;
+    }
+    return null;
+  }
+  function getDeepActiveElement(root = document) {
+    let active = root?.activeElement || null;
+    const visited = /* @__PURE__ */ new Set();
+    while (active?.shadowRoot?.activeElement && !visited.has(active)) {
+      visited.add(active);
+      active = active.shadowRoot.activeElement;
+    }
+    return active;
+  }
   function isIgnored(el) {
     if (!el || !el.tagName) return true;
     if (IGNORE_TAGS.has(el.tagName)) return true;
@@ -516,15 +661,15 @@
   }
   function showGreenCheck(container, checkedText) {
     if (!container) return;
-    if (!document.contains(container)) return;
+    if (!isConnectedToDocument(container)) return;
     removeGreenCheck(container);
-    const isEditable = container.tagName === "TEXTAREA" || container.contentEditable === "true";
+    const isEditable2 = container.tagName === "TEXTAREA" || container.contentEditable === "true";
     const check = document.createElement("div");
     check.className = "ai-grammar-ok-ta";
     check.textContent = "\u2713";
     check.setAttribute("data-ag-ok-for", "");
     const rect = container.getBoundingClientRect();
-    if (isEditable) {
+    if (isEditable2) {
       check.style.top = rect.top + 4 + "px";
       check.style.left = rect.right - 28 + "px";
     } else {
@@ -534,9 +679,9 @@
     }
     document.body.appendChild(check);
     const reposition = () => {
-      if (!document.contains(check)) return;
+      if (!isConnectedToDocument(check)) return;
       const r = container.getBoundingClientRect();
-      if (isEditable) {
+      if (isEditable2) {
         check.style.top = r.top + 4 + "px";
         check.style.left = r.right - 28 + "px";
       } else {
@@ -558,7 +703,7 @@
       const entry = state.greenCheckTimers.get(container);
       entry.timers.forEach(clearTimeout);
       if (entry.cleanup) entry.cleanup();
-      if (entry.el && document.contains(entry.el)) entry.el.remove();
+      if (entry.el && isConnectedToDocument(entry.el)) entry.el.remove();
       state.greenCheckTimers.delete(container);
     }
   }
@@ -574,7 +719,7 @@
     const panel = document.createElement("div");
     panel.id = "ai-grammar-float";
     let posStyle = "";
-    if (anchorEl && document.contains(anchorEl)) {
+    if (anchorEl && isConnectedToDocument(anchorEl)) {
       const rect = anchorEl.getBoundingClientRect();
       posStyle = `top: ${Math.min(window.innerHeight - 8, rect.bottom + 8)}px; left: ${Math.max(8, rect.left)}px;`;
     }
@@ -644,7 +789,7 @@
   `;
     document.body.appendChild(panel);
     panel.querySelector(".agf-close")?.addEventListener("click", removeErrorFloat);
-    if (anchorEl && document.contains(anchorEl)) {
+    if (anchorEl && isConnectedToDocument(anchorEl)) {
       const anchorRect = anchorEl.getBoundingClientRect();
       const panelRect = panel.getBoundingClientRect();
       const gap = 8;
@@ -688,13 +833,18 @@
   window.__aiGrammar.removeBadgeStackIfEmpty = removeBadgeStackIfEmpty;
 
   // src/live-draft.js
+  function getLiveDraftText(target) {
+    return getEditableText(target);
+  }
   function highlightLiveDraft(ta, errors) {
     removeErrorFloat();
     if (!errors?.length) return;
     if (ta.tagName === "TEXTAREA") {
       highlightLiveDraftTextarea(ta, errors);
     } else if (ta.isContentEditable) {
-      if (getWhatsAppBridge()) {
+      if (isCodeMirrorEditor(ta)) {
+        highlightLiveDraftCodeMirror(ta, errors);
+      } else if (getWhatsAppBridge()) {
         highlightLiveDraftContentEditable(ta, errors);
       } else {
         showErrorFloat(errors, ta);
@@ -749,8 +899,9 @@
     overlay.scrollTop = textarea.scrollTop;
     overlay.scrollLeft = textarea.scrollLeft;
     textarea.addEventListener("scroll", state.liveHighlightScrollHandler);
+    state.liveHighlightScrollTarget = textarea;
     state.liveHighlightReposition = () => {
-      if (!state.liveHighlightEl || !document.contains(textarea)) return;
+      if (!state.liveHighlightEl || !isConnectedToDocument(textarea)) return;
       const r = textarea.getBoundingClientRect();
       state.liveHighlightEl.style.top = r.top + "px";
       state.liveHighlightEl.style.left = r.left + "px";
@@ -762,8 +913,161 @@
     startLiveHighlightPositionLoop();
     state.liveHighlightTarget = textarea;
   }
+  function codeMirrorErrorClass(type) {
+    if (type === "improvement") return "ai-grammar-improvement";
+    if (type === "idiom") return "ai-grammar-idiom";
+    return "ai-grammar-error";
+  }
+  function buildCodeMirrorErrorSpan(error, start, end, text) {
+    const type = error.type || "error";
+    return '<span class="' + codeMirrorErrorClass(type) + ' ag-live-error" style="pointer-events:auto;cursor:pointer;text-underline-offset:0" data-correction="' + escapeHtml(error.correction || "") + '" data-explanation="' + escapeHtml(error.explanation || "") + '" data-error="' + escapeHtml(error.error || "") + '" data-type="' + escapeHtml(type) + '" data-live-draft="1" data-start="' + error.start + '" data-end="' + error.end + '" tabindex="0">' + escapeHtml(text.slice(start, end)) + "</span>";
+  }
+  function normaliseCodeMirrorErrors(errors, textLength) {
+    return [...errors].map((error) => {
+      const start = Number(error.start);
+      const end = Number(error.end);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+      return { ...error, start: Math.max(0, start), end: Math.min(textLength, end) };
+    }).filter((error) => error && error.start < error.end).sort((a, b) => a.start - b.start);
+  }
+  function buildCodeMirrorLiveDraftHtml(text, errors) {
+    const sorted = normaliseCodeMirrorErrors(errors, text.length);
+    const lines = text.split("\n");
+    let lineStart = 0;
+    return lines.map((line) => {
+      const lineEnd = lineStart + line.length;
+      let cursor = lineStart;
+      let html = "";
+      for (const error of sorted) {
+        const start = Math.max(lineStart, error.start);
+        const end = Math.min(lineEnd, error.end);
+        if (start < cursor || start >= end) continue;
+        html += escapeHtml(text.slice(cursor, start));
+        html += buildCodeMirrorErrorSpan(error, start, end, text);
+        cursor = end;
+      }
+      html += escapeHtml(text.slice(cursor, lineEnd));
+      lineStart = lineEnd + 1;
+      return '<div class="ag-cm-live-line">' + (html || "<br>") + "</div>";
+    }).join("");
+  }
+  function copyCodeMirrorLineMetrics(mirror, content) {
+    const sourceLine = content.querySelector?.(":scope > .cm-line");
+    if (!sourceLine) return;
+    const lineStyle = window.getComputedStyle(sourceLine);
+    for (const line of mirror.querySelectorAll(".ag-cm-live-line")) {
+      Object.assign(line.style, {
+        display: lineStyle.display,
+        boxSizing: lineStyle.boxSizing,
+        font: lineStyle.font,
+        fontSize: lineStyle.fontSize,
+        fontFamily: lineStyle.fontFamily,
+        fontWeight: lineStyle.fontWeight,
+        fontStyle: lineStyle.fontStyle,
+        fontVariant: lineStyle.fontVariant,
+        fontStretch: lineStyle.fontStretch,
+        lineHeight: lineStyle.lineHeight,
+        letterSpacing: lineStyle.letterSpacing,
+        wordSpacing: lineStyle.wordSpacing,
+        textAlign: lineStyle.textAlign,
+        textIndent: lineStyle.textIndent,
+        whiteSpace: lineStyle.whiteSpace,
+        overflowWrap: lineStyle.overflowWrap,
+        wordBreak: lineStyle.wordBreak,
+        wordWrap: lineStyle.wordWrap,
+        tabSize: lineStyle.tabSize,
+        direction: lineStyle.direction,
+        padding: lineStyle.padding,
+        margin: lineStyle.margin
+      });
+    }
+  }
+  function highlightLiveDraftCodeMirror(content, errors) {
+    const geometry = getCodeMirrorOverlayGeometry(content);
+    const scrollTarget = getCodeMirrorScrollContainer(content);
+    if (!geometry || !scrollTarget) return;
+    const text = getLiveDraftText(content);
+    const contentStyle = window.getComputedStyle(content);
+    const overlay = document.createElement("div");
+    const mirror = document.createElement("div");
+    state.liveHighlightEl = overlay;
+    Object.assign(overlay.style, {
+      position: "fixed",
+      top: geometry.viewport.top + "px",
+      left: geometry.viewport.left + "px",
+      width: geometry.viewport.width + "px",
+      height: geometry.viewport.height + "px",
+      overflow: "hidden",
+      pointerEvents: "none",
+      zIndex: "2147483645",
+      background: "transparent"
+    });
+    Object.assign(mirror.style, {
+      position: "absolute",
+      top: "0",
+      left: "0",
+      width: geometry.content.width + "px",
+      minHeight: geometry.content.height + "px",
+      pointerEvents: "none",
+      font: contentStyle.font,
+      fontSize: contentStyle.fontSize,
+      fontFamily: contentStyle.fontFamily,
+      fontWeight: contentStyle.fontWeight,
+      fontStyle: contentStyle.fontStyle,
+      fontVariant: contentStyle.fontVariant,
+      fontStretch: contentStyle.fontStretch,
+      fontKerning: contentStyle.fontKerning,
+      fontFeatureSettings: contentStyle.fontFeatureSettings,
+      fontVariationSettings: contentStyle.fontVariationSettings,
+      textRendering: contentStyle.textRendering,
+      textTransform: contentStyle.textTransform,
+      direction: contentStyle.direction,
+      lineHeight: contentStyle.lineHeight,
+      letterSpacing: contentStyle.letterSpacing,
+      wordSpacing: contentStyle.wordSpacing,
+      textAlign: contentStyle.textAlign,
+      textIndent: contentStyle.textIndent,
+      whiteSpace: contentStyle.whiteSpace || "pre-wrap",
+      overflowWrap: contentStyle.overflowWrap || "break-word",
+      wordBreak: contentStyle.wordBreak || "break-word",
+      wordWrap: contentStyle.wordWrap,
+      tabSize: contentStyle.tabSize,
+      color: "rgba(0, 0, 0, 0.02)",
+      WebkitTextFillColor: "rgba(0, 0, 0, 0.02)",
+      background: "transparent",
+      padding: contentStyle.padding,
+      boxSizing: contentStyle.boxSizing,
+      transform: `translate(${geometry.content.left}px, ${geometry.content.top}px)`
+    });
+    mirror.innerHTML = buildCodeMirrorLiveDraftHtml(text, errors);
+    copyCodeMirrorLineMetrics(mirror, content);
+    overlay.appendChild(mirror);
+    document.body.appendChild(overlay);
+    state.liveHighlightReposition = () => {
+      if (!state.liveHighlightEl || !isConnectedToDocument(content)) return;
+      const next = getCodeMirrorOverlayGeometry(content);
+      if (!next) return;
+      Object.assign(overlay.style, {
+        top: next.viewport.top + "px",
+        left: next.viewport.left + "px",
+        width: next.viewport.width + "px",
+        height: next.viewport.height + "px"
+      });
+      mirror.style.width = next.content.width + "px";
+      mirror.style.minHeight = next.content.height + "px";
+      mirror.style.transform = `translate(${next.content.left}px, ${next.content.top}px)`;
+    };
+    state.liveHighlightScrollHandler = state.liveHighlightReposition;
+    scrollTarget.addEventListener("scroll", state.liveHighlightScrollHandler);
+    state.liveHighlightScrollTarget = scrollTarget;
+    state.liveHighlightReposition();
+    window.addEventListener("resize", state.liveHighlightReposition);
+    window.addEventListener("scroll", state.liveHighlightReposition, true);
+    startLiveHighlightPositionLoop();
+    state.liveHighlightTarget = content;
+  }
   function highlightLiveDraftContentEditable(ce, errors) {
-    const text = ce.textContent || ce.innerText || "";
+    const text = getLiveDraftText(ce);
     const cs = window.getComputedStyle(ce);
     const rect = ce.getBoundingClientRect();
     const overlay = document.createElement("div");
@@ -822,7 +1126,7 @@
     overlay.innerHTML = html;
     document.body.appendChild(overlay);
     state.liveHighlightReposition = () => {
-      if (!state.liveHighlightEl || !document.contains(ce)) return;
+      if (!state.liveHighlightEl || !isConnectedToDocument(ce)) return;
       const r = ce.getBoundingClientRect();
       state.liveHighlightEl.style.top = r.top + "px";
       state.liveHighlightEl.style.left = r.left + "px";
@@ -851,8 +1155,9 @@
         state.liveHighlightAnimationFrame = null;
       }
       if (state.liveHighlightScrollHandler) {
-        state.liveHighlightTarget?.removeEventListener("scroll", state.liveHighlightScrollHandler);
+        state.liveHighlightScrollTarget?.removeEventListener("scroll", state.liveHighlightScrollHandler);
         state.liveHighlightScrollHandler = null;
+        state.liveHighlightScrollTarget = null;
       }
       if (state.liveHighlightReposition) {
         window.removeEventListener("resize", state.liveHighlightReposition);
@@ -905,19 +1210,19 @@
     } catch {
     }
     setInterval(() => {
-      if (liveCheckTarget && document.contains(liveCheckTarget)) {
-        const val = (liveCheckTarget.value || liveCheckTarget.textContent || "").trim();
+      if (liveCheckTarget && isConnectedToDocument(liveCheckTarget)) {
+        const val = getLiveDraftText(liveCheckTarget).trim();
         if (!val) {
           removeErrorFloat();
           liveCheckTarget = null;
         }
       }
-      if (!liveCheckTarget || !document.contains(liveCheckTarget)) return;
+      if (!liveCheckTarget || !isConnectedToDocument(liveCheckTarget)) return;
       const elapsed = Date.now() - lastInputTime;
       if (elapsed < liveDelay) return;
       const ta = liveCheckTarget;
       liveCheckTarget = null;
-      const text = (ta.value || ta.textContent || "").trim();
+      const text = getLiveDraftText(ta).trim();
       if (text.length < state.minChars) return;
       checkLiveDraft(ta, text, getConversationKey());
     }, 500);
@@ -950,7 +1255,7 @@
         } else {
           return;
         }
-        if (conversationKey !== getConversationKey() || !document.contains(ta)) {
+        if (conversationKey !== getConversationKey() || !isConnectedToDocument(ta)) {
           return;
         }
         if (!resp.ok) {
@@ -977,14 +1282,14 @@
       }
     }
     document.addEventListener("input", (e) => {
-      const ta = e.target;
-      if (ta.tagName !== "TEXTAREA" && !ta.isContentEditable) return;
+      const ta = getEventEditableTarget(e);
+      if (!ta) return;
       if (state.skipLiveCheck) return;
       clearLiveDraftHighlights();
       removeErrorFloat();
       removeEditableGreenChecks();
       abortLiveDraftCheck();
-      const raw = ta.value || ta.textContent || "";
+      const raw = getLiveDraftText(ta);
       if (!raw || raw === ta.placeholder) {
         liveCheckTarget = null;
         return;
@@ -996,8 +1301,8 @@
     }, true);
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
-      const ta = e.target;
-      if (ta.tagName !== "TEXTAREA" && !ta.isContentEditable) return;
+      const ta = getEventEditableTarget(e);
+      if (!ta) return;
       liveCheckTarget = null;
       clearLiveDraftHighlights();
       removeErrorFloat();
@@ -1018,11 +1323,8 @@
     const correction = errorEl.getAttribute("data-correction");
     if (!correction) return;
     if (errorEl.hasAttribute("data-live-draft")) {
-      let ta = state.liveHighlightTarget;
+      const ta = findEditableTarget(state.liveHighlightTarget);
       if (!ta) {
-        ta = document.querySelector('footer div[contenteditable="true"][role="textbox"]') || document.querySelector('[contenteditable="true"][role="textbox"]') || document.querySelector('[contenteditable="true"]');
-      }
-      if (!ta || !document.contains(ta)) {
         hideTooltip();
         return;
       }
@@ -1035,10 +1337,8 @@
           end: Number(s.getAttribute("data-end")),
           correction: s.getAttribute("data-correction") || ""
         })).filter((f) => Number.isInteger(f.start) && Number.isInteger(f.end) && f.correction).sort((a, b) => b.start - a.start);
-        let text = (ta.value || ta.textContent || "").replace(/\u200B/g, "");
-        for (const f of fixes) {
-          text = text.slice(0, f.start) + f.correction + text.slice(f.end);
-        }
+        const originalText = ta.tagName === "TEXTAREA" ? ta.value.replace(/\u200B/g, "") : editableText(ta);
+        const text = applyCorrectionsToText(originalText, fixes);
         if (ta.tagName === "TEXTAREA") {
           ta.value = text;
           ta.selectionStart = ta.selectionEnd = text.length;
@@ -1053,66 +1353,7 @@
           clearLiveDraftHighlights();
           state.skipLiveCheck = true;
           state.cancelLiveDraft?.();
-          ta.focus();
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const el = document.querySelector(
-                'footer div[contenteditable="true"][role="textbox"]'
-              ) || document.querySelector('[contenteditable="true"][role="textbox"]') || document.querySelector('[contenteditable="true"]');
-              if (el && document.contains(el)) {
-                const before = (el.textContent || el.innerText || "").replace(/\u200B/g, "");
-                el.focus();
-                const sel = window.getSelection();
-                const range = document.createRange();
-                range.selectNodeContents(el);
-                sel.removeAllRanges();
-                sel.addRange(range);
-                el.dispatchEvent(new InputEvent("beforeinput", {
-                  bubbles: true,
-                  cancelable: true,
-                  inputType: "insertReplacementText",
-                  data: text
-                }));
-                requestAnimationFrame(() => {
-                  const after = (el.textContent || el.innerText || "").replace(/\u200B/g, "");
-                  if (after !== before) {
-                    showResultBadge("\u2713 Fixed!", 3e3);
-                  } else {
-                    console.debug(
-                      "[AI Grammar] beforeinput had no effect, falling back to CDP",
-                      { before, after, text: text.replace(/\u200B/g, "") }
-                    );
-                    applyFixCDP(text).then((success) => {
-                      if (success) {
-                        showResultBadge("\u2713 Fixed!", 3e3);
-                      } else {
-                        navigator.clipboard.writeText(text).catch(() => {
-                        });
-                        showResultBadge("Copied to clipboard \u2014 paste (Ctrl+V) to apply", 4e3);
-                      }
-                      state.skipLiveCheck = false;
-                    });
-                    return;
-                  }
-                  state.skipLiveCheck = false;
-                });
-              } else {
-                console.debug("[AI Grammar] contentEditable not found, falling back to CDP");
-                applyFixCDP(text).then((success) => {
-                  if (success) {
-                    showResultBadge("\u2713 Fixed!", 3e3);
-                  } else {
-                    navigator.clipboard.writeText(text).catch(() => {
-                    });
-                    showResultBadge("Copied to clipboard \u2014 paste (Ctrl+V) to apply", 4e3);
-                  }
-                  state.skipLiveCheck = false;
-                });
-                return;
-              }
-              state.skipLiveCheck = false;
-            });
-          });
+          void applyLiveDraftContentEditableText(text, ta);
         }
       }
       hideTooltip();
@@ -1127,26 +1368,78 @@
     errorEl.removeAttribute("tabindex");
     hideTooltip();
   }
+  function isEditableTarget(el) {
+    return !!el && (el.tagName === "TEXTAREA" || el.isContentEditable) && isConnectedToDocument(el);
+  }
+  function findEditableTarget(preferred) {
+    if (isEditableTarget(preferred)) return preferred;
+    const active = getDeepActiveElement();
+    if (isEditableTarget(active)) return active;
+    const fallback = document.querySelector('footer div[contenteditable="true"][role="textbox"]') || document.querySelector('[contenteditable="true"][role="textbox"]') || document.querySelector('[contenteditable="true"]');
+    return isEditableTarget(fallback) ? fallback : null;
+  }
+  function editableText(el) {
+    return getEditableText(el).replace(/\u200B/g, "");
+  }
+  async function applyLiveDraftContentEditableText(text, target) {
+    try {
+      const applied = await tryBeforeInput(text, target);
+      if (applied) {
+        showResultBadge("\u2713 Fixed!", 3e3);
+        return;
+      }
+      const appliedByCDP = await applyFixCDP(text);
+      if (appliedByCDP) {
+        showResultBadge("\u2713 Fixed!", 3e3);
+      } else {
+        navigator.clipboard.writeText(text).catch(() => {
+        });
+        showResultBadge("Copied to clipboard \u2014 paste (Ctrl+V) to apply", 4e3);
+      }
+    } finally {
+      state.skipLiveCheck = false;
+    }
+  }
+  function selectEditableContents(el) {
+    const selection = window.getSelection();
+    if (!selection) return false;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  }
+  function tryExecCommandReplacement(el, text) {
+    if (typeof document.execCommand !== "function" || !selectEditableContents(el)) return false;
+    return document.execCommand("insertText", false, text) === true;
+  }
   function tryBeforeInput(text, ta) {
     return new Promise((resolve) => {
       try {
-        ta.focus();
+        const target = findEditableTarget(ta);
+        if (!target) {
+          resolve(false);
+          return;
+        }
+        target.focus();
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            const el = document.querySelector(
-              'footer div[contenteditable="true"][role="textbox"]'
-            ) || document.querySelector('[contenteditable="true"][role="textbox"]') || document.querySelector('[contenteditable="true"]');
-            if (!el || !document.contains(el)) {
+            const el = findEditableTarget(target);
+            if (!el) {
               resolve(false);
               return;
             }
-            const before = (el.textContent || el.innerText || "").replace(/\u200B/g, "");
+            const before = editableText(el);
+            if (isCodeMirrorEditor(el)) {
+              const inserted = replaceCodeMirrorText(el, text);
+              requestAnimationFrame(() => {
+                const afterCodeMirrorEdit = editableText(el);
+                resolve(inserted && afterCodeMirrorEdit !== before || afterCodeMirrorEdit === text);
+              });
+              return;
+            }
             el.focus();
-            const sel = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            sel.removeAllRanges();
-            sel.addRange(range);
+            selectEditableContents(el);
             el.dispatchEvent(new InputEvent("beforeinput", {
               bubbles: true,
               cancelable: true,
@@ -1154,8 +1447,16 @@
               data: text
             }));
             requestAnimationFrame(() => {
-              const after = (el.textContent || el.innerText || "").replace(/\u200B/g, "");
-              resolve(after !== before);
+              const afterBeforeInput = editableText(el);
+              if (afterBeforeInput !== before || afterBeforeInput === text) {
+                resolve(true);
+                return;
+              }
+              const inserted = tryExecCommandReplacement(el, text);
+              requestAnimationFrame(() => {
+                const afterExecCommand = editableText(el);
+                resolve(inserted && afterExecCommand !== before || afterExecCommand === text);
+              });
             });
           });
         });
@@ -1178,11 +1479,17 @@
   }
   function applyCorrectionsToText(text, errors) {
     if (!Array.isArray(errors) || !errors.length) return text;
+    const seenFixes = /* @__PURE__ */ new Set();
     const fixes = errors.map((e) => ({
       start: Math.max(0, Number(e.start) || 0),
       end: Math.min(text.length, Number(e.end) || text.length),
       correction: e.correction || ""
-    })).filter((f) => f.start < f.end && f.correction).sort((a, b) => b.start - a.start);
+    })).filter((f) => f.start < f.end && f.correction).sort((a, b) => b.start - a.start).filter((fix) => {
+      const key = `${fix.start}:${fix.end}:${fix.correction}`;
+      if (seenFixes.has(key)) return false;
+      seenFixes.add(key);
+      return true;
+    });
     let out = text;
     for (const f of fixes) {
       out = out.slice(0, f.start) + f.correction + out.slice(f.end);
@@ -2168,7 +2475,7 @@
 
   // src/commands.js
   async function stripCommand(cmd, ta) {
-    const val = ta.value || ta.textContent || "";
+    const val = getEditableText(ta);
     const idx = val.lastIndexOf(cmd);
     if (idx < 0) return;
     const cleaned = val.slice(0, idx) + val.slice(idx + cmd.length);
@@ -2208,7 +2515,7 @@
           showResultBadge("Type a language code (e.g., ?/lang fr, ?/lang ja)");
           return;
         }
-        const value = ta.value || ta.textContent || "";
+        const value = getEditableText(ta);
         const cmdStr = "?/lang " + args;
         const cmdIdx = value.lastIndexOf(cmdStr);
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
@@ -2284,9 +2591,9 @@
     check: {
       help: "Manual grammar check for live-draft text",
       async run(_args, ta) {
-        console.debug("[AI Grammar] ?/check command fired", { value: (ta?.value || ta?.textContent || "").slice(0, 30), minChars: state.minChars });
+        console.debug("[AI Grammar] ?/check command fired", { value: getEditableText(ta).slice(0, 30), minChars: state.minChars });
         async function stripCheck(input) {
-          const val = input.value || input.textContent || "";
+          const val = getEditableText(input);
           const idx = val.lastIndexOf("?/check");
           const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + 7) : val).trimEnd();
           if (input.tagName === "TEXTAREA") {
@@ -2299,7 +2606,7 @@
             }
           }
         }
-        const value = ta.value || ta.textContent || "";
+        const value = getEditableText(ta);
         const cmdIdx = value.lastIndexOf("?/check");
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
         if (!draft || draft.length < state.minChars) {
@@ -2344,7 +2651,7 @@
     fix: {
       help: "Auto-correct the text you typed (everything before ?/fix)",
       async run(_args, ta) {
-        const value = ta.value || ta.textContent || "";
+        const value = getEditableText(ta);
         const cmdIdx = value.lastIndexOf("?/fix");
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
         if (!draft || draft.length < state.minChars) {
@@ -2415,7 +2722,7 @@
     polish: {
       help: "Polish the text you typed (everything before ?/polish)",
       async run(_args, ta) {
-        const value = ta.value || ta.textContent || "";
+        const value = getEditableText(ta);
         const cmdIdx = value.lastIndexOf("?/polish");
         const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
         if (!draft || draft.length < state.minChars) {
@@ -2677,7 +2984,7 @@
     if (!paletteTarget) return;
     hideCommandPalette();
     const ta = paletteTarget;
-    const value = ta.value || ta.textContent || "";
+    const value = getEditableText(ta);
     const idx = value.lastIndexOf("?/");
     const prefix = idx >= 0 ? value.slice(0, idx) : "";
     const newValue = prefix + text;
@@ -2696,7 +3003,7 @@
     if (!paletteTarget) return;
     const ta = paletteTarget;
     hideCommandPalette();
-    const value = ta.value || ta.textContent || "";
+    const value = getEditableText(ta);
     const fullCmd = cmdName === "lang" ? "?/lang en" : `?/${cmdName}`;
     const idx = value.lastIndexOf("?/");
     const prefix = idx >= 0 ? value.slice(0, idx) : "";
@@ -2716,7 +3023,7 @@
       showResultBadge(`Command failed: ${err.message}`);
     }
     setTimeout(async () => {
-      const v = ta.value || ta.textContent || "";
+      const v = getEditableText(ta);
       const cleaned = v.replace(fullCmd, "").trimEnd();
       if (ta.tagName === "TEXTAREA") {
         ta.value = cleaned;
@@ -2811,7 +3118,7 @@
           if (!langPaletteEl || !langPaletteTarget) return;
           const code = unique.code;
           const ta2 = langPaletteTarget;
-          const val = ta2.value || ta2.textContent || "";
+          const val = getEditableText(ta2);
           const escaped = langPaletteFilter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           const re = new RegExp("\\?/lang\\s+" + escaped + "$");
           const m = val.match(re);
@@ -2873,7 +3180,7 @@
   async function commitLanguageSelection(code) {
     if (!langPaletteTarget) return;
     const ta = langPaletteTarget;
-    const val = ta.value || ta.textContent || "";
+    const val = getEditableText(ta);
     const re = /\?\/lang(\s+[^\s]*)?$/;
     const m = val.match(re);
     if (m) {
@@ -2915,6 +3222,14 @@
     document.addEventListener("focusin", scheduleConversationCheck, true);
     document.addEventListener("input", scheduleConversationCheck, true);
     setInterval(handleConversationMaybeChanged, 1e3);
+    function getComposedElementTarget(event) {
+      const path = typeof event?.composedPath === "function" ? event.composedPath() : [event?.target];
+      return path.find((node) => node?.nodeType === 1) || event?.target || null;
+    }
+    function getComposedFormTarget(event) {
+      const path = typeof event?.composedPath === "function" ? event.composedPath() : [event?.target];
+      return path.find((node) => node?.tagName === "FORM") || getComposedElementTarget(event);
+    }
     async function processCapturedText(captured, textarea) {
       if (!captured || captured.length < state.minChars) return;
       if (/\?\/\w+(\s+\S+)?$/.test(captured)) {
@@ -2925,7 +3240,7 @@
       state.activeConversationKey = conversationKey;
       state.lastUserText = captured;
       state.lastUserTextTime = Date.now();
-      if (textarea && document.contains(textarea)) {
+      if (textarea && isConnectedToDocument(textarea)) {
         const messageList = findMessageList(textarea);
         if (messageList) {
           state.pendingSubmission = { text: captured, messageList, time: Date.now(), conversationKey };
@@ -2936,7 +3251,7 @@
       if (!scope?.querySelectorAll) return "";
       const editables = scope.querySelectorAll('[role="textbox"][contenteditable="true"], [contenteditable="true"]');
       for (const ed of editables) {
-        const captured = (ed.textContent || "").trim();
+        const captured = getEditableText(ed).trim();
         if (captured) return captured;
       }
       const textareas = scope.querySelectorAll("textarea");
@@ -2952,7 +3267,7 @@
       return "";
     }
     function findMessageList(textarea) {
-      if (!textarea || !document.contains(textarea)) return null;
+      if (!textarea || !isConnectedToDocument(textarea)) return null;
       let el = textarea.parentElement;
       let depth = 0;
       const MAX_DEPTH = 12;
@@ -2974,7 +3289,7 @@
       return textarea.parentElement?.parentElement?.parentElement || null;
     }
     document.addEventListener("submit", (e) => {
-      const form = e.target;
+      const form = getComposedFormTarget(e);
       const textareas = form.querySelectorAll("textarea");
       const inputs = form.querySelectorAll('input[type="text"]');
       const editables = form.querySelectorAll('[role="textbox"][contenteditable="true"], [contenteditable="true"]');
@@ -2998,7 +3313,7 @@
       }
       if (!captured) {
         for (const ed of editables) {
-          captured = (ed.textContent || "").trim();
+          captured = getEditableText(ed).trim();
           if (captured) {
             ta = ed;
             break;
@@ -3010,16 +3325,17 @@
       processCapturedText(captured, ta);
     }, true);
     document.addEventListener("mousedown", (e) => {
-      const control = e.target.closest?.('button, input[type="button"], input[type="submit"], [role="button"]');
+      const eventTarget = getComposedElementTarget(e);
+      const control = eventTarget?.closest?.('button, input[type="button"], input[type="submit"], [role="button"]');
       if (!control) return;
       const ariaLabel = (control.getAttribute?.("aria-label") || "").toLowerCase();
       const testId = (control.getAttribute?.("data-testid") || "").toLowerCase();
       const label = (control.innerText || control.value || ariaLabel || "").trim().toLowerCase();
       const looksLikeSend = /^(send|submit|post|reply|comment)$/.test(label) || control.type === "submit" || testId.includes("send");
       if (!looksLikeSend) return;
-      const active = document.activeElement;
+      const active = getDeepActiveElement();
       if (active?.tagName === "TEXTAREA" || active?.isContentEditable) {
-        const captured = (active.value || active.textContent || "").trim();
+        const captured = getEditableText(active).trim();
         if (captured) {
           clearTimeout(commandDebounce);
           commandDebounce = null;
@@ -3028,9 +3344,10 @@
       }
     }, true);
     document.addEventListener("click", (e) => {
-      let control = e.target.closest?.('button, input[type="button"], input[type="submit"]');
+      const eventTarget = getComposedElementTarget(e);
+      let control = eventTarget?.closest?.('button, input[type="button"], input[type="submit"]');
       if (!control) {
-        const candidate = e.target.closest?.('[role="button"]') || e.target;
+        const candidate = eventTarget?.closest?.('[role="button"]') || eventTarget;
         const ariaLabel = (candidate.getAttribute?.("aria-label") || "").toLowerCase();
         const testId = (candidate.getAttribute?.("data-testid") || "").toLowerCase();
         if (/^(send|submit)$/.test(ariaLabel) || testId.includes("send")) {
@@ -3044,10 +3361,10 @@
       const form = control.closest("form");
       const scope = form || control.closest('.input-row, [role="form"], [role="textbox"][contenteditable="true"], [contenteditable="true"]') || control.parentElement;
       let captured = getTextFromControls(scope);
-      let active = document.activeElement;
+      let active = getDeepActiveElement();
       if (!captured) {
         if (active?.tagName === "TEXTAREA" || active?.isContentEditable) {
-          captured = (active.value || active.textContent || "").trim();
+          captured = getEditableText(active).trim();
         }
       }
       let ta = active;
@@ -3060,8 +3377,8 @@
       processCapturedText(captured, ta);
     }, true);
     document.addEventListener("keydown", (e) => {
-      const ta = e.target;
-      if (ta.tagName !== "TEXTAREA" && !ta.isContentEditable) return;
+      const ta = getEventEditableTarget(e);
+      if (!ta) return;
       if (langPaletteEl) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -3112,7 +3429,7 @@
         return;
       }
       if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
-      const text = (ta.value || ta.textContent || "").trim();
+      const text = getEditableText(ta).trim();
       clearTimeout(commandDebounce);
       commandDebounce = null;
       if (/\?\/\b(fix|polish|check|lang)\b\s*$/.test(text)) {
@@ -3123,11 +3440,11 @@
     }, true);
     let commandDebounce = null;
     document.addEventListener("input", (e) => {
-      const ta = e.target;
-      if (ta.tagName !== "TEXTAREA" && !ta.isContentEditable) return;
+      const ta = getEventEditableTarget(e);
+      if (!ta) return;
       if (state.replacingCommand) return;
       clearTimeout(commandDebounce);
-      const value = ta.value || ta.textContent || "";
+      const value = getEditableText(ta);
       if (/\?\/lang\s+\S*$/.test(value) || /\?\/lang\s*$/.test(value)) {
         const langMatch = value.match(/\?\/lang\s*(.*)$/);
         const filter = (langMatch?.[1] || "").trim();
@@ -3153,11 +3470,11 @@
             hideCommandPalette();
             const matched = matches[0];
             commandDebounce = setTimeout(async () => {
-              const currentValue = ta.value || ta.textContent || "";
+              const currentValue = getEditableText(ta);
               const fullCmd = matched.full;
               if (!currentValue.includes(cmdText)) return;
-              const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || "").lastIndexOf(cmdText);
-              const val = ta.value || ta.textContent || "";
+              const val = getEditableText(ta);
+              const idx = val.lastIndexOf(cmdText);
               if (idx >= 0) {
                 const suffix = matched.name === "lang" ? " " : "";
                 const replaced = val.slice(0, idx) + fullCmd + suffix + val.slice(idx + cmdText.length);
@@ -3190,8 +3507,8 @@
               }
               if (matched.name !== "fix" && matched.name !== "polish" && matched.name !== "check") {
                 await new Promise((r) => setTimeout(r, 400));
-                const idx2 = ta.value ? ta.value.lastIndexOf(fullCmd) : (ta.textContent || "").lastIndexOf(fullCmd);
-                const val2 = ta.value || ta.textContent || "";
+                const val2 = getEditableText(ta);
+                const idx2 = val2.lastIndexOf(fullCmd);
                 const cleaned = (idx2 >= 0 ? val2.slice(0, idx2) + val2.slice(idx2 + fullCmd.length) : val2).trimEnd();
                 state.skipLiveCheck = true;
                 if (ta.tagName === "TEXTAREA") {
@@ -3212,7 +3529,7 @@
           return;
         }
         commandDebounce = setTimeout(async () => {
-          const currentValue = ta.value || ta.textContent || "";
+          const currentValue = getEditableText(ta);
           console.debug("[AI Grammar] Debounce fired", { cmdName, cmdText, currentValue: currentValue.slice(-20), includes: currentValue.includes(cmdText) });
           if (!currentValue.includes(cmdText)) return;
           if (cmdName === "lang" && !cmdArgs) {
@@ -3231,8 +3548,8 @@
           if (cmdName !== "fix" && cmdName !== "polish" && cmdName !== "check" && cmdName !== "lang") {
             if (cmdName === "lang" && !cmdArgs) {
             } else {
-              const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || "").lastIndexOf(cmdText);
-              const val = ta.value || ta.textContent || "";
+              const val = getEditableText(ta);
+              const idx = val.lastIndexOf(cmdText);
               const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
               if (ta.tagName === "TEXTAREA") {
                 ta.value = cleaned;

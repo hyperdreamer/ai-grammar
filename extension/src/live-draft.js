@@ -14,6 +14,16 @@ import {
   removePendingBadge,
   showResultBadge,
 } from './indicators.js';
+import { getEditableText, getEventEditableTarget, isConnectedToDocument } from './dom-utils.js';
+import {
+  getCodeMirrorOverlayGeometry,
+  getCodeMirrorScrollContainer,
+  isCodeMirrorEditor,
+} from './codemirror-bridge.js';
+
+function getLiveDraftText(target) {
+  return getEditableText(target);
+}
 
 // -----------------------------------------------------------------------
 // Live draft highlights
@@ -26,11 +36,12 @@ export function highlightLiveDraft(ta, errors) {
   if (ta.tagName === 'TEXTAREA') {
     highlightLiveDraftTextarea(ta, errors);
   } else if (ta.isContentEditable) {
-    // WhatsApp's Lexical editor corrupts on DOM-span injection;
-    // use the overlay approach only there.  Other contentEditable
-    // inputs (test pages, plain sites) get the floating panel which
-    // doesn't risk making real text invisible.
-    if (getWhatsAppBridge()) {
+    // Managed editors cannot safely receive span injection. CodeMirror gets a
+    // scroll-viewport mirror; WhatsApp retains its established mirror path;
+    // ordinary contenteditables retain the lightweight floating panel.
+    if (isCodeMirrorEditor(ta)) {
+      highlightLiveDraftCodeMirror(ta, errors);
+    } else if (getWhatsAppBridge()) {
       highlightLiveDraftContentEditable(ta, errors);
     } else {
       showErrorFloat(errors, ta);
@@ -86,10 +97,11 @@ function highlightLiveDraftTextarea(textarea, errors) {
   overlay.scrollTop = textarea.scrollTop;
   overlay.scrollLeft = textarea.scrollLeft;
   textarea.addEventListener('scroll', state.liveHighlightScrollHandler);
+  state.liveHighlightScrollTarget = textarea;
 
   // Reposition on resize/scroll
   state.liveHighlightReposition = () => {
-    if (!state.liveHighlightEl || !document.contains(textarea)) return;
+    if (!state.liveHighlightEl || !isConnectedToDocument(textarea)) return;
     const r = textarea.getBoundingClientRect();
     state.liveHighlightEl.style.top = r.top + 'px';
     state.liveHighlightEl.style.left = r.left + 'px';
@@ -103,8 +115,189 @@ function highlightLiveDraftTextarea(textarea, errors) {
   state.liveHighlightTarget = textarea;
 }
 
+function codeMirrorErrorClass(type) {
+  if (type === 'improvement') return 'ai-grammar-improvement';
+  if (type === 'idiom') return 'ai-grammar-idiom';
+  return 'ai-grammar-error';
+}
+
+function buildCodeMirrorErrorSpan(error, start, end, text) {
+  const type = error.type || 'error';
+  return '<span class="' + codeMirrorErrorClass(type) + ' ag-live-error"'
+    + ' style="pointer-events:auto;cursor:pointer;text-underline-offset:0"'
+    + ' data-correction="' + escapeHtml(error.correction || '') + '"'
+    + ' data-explanation="' + escapeHtml(error.explanation || '') + '"'
+    + ' data-error="' + escapeHtml(error.error || '') + '"'
+    + ' data-type="' + escapeHtml(type) + '"'
+    + ' data-live-draft="1"'
+    + ' data-start="' + error.start + '"'
+    + ' data-end="' + error.end + '"'
+    + ' tabindex="0">' + escapeHtml(text.slice(start, end)) + '</span>';
+}
+
+function normaliseCodeMirrorErrors(errors, textLength) {
+  return [...errors]
+    .map(error => {
+      const start = Number(error.start);
+      const end = Number(error.end);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+      return { ...error, start: Math.max(0, start), end: Math.min(textLength, end) };
+    })
+    .filter(error => error && error.start < error.end)
+    .sort((a, b) => a.start - b.start);
+}
+
+function buildCodeMirrorLiveDraftHtml(text, errors) {
+  const sorted = normaliseCodeMirrorErrors(errors, text.length);
+  const lines = text.split('\n');
+  let lineStart = 0;
+
+  return lines.map(line => {
+    const lineEnd = lineStart + line.length;
+    let cursor = lineStart;
+    let html = '';
+
+    for (const error of sorted) {
+      const start = Math.max(lineStart, error.start);
+      const end = Math.min(lineEnd, error.end);
+      if (start < cursor || start >= end) continue;
+      html += escapeHtml(text.slice(cursor, start));
+      html += buildCodeMirrorErrorSpan(error, start, end, text);
+      cursor = end;
+    }
+
+    html += escapeHtml(text.slice(cursor, lineEnd));
+    lineStart = lineEnd + 1;
+    return '<div class="ag-cm-live-line">' + (html || '<br>') + '</div>';
+  }).join('');
+}
+
+function copyCodeMirrorLineMetrics(mirror, content) {
+  const sourceLine = content.querySelector?.(':scope > .cm-line');
+  if (!sourceLine) return;
+
+  const lineStyle = window.getComputedStyle(sourceLine);
+  for (const line of mirror.querySelectorAll('.ag-cm-live-line')) {
+    Object.assign(line.style, {
+      display: lineStyle.display,
+      boxSizing: lineStyle.boxSizing,
+      font: lineStyle.font,
+      fontSize: lineStyle.fontSize,
+      fontFamily: lineStyle.fontFamily,
+      fontWeight: lineStyle.fontWeight,
+      fontStyle: lineStyle.fontStyle,
+      fontVariant: lineStyle.fontVariant,
+      fontStretch: lineStyle.fontStretch,
+      lineHeight: lineStyle.lineHeight,
+      letterSpacing: lineStyle.letterSpacing,
+      wordSpacing: lineStyle.wordSpacing,
+      textAlign: lineStyle.textAlign,
+      textIndent: lineStyle.textIndent,
+      whiteSpace: lineStyle.whiteSpace,
+      overflowWrap: lineStyle.overflowWrap,
+      wordBreak: lineStyle.wordBreak,
+      wordWrap: lineStyle.wordWrap,
+      tabSize: lineStyle.tabSize,
+      direction: lineStyle.direction,
+      padding: lineStyle.padding,
+      margin: lineStyle.margin,
+    });
+  }
+}
+
+function highlightLiveDraftCodeMirror(content, errors) {
+  const geometry = getCodeMirrorOverlayGeometry(content);
+  const scrollTarget = getCodeMirrorScrollContainer(content);
+  if (!geometry || !scrollTarget) return;
+
+  const text = getLiveDraftText(content);
+  const contentStyle = window.getComputedStyle(content);
+  const overlay = document.createElement('div');
+  const mirror = document.createElement('div');
+  state.liveHighlightEl = overlay;
+
+  Object.assign(overlay.style, {
+    position: 'fixed',
+    top: geometry.viewport.top + 'px',
+    left: geometry.viewport.left + 'px',
+    width: geometry.viewport.width + 'px',
+    height: geometry.viewport.height + 'px',
+    overflow: 'hidden',
+    pointerEvents: 'none',
+    zIndex: '2147483645',
+    background: 'transparent',
+  });
+
+  Object.assign(mirror.style, {
+    position: 'absolute',
+    top: '0',
+    left: '0',
+    width: geometry.content.width + 'px',
+    minHeight: geometry.content.height + 'px',
+    pointerEvents: 'none',
+    font: contentStyle.font,
+    fontSize: contentStyle.fontSize,
+    fontFamily: contentStyle.fontFamily,
+    fontWeight: contentStyle.fontWeight,
+    fontStyle: contentStyle.fontStyle,
+    fontVariant: contentStyle.fontVariant,
+    fontStretch: contentStyle.fontStretch,
+    fontKerning: contentStyle.fontKerning,
+    fontFeatureSettings: contentStyle.fontFeatureSettings,
+    fontVariationSettings: contentStyle.fontVariationSettings,
+    textRendering: contentStyle.textRendering,
+    textTransform: contentStyle.textTransform,
+    direction: contentStyle.direction,
+    lineHeight: contentStyle.lineHeight,
+    letterSpacing: contentStyle.letterSpacing,
+    wordSpacing: contentStyle.wordSpacing,
+    textAlign: contentStyle.textAlign,
+    textIndent: contentStyle.textIndent,
+    whiteSpace: contentStyle.whiteSpace || 'pre-wrap',
+    overflowWrap: contentStyle.overflowWrap || 'break-word',
+    wordBreak: contentStyle.wordBreak || 'break-word',
+    wordWrap: contentStyle.wordWrap,
+    tabSize: contentStyle.tabSize,
+    color: 'rgba(0, 0, 0, 0.02)',
+    WebkitTextFillColor: 'rgba(0, 0, 0, 0.02)',
+    background: 'transparent',
+    padding: contentStyle.padding,
+    boxSizing: contentStyle.boxSizing,
+    transform: `translate(${geometry.content.left}px, ${geometry.content.top}px)`,
+  });
+
+  mirror.innerHTML = buildCodeMirrorLiveDraftHtml(text, errors);
+  copyCodeMirrorLineMetrics(mirror, content);
+  overlay.appendChild(mirror);
+  document.body.appendChild(overlay);
+
+  state.liveHighlightReposition = () => {
+    if (!state.liveHighlightEl || !isConnectedToDocument(content)) return;
+    const next = getCodeMirrorOverlayGeometry(content);
+    if (!next) return;
+    Object.assign(overlay.style, {
+      top: next.viewport.top + 'px',
+      left: next.viewport.left + 'px',
+      width: next.viewport.width + 'px',
+      height: next.viewport.height + 'px',
+    });
+    mirror.style.width = next.content.width + 'px';
+    mirror.style.minHeight = next.content.height + 'px';
+    mirror.style.transform = `translate(${next.content.left}px, ${next.content.top}px)`;
+  };
+  state.liveHighlightScrollHandler = state.liveHighlightReposition;
+  scrollTarget.addEventListener('scroll', state.liveHighlightScrollHandler);
+  state.liveHighlightScrollTarget = scrollTarget;
+  state.liveHighlightReposition();
+  window.addEventListener('resize', state.liveHighlightReposition);
+  window.addEventListener('scroll', state.liveHighlightReposition, true);
+  startLiveHighlightPositionLoop();
+
+  state.liveHighlightTarget = content;
+}
+
 function highlightLiveDraftContentEditable(ce, errors) {
-  const text = ce.textContent || ce.innerText || '';
+  const text = getLiveDraftText(ce);
   const cs = window.getComputedStyle(ce);
   const rect = ce.getBoundingClientRect();
 
@@ -151,18 +344,8 @@ function highlightLiveDraftContentEditable(ce, errors) {
   overlay.innerHTML = html;
   document.body.appendChild(overlay);
 
-  // Live-draft (manual check) underlines for contentEditable: use
-  // CSS text-decoration (from .ai-grammar-error etc.) with the same
-  // rgba(0,0,0,0.02) near-transparent-text trick as the inline
-  // post-submit overlays.  This positions underlines relative to the
-  // text baseline — the SVG background-image approach positioned
-  // from the span bottom (driven by line-height, not baseline) and
-  // produced underlines that sat too low in the input field.
-  //
-  // All underlines at baseline (offset 0).
-
   state.liveHighlightReposition = () => {
-    if (!state.liveHighlightEl || !document.contains(ce)) return;
+    if (!state.liveHighlightEl || !isConnectedToDocument(ce)) return;
     const r = ce.getBoundingClientRect();
     state.liveHighlightEl.style.top = r.top + 'px';
     state.liveHighlightEl.style.left = r.left + 'px';
@@ -194,8 +377,9 @@ export function clearLiveDraftHighlights() {
       state.liveHighlightAnimationFrame = null;
     }
     if (state.liveHighlightScrollHandler) {
-      state.liveHighlightTarget?.removeEventListener('scroll', state.liveHighlightScrollHandler);
+      state.liveHighlightScrollTarget?.removeEventListener('scroll', state.liveHighlightScrollHandler);
       state.liveHighlightScrollHandler = null;
+      state.liveHighlightScrollTarget = null;
     }
     if (state.liveHighlightReposition) {
       window.removeEventListener('resize', state.liveHighlightReposition);
@@ -264,15 +448,15 @@ export function setupLiveDraftCheck() {
   // Poll every 500ms to check if delay has elapsed since last input
   setInterval(() => {
     // Clear highlights if textarea was cleared externally (no input event)
-    if (liveCheckTarget && document.contains(liveCheckTarget)) {
-      const val = (liveCheckTarget.value || liveCheckTarget.textContent || '').trim();
+    if (liveCheckTarget && isConnectedToDocument(liveCheckTarget)) {
+      const val = getLiveDraftText(liveCheckTarget).trim();
       if (!val) {
         removeErrorFloat();
         liveCheckTarget = null;
       }
     }
 
-    if (!liveCheckTarget || !document.contains(liveCheckTarget)) return;
+    if (!liveCheckTarget || !isConnectedToDocument(liveCheckTarget)) return;
 
     const elapsed = Date.now() - lastInputTime;
     if (elapsed < liveDelay) return;
@@ -281,7 +465,7 @@ export function setupLiveDraftCheck() {
     const ta = liveCheckTarget;
     liveCheckTarget = null;
 
-    const text = (ta.value || ta.textContent || '').trim();
+    const text = getLiveDraftText(ta).trim();
     if (text.length < state.minChars) return;
 
     checkLiveDraft(ta, text, getConversationKey());
@@ -322,7 +506,7 @@ export function setupLiveDraftCheck() {
         // Aborted by user editing — don't apply stale results
         return;
       }
-      if (conversationKey !== getConversationKey() || !document.contains(ta)) {
+      if (conversationKey !== getConversationKey() || !isConnectedToDocument(ta)) {
         return;
       }
       if (!resp.ok) {
@@ -353,8 +537,8 @@ export function setupLiveDraftCheck() {
   }
 
   document.addEventListener('input', (e) => {
-    const ta = e.target;
-    if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
+    const ta = getEventEditableTarget(e);
+    if (!ta) return;
 
     // Skip if a fix/polish command is in flight — don't clear its overlay.
     if (state.skipLiveCheck) return;
@@ -366,7 +550,7 @@ export function setupLiveDraftCheck() {
     abortLiveDraftCheck();
 
     // Skip placeholder-only text or empty value — and clear highlights
-    const raw = ta.value || ta.textContent || '';
+    const raw = getLiveDraftText(ta);
     if (!raw || raw === ta.placeholder) {
       liveCheckTarget = null;
       return;
@@ -381,8 +565,8 @@ export function setupLiveDraftCheck() {
   // Cancel on submit/Enter
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
-    const ta = e.target;
-    if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
+    const ta = getEventEditableTarget(e);
+    if (!ta) return;
     liveCheckTarget = null;
     clearLiveDraftHighlights();
     removeErrorFloat();
