@@ -9,6 +9,7 @@ import {
 import { tryBeforeInput, applyFixCDP } from './apply-correction.js';
 import { highlightLiveDraft } from './live-draft.js';
 import { LANGUAGES, searchLanguages, findUniqueMatch } from './languages.js';
+import { getEditableText } from './dom-utils.js';
 
 // -----------------------------------------------------------------------
 // Command system (?/ prefix)
@@ -21,7 +22,7 @@ import { LANGUAGES, searchLanguages, findUniqueMatch } from './languages.js';
  * so the poller doesn't re-check the stripped text later.
  */
 async function stripCommand(cmd, ta) {
-  const val = ta.value || ta.textContent || '';
+  const val = getEditableText(ta);
   const idx = val.lastIndexOf(cmd);
   if (idx < 0) return;
   const cleaned = val.slice(0, idx) + val.slice(idx + cmd.length);
@@ -64,7 +65,7 @@ export const COMMANDS = {
         showResultBadge('Type a language code (e.g., ?/lang fr, ?/lang ja)');
         return;
       }
-      const value = ta.value || ta.textContent || '';
+      const value = getEditableText(ta);
       const cmdStr = '?/lang ' + args;
       const cmdIdx = value.lastIndexOf(cmdStr);
       const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
@@ -142,10 +143,10 @@ export const COMMANDS = {
   check: {
     help: 'Manual grammar check for live-draft text',
     async run(_args, ta) {
-      console.debug('[AI Grammar] ?/check command fired', { value: (ta?.value || ta?.textContent || '').slice(0, 30), minChars: state.minChars });
+      console.debug('[AI Grammar] ?/check command fired', { value: getEditableText(ta).slice(0, 30), minChars: state.minChars });
       /** Strip the ?/check command from the input field */
       async function stripCheck(input) {
-        const val = input.value || input.textContent || '';
+        const val = getEditableText(input);
         const idx = val.lastIndexOf('?/check');  // '?/check'.length === 7
         const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + 7) : val).trimEnd();
         if (input.tagName === 'TEXTAREA') {
@@ -156,12 +157,12 @@ export const COMMANDS = {
           if (await tryBeforeInput(cleaned, input)) {
             // Success
           } else {
-            applyFixCDP(cleaned);
+            await applyFixCDP(cleaned);
           }
         }
       }
 
-      const value = ta.value || ta.textContent || '';
+      const value = getEditableText(ta);
       const cmdIdx = value.lastIndexOf('?/check');
       const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
 
@@ -219,7 +220,7 @@ export const COMMANDS = {
   fix: {
     help: 'Auto-correct the text you typed (everything before ?/fix)',
     async run(_args, ta) {
-      const value = ta.value || ta.textContent || '';
+      const value = getEditableText(ta);
       const cmdIdx = value.lastIndexOf('?/fix');
       const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
       if (!draft || draft.length < state.minChars) {
@@ -300,7 +301,7 @@ export const COMMANDS = {
   polish: {
     help: 'Polish the text you typed (everything before ?/polish)',
     async run(_args, ta) {
-      const value = ta.value || ta.textContent || '';
+      const value = getEditableText(ta);
       const cmdIdx = value.lastIndexOf('?/polish');
       const draft = (cmdIdx >= 0 ? value.slice(0, cmdIdx) : value).trim();
       if (!draft || draft.length < state.minChars) {
@@ -455,6 +456,10 @@ export async function handleCommand(text, ta = null) {
       }
       showResultBadge(`Polished: "${polished.slice(0, 80)}${polished.length > 80 ? '...' : ''}"`, 10000);
       state.commandInFlight = false;
+    } else if (cmdName === 'check' && !ta) {
+      showResultBadge('Cannot check — no editable field found');
+    } else if (cmdName === 'lang' && !ta) {
+      showResultBadge('Cannot translate — no editable field found');
     } else {
       await cmd.run(args);
     }
@@ -593,7 +598,7 @@ async function insertPaletteText(text) {
   if (!paletteTarget) return;
   hideCommandPalette();
   const ta = paletteTarget;
-  const value = ta.value || ta.textContent || '';
+  const value = getEditableText(ta);
   // Replace the last ?/ with the new text, keeping everything before it
   const idx = value.lastIndexOf('?/');
   const prefix = idx >= 0 ? value.slice(0, idx) : '';
@@ -617,7 +622,7 @@ async function applyPaletteCommand(cmdName) {
   hideCommandPalette();
 
   // Replace the last ?/ with the full command, keeping text before it
-  const value = ta.value || ta.textContent || '';
+  const value = getEditableText(ta);
   const fullCmd = cmdName === 'lang' ? '?/lang en' : `?/${cmdName}`;
   const idx = value.lastIndexOf('?/');
   const prefix = idx >= 0 ? value.slice(0, idx) : '';
@@ -635,14 +640,14 @@ async function applyPaletteCommand(cmdName) {
 
   // Execute the command
   try {
-    await COMMANDS[cmdName].run('');
+    await COMMANDS[cmdName].run('', ta);
   } catch (err) {
     showResultBadge(`Command failed: ${err.message}`);
   }
 
   // Clear the command text from the input
   setTimeout(async () => {
-    const v = ta.value || ta.textContent || '';
+    const v = getEditableText(ta);
     const cleaned = v.replace(fullCmd, '').trimEnd();
     if (ta.tagName === 'TEXTAREA') {
       ta.value = cleaned;
@@ -753,7 +758,7 @@ export function showLanguagePalette(ta, filter = '') {
         const code = unique.code;
         // Replace the filter portion in the textarea
         const ta2 = langPaletteTarget;
-        const val = ta2.value || ta2.textContent || '';
+        const val = getEditableText(ta2);
         const escaped = langPaletteFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const re = new RegExp('\\?/lang\\s+' + escaped + '$');
         const m = val.match(re);
@@ -819,7 +824,7 @@ async function commitLanguageSelection(code) {
   if (!langPaletteTarget) return;
   const ta = langPaletteTarget;
   // Replace "?/lang <filter>" with "?/lang <code>" in the textarea
-  const val = ta.value || ta.textContent || '';
+  const val = getEditableText(ta);
   // Find the trailing "?/lang ..." or "/lang ..." portion
   const re = /\?\/lang(\s+[^\s]*)?$/;
   const m = val.match(re);
@@ -851,4 +856,3 @@ async function commitLanguageSelection(code) {
     }
   }, 600);
 }
-

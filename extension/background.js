@@ -5,6 +5,7 @@
 // - Manage per-tab check state
 // - Handle keyboard shortcut (check selected text)
 
+importScripts('src/cke-bridge-installer.js');
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8766;
 
@@ -176,12 +177,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 async function handleApplyFix(text, tabId) {
   if (!text || !tabId) return { ok: false, error: 'Missing text or tabId' };
 
+  let attached = false;
   try {
     // Attach debugger
     await new Promise((resolve, reject) => {
       chrome.debugger.attach({ tabId }, '1.3', () => {
         if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve();
+        else { attached = true; resolve(); }
       });
     });
 
@@ -219,7 +221,7 @@ async function handleApplyFix(text, tabId) {
     return { ok: true };
 
   } catch (e) {
-    await detachDebugger(tabId).catch(() => {});
+    if (attached) await detachDebugger(tabId).catch(() => {});
     return { ok: false, error: e.message };
   }
 }
@@ -255,40 +257,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     chrome.scripting.executeScript({
       target: { tabId: sender.tab.id },
       world: 'MAIN',
-      func: () => {
-        if (window.__agCKEBridge) return;
-        window.__agCKEBridge = true;
-        const POLL_MS = 500;
-        (function poll() {
-          const el = document.querySelector('.ck-editor__editable[contenteditable="true"]');
-          const instance = el && el.ckeditorInstance;
-          if (!instance) { setTimeout(poll, POLL_MS); return; }
-          try {
-            instance.model.document.on('change:data', function() {
-              try {
-                window.postMessage({source:'ag-cke-bridge', type:'change'}, '*');
-              } catch(e) {}
-            });
-          } catch(e) {
-            setTimeout(poll, POLL_MS);
-          }
-        })();
-
-        // Also expose an apply-fix helper for the content script
-        window.__agCKEApply = function(text) {
-          const el = document.querySelector('.ck-editor__editable[contenteditable="true"]');
-          const instance = el && el.ckeditorInstance;
-          if (!instance) return false;
-          instance.model.change(writer => {
-            const root = instance.model.document.getRoot();
-            writer.remove(writer.createRangeIn(root));
-            const p = writer.createElement('paragraph');
-            writer.append(p, root);
-            writer.appendText(text, {}, p);
-          });
-          return true;
-        };
-      }
+      func: installCKEBridge
     }).then(() => sendResponse({ok: true})).catch(e => sendResponse({ok: false, error: e.message}));
     return true;
   }

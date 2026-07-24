@@ -1,6 +1,6 @@
 # AI Grammar Checker
 
-Chrome MV3 extension that detects grammar, spelling, and style issues in text using AI. Works on any web page — WhatsApp Web, Microsoft Teams, and generic text inputs. Highlights errors inline, shows corrections in tooltips, and offers one-click fixing, polishing, and translation.
+Chrome MV3 extension that detects grammar, spelling, and style issues in text using AI. Works on any web page — WhatsApp Web, Microsoft Teams, generic text inputs, and CodeMirror editors exposed through open Shadow DOM. Highlights errors inline, shows corrections in tooltips, and offers one-click fixing, polishing, and translation.
 
 ## Architecture
 
@@ -13,10 +13,11 @@ extension/               # Chrome Extension (Manifest V3)
     api.js               # Shared backend fetch wrappers (check, polish, translate)
     state.js             # Mutable state, safeGetStorage, escapeHtml
     styles.js            # CSS injection (underlines, tooltips, badges)
-    dom-utils.js         # DOM helpers (text extraction, block detection)
+    dom-utils.js         # DOM helpers (shadow-aware event/text extraction)
+    codemirror-bridge.js # Capability-based CodeMirror adapter + scroll support
     highlight.js         # Error highlighting (DOM + overlay strategies)
     tooltip.js           # Floating tooltip with smart positioning
-    apply-correction.js  # Correction injection (beforeinput → CDP fallback)
+    apply-correction.js  # Correction injection (beforeinput → execCommand → CDP fallback)
     indicators.js        # Badges (pending/result), green checks, error floats
     live-draft.js        # Live draft idle-poll checking + inline highlights
     check-text.js        # Post-submit grammar check pipeline
@@ -189,8 +190,13 @@ python -m pytest tests/test_backend.py -v     # 20 tests — config, parsing, en
 python tests/test_commands_local.py           # Command palette on contentEditable
 python tests/test_full_commands.py            # Commands on WhatsApp Web profile
 
-# Build verification
-cd extension && npm run build                 # Must produce content.js
+# Extension unit regressions + build verification
+(cd extension && npm test && npm run build)
+
+# Pi WebUI CodeMirror/open-Shadow-DOM regression
+# Requires a Pi WebUI target and the grammar backend on :8766.
+# Override AI_GRAMMAR_TARGET_URL when the target is not the local dev server.
+python tests/test_pi_webui_shadow_dom.py
 ```
 
 CI runs `pytest test_backend.py` + `npm run build` on every push via GitHub Actions.

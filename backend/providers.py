@@ -75,7 +75,8 @@ async def _do_ai_call(body: dict, headers: dict, timeout: httpx.Timeout, config:
             last_exc = HTTPException(status_code=502, detail=f"AI provider error: {exc}")
         except Exception as exc:
             import traceback
-            traceback.print_exc()
+            if debug:
+                traceback.print_exc()
             last_exc = HTTPException(status_code=502, detail=f"Unexpected AI error: {type(exc).__name__}: {exc}")
 
         if attempt == 1:

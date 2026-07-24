@@ -1,6 +1,9 @@
 import { state, escapeHtml } from './state.js';
-import { isIgnored } from './dom-utils.js';
+import { isConnectedToDocument, isIgnored } from './dom-utils.js';
 
+
+// Timer ownership for the error float auto-dismiss (generation-safe)
+let _errorFloatTimer = null;
 // -----------------------------------------------------------------------
 // Status badge — stacked vertically like desktop notifications
 // -----------------------------------------------------------------------
@@ -91,7 +94,10 @@ export function removePendingBadge(category) {
 // Show a transient result badge (no spinner). Appears at the top of the stack
 // alongside any pending badges. Auto-dismisses after durationMs.
 export function showResultBadge(text, durationMs = 4000, type) {
-  if (state.resultBadgeTimer) { clearTimeout(state.resultBadgeTimer); state.resultBadgeTimer = null; }
+  if (state.resultBadgeTimer) {
+    clearTimeout(state.resultBadgeTimer);
+    state.resultBadgeTimer = null;
+  }
 
   // Remove any existing result badges
   for (const [key, entry] of state.activeBadges) {
@@ -127,6 +133,10 @@ export function showResultBadge(text, durationMs = 4000, type) {
 
 // Remove all badges (for conversation switch / cleanup)
 export function removeAllBadges() {
+  if (state.resultBadgeTimer) {
+    clearTimeout(state.resultBadgeTimer);
+    state.resultBadgeTimer = null;
+  }
   for (const [key, entry] of state.activeBadges) {
     entry.el.remove();
   }
@@ -262,7 +272,7 @@ function getLastCharRect(container, text) {
 
 export function showGreenCheck(container, checkedText) {
   if (!container) return;
-  if (!document.contains(container)) return;
+  if (!isConnectedToDocument(container)) return;
   removeGreenCheck(container);
 
   // Always use fixed-position — inline appendChild gets stripped by React re-renders
@@ -291,7 +301,7 @@ export function showGreenCheck(container, checkedText) {
 
   // Reposition on scroll/resize
   const reposition = () => {
-    if (!document.contains(check)) return;
+    if (!isConnectedToDocument(check)) return;
     const r = container.getBoundingClientRect();
     if (isEditable) {
       check.style.top = (r.top + 4) + 'px';
@@ -318,7 +328,7 @@ export function removeGreenCheck(container) {
     const entry = state.greenCheckTimers.get(container);
     entry.timers.forEach(clearTimeout);
     if (entry.cleanup) entry.cleanup();
-    if (entry.el && document.contains(entry.el)) entry.el.remove();
+    if (entry.el && isConnectedToDocument(entry.el)) entry.el.remove();
     state.greenCheckTimers.delete(container);
   }
 }
@@ -351,7 +361,7 @@ export function showErrorFloat(errors, anchorEl = null) {
   panel.id = 'ai-grammar-float';
   // Position below anchor if provided, otherwise bottom-right
   let posStyle = '';
-  if (anchorEl && document.contains(anchorEl)) {
+  if (anchorEl && isConnectedToDocument(anchorEl)) {
     const rect = anchorEl.getBoundingClientRect();
     posStyle = `top: ${Math.min(window.innerHeight - 8, rect.bottom + 8)}px; left: ${Math.max(8, rect.left)}px;`;
   }
@@ -407,7 +417,7 @@ export function showErrorFloat(errors, anchorEl = null) {
     </style>
     <div class="agf-header">
       <span>🔍 ${errors.length} error${errors.length > 1 ? 's' : ''} found</span>
-      <button class="agf-close" onclick="document.getElementById('ai-grammar-float').remove()">✕</button>
+      <button class="agf-close">✕</button>
     </div>
     ${errors.map(e => `
       <div class="agf-item">
@@ -421,7 +431,10 @@ export function showErrorFloat(errors, anchorEl = null) {
   `;
   document.body.appendChild(panel);
 
-  if (anchorEl && document.contains(anchorEl)) {
+  // Attach close listener via JS to avoid CSP-blocked inline onclick
+  panel.querySelector('.agf-close')?.addEventListener('click', removeErrorFloat);
+
+  if (anchorEl && isConnectedToDocument(anchorEl)) {
     const anchorRect = anchorEl.getBoundingClientRect();
     const panelRect = panel.getBoundingClientRect();
     const gap = 8;
@@ -439,11 +452,23 @@ export function showErrorFloat(errors, anchorEl = null) {
     panel.style.right = 'auto';
   }
 
-  // Auto-dismiss after 30 seconds
-  setTimeout(removeErrorFloat, 30_000);
+  // Auto-dismiss after 30 seconds — generation-safe: only acts if still
+  // the currently-owned timer, preventing a stale callback from removing
+  // a newer panel that replaced this one.
+  const scheduled = setTimeout(() => {
+    if (_errorFloatTimer === scheduled) {
+      _errorFloatTimer = null;
+      removeErrorFloat();
+    }
+  }, 30_000);
+  _errorFloatTimer = scheduled;
 }
 
 export function removeErrorFloat() {
+  if (_errorFloatTimer) {
+    clearTimeout(_errorFloatTimer);
+    _errorFloatTimer = null;
+  }
   const panel = document.getElementById('ai-grammar-float');
   if (panel) panel.remove();
 }

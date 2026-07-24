@@ -24,7 +24,6 @@
   const MIN_CHARS_DEFAULT = 30;
   const POLL_INTERVAL_MS = 500; // how often the idle timer polls
   const AUTO_DISMISS_MS = 30_000; // auto-hide the float panel after
-  const CKEDITOR_INSTANCE_WAIT_MS = 8000; // max wait for ckeditorInstance
   const PANEL_ID = 'ag-teams-float';
 
   // ── State ─────────────────────────────────────────────────────────────
@@ -184,56 +183,6 @@
     return null;
   }
 
-  /** Wait for ckeditorInstance to appear on an element (CKEditor boots async).
-   *  CKEditor sets ckeditorInstance in the MAIN world, which is invisible
-   *  to the content script's isolated world.  We use chrome.scripting to
-   *  execute in the MAIN world and read the instance. */
-  function waitForInstance(el, timeoutMs = CKEDITOR_INSTANCE_WAIT_MS) {
-    return new Promise((resolve) => {
-      // Fast path: check if instance is somehow available directly
-      if (el.ckeditorInstance) return resolve(el.ckeditorInstance);
-
-      // Poll from the MAIN world via chrome.scripting.executeScript
-      let attempts = 0;
-      const maxAttempts = Math.ceil(timeoutMs / 500);
-      const iv = setInterval(() => {
-        attempts++;
-        try {
-          chrome.scripting.executeScript({
-            target: { tabId: chrome.devtools?.inspectedWindow?.tabId },
-            world: 'MAIN',
-            func: () => {
-              const el = document.querySelector('.ck-editor__editable[contenteditable="true"]');
-              return !!(el && el.ckeditorInstance);
-            },
-          }, (results) => {
-            if (chrome.runtime.lastError) {
-              // Fallback: try direct access
-              if (attempts >= maxAttempts) {
-                clearInterval(iv);
-                resolve(null);
-              }
-              return;
-            }
-            if (results?.[0]?.result) {
-              clearInterval(iv);
-              // Now we know instance exists — try to access it
-              resolve(el.ckeditorInstance || null);
-            } else if (attempts >= maxAttempts) {
-              clearInterval(iv);
-              resolve(null);
-            }
-          });
-        } catch (e) {
-          if (attempts >= maxAttempts) {
-            clearInterval(iv);
-            resolve(null);
-          }
-        }
-      }, 500);
-    });
-  }
-
   // ── Attach / detach editor ────────────────────────────────────────────
   let editorMo = null;  // MutationObserver for CKEditor DOM changes
 
@@ -279,10 +228,7 @@
       element.removeEventListener('blur', editorFocusHandler.onBlur);
     }
     const onFocus = () => {
-      const text = editorGetPlainText();
-      if (text && text.length >= minChars) {
-        showCommandBar();
-      }
+      syncCommandBar();
     };
     const onBlur = () => {
       // Delay so click events on command bar buttons fire before dismiss
@@ -315,6 +261,13 @@
       changeDataUnbind = null;
     }
     teardownCKEditorBridge();
+    abortPolish();
+    abortTranslate();
+    if (fixAbortController) {
+      fixAbortController.abort();
+      fixAbortController = null;
+      window.__aiGrammar.removePendingBadge('fixing');
+    }
     // Abort in-flight check
     if (abortController) {
       abortController.abort();
@@ -365,13 +318,15 @@
     const bridgeCode = (
       '(function(){' +
       'if(window.__agCKEBridge)return;window.__agCKEBridge=true;' +
-      'var POLL_MS=500;(function poll(){' +
-      'var el=document.querySelector(\'.ck-editor__editable[contenteditable="true"]\');' +
-      'var instance=el&&el.ckeditorInstance;' +
-      'if(!instance){setTimeout(poll,POLL_MS);return;}' +
-      'try{instance.model.document.on(\'change:data\',function(){' +
-      'try{window.postMessage({source:"ag-cke-bridge",type:"change"},"*");}catch(e){}' +
-      '});}catch(e){setTimeout(poll,POLL_MS);}' +
+      'var POLL_MS=500;var cur=null;var h=null;' +
+      'function f(){try{window.postMessage({source:"ag-cke-bridge",type:"change"},"*");}catch(e){}}' +
+      '(function poll(){' +
+      'var ins=null;try{var el=document.querySelector(\'.ck-editor__editable[contenteditable="true"]\');' +
+      'ins=el&&el.ckeditorInstance||null;}catch(e){}' +
+      'if(ins!==cur){if(cur&&h){try{cur.model.document.off(\'change:data\',h);}catch(e){}h=null;}cur=null;' +
+      'if(ins){h=f;try{ins.model.document.on(\'change:data\',h);cur=ins;}catch(e){h=null;}}' +
+      '}' +
+      'setTimeout(poll,' + 'POLL_MS' + ');' +
       '})();})()'
     );
     const blob = new Blob([bridgeCode], { type: 'application/javascript' });
@@ -400,9 +355,6 @@
       window.removeEventListener('message', ckeBridgeMsgHandler);
       ckeBridgeMsgHandler = null;
     }
-    // Remove the injected bridge script from the page DOM
-    const scriptEl = document.getElementById('ag-cke-bridge-script');
-    if (scriptEl) scriptEl.remove();
   }
 
   // ── Editor change handler ─────────────────────────────────────────────
@@ -426,6 +378,9 @@
       fixAbortController = null;
       window.__aiGrammar.removePendingBadge('fixing');
     }
+
+    // Show command bar if editor is focused with enough text
+    syncCommandBar();
   }
 
   // ── Grammar check pipeline ────────────────────────────────────────────
@@ -549,6 +504,9 @@
           fixAbortController = null;
           window.__aiGrammar.removePendingBadge('fixing');
         }
+
+        // Show command bar if editor is focused with enough text
+        syncCommandBar();
       }
 
       // Clear state if editor text was emptied externally
@@ -560,8 +518,8 @@
       }
 
       // Show/hide command bar based on text state
-      // Note: showing is now handled by the focus event on the editor.
-      // The poll loop only dismisses when text is too short or editor unfocused.
+      // Note: showing is handled by syncCommandBar on focus / change events.
+      // The poll loop dismisses when text is too short.
       if (!currentText || currentText.length < minChars) {
         dismissCommandBar();
       }
@@ -832,7 +790,7 @@
       '  #' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-off { background: #fee2e2; color: #991b1b; }',
       '  #' + COMMAND_BAR_ID + ' .ag-cmd-toggle.ag-cmd-off:hover { background: #fecaca !important; }',
       '}',
-    ].join('\\n');
+    ].join('\n');
     bar.appendChild(styleEl);
 
     // Grammar toggle — on/off with color indication (master switch, first)
@@ -911,6 +869,24 @@
     if (commandBarEl) {
       if (document.contains(commandBarEl)) commandBarEl.remove();
       commandBarEl = null;
+    }
+  }
+
+  /**
+   * Synchronize command-bar visibility with current editor state.
+   * Shows the bar when editor is focused with enough text; dismisses
+   * otherwise.  Guards !commandBarEl before showing to avoid recreating
+   * the bar on every keystroke (showCommandBar itself dismisses first).
+   */
+  function syncCommandBar() {
+    if (!editorElement || !document.contains(editorElement)) return;
+    // Only sync when the editor is focused — blur handling owns dismissal
+    if (document.activeElement !== editorElement) return;
+    const text = editorGetPlainText();
+    if (text && text.length >= minChars) {
+      if (!commandBarEl) showCommandBar();
+    } else {
+      dismissCommandBar();
     }
   }
 

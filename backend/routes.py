@@ -46,7 +46,8 @@ async def validation_handler(_request: Request, exc: RequestValidationError):
 async def catch_all_handler(_request: Request, exc: Exception):
     import traceback
 
-    traceback.print_exc()
+    if _load_debug():
+        traceback.print_exc()
     return JSONResponse(
         status_code=500,
         content={"error": f"Internal error: {type(exc).__name__}: {exc}"},

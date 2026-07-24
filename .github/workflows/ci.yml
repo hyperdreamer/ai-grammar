@@ -22,4 +22,5 @@ jobs:
         with:
           node-version: '22'
       - run: cd extension && npm install
+      - run: cd extension && npm test
       - run: cd extension && npm run build

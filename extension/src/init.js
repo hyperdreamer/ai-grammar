@@ -26,6 +26,12 @@ import {
 } from './commands.js';
 import { tryBeforeInput, applyFixCDP } from './apply-correction.js';
 import { showResultBadge } from './indicators.js';
+import {
+  getDeepActiveElement,
+  getEditableText,
+  getEventEditableTarget,
+  isConnectedToDocument,
+} from './dom-utils.js';
 
 // -----------------------------------------------------------------------
 // Init
@@ -50,6 +56,20 @@ export function init() {
   // The MutationObserver is intentionally not started.
 
   // --- Track user-submitted text so we only check the user's content ---
+  function getComposedElementTarget(event) {
+    const path = typeof event?.composedPath === 'function'
+      ? event.composedPath()
+      : [event?.target];
+    return path.find(node => node?.nodeType === 1) || event?.target || null;
+  }
+
+  function getComposedFormTarget(event) {
+    const path = typeof event?.composedPath === 'function'
+      ? event.composedPath()
+      : [event?.target];
+    return path.find(node => node?.tagName === 'FORM') || getComposedElementTarget(event);
+  }
+
   // Helper: process captured text — handle commands, otherwise store for matching
   async function processCapturedText(captured, textarea) {
     if (!captured || captured.length < state.minChars) return;
@@ -66,7 +86,7 @@ export function init() {
     // Capture the message-list container via structural proximity.
     // This lets the MutationObserver match the user's message by
     // container membership instead of fragile text/CSS heuristics.
-    if (textarea && document.contains(textarea)) {
+    if (textarea && isConnectedToDocument(textarea)) {
       const messageList = findMessageList(textarea);
       if (messageList) {
         state.pendingSubmission = { text: captured, messageList, time: Date.now(), conversationKey };
@@ -79,7 +99,7 @@ export function init() {
     // Check contentEditable divs first (WhatsApp Web, Teams, etc.)
     const editables = scope.querySelectorAll('[role="textbox"][contenteditable="true"], [contenteditable="true"]');
     for (const ed of editables) {
-      const captured = (ed.textContent || '').trim();
+      const captured = getEditableText(ed).trim();
       if (captured) return captured;
     }
     const textareas = scope.querySelectorAll('textarea');
@@ -102,7 +122,7 @@ export function init() {
    * blocks).  Falls back to the great-grandparent of the input.
    */
   function findMessageList(textarea) {
-    if (!textarea || !document.contains(textarea)) return null;
+    if (!textarea || !isConnectedToDocument(textarea)) return null;
 
     let el = textarea.parentElement;
     let depth = 0;
@@ -132,7 +152,7 @@ export function init() {
 
   // Capture text when the user submits a form (e.g., chat send)
   document.addEventListener('submit', (e) => {
-    const form = e.target;
+    const form = getComposedFormTarget(e);
     const textareas = form.querySelectorAll('textarea');
     const inputs = form.querySelectorAll('input[type="text"]');
     const editables = form.querySelectorAll('[role="textbox"][contenteditable="true"], [contenteditable="true"]');
@@ -150,7 +170,7 @@ export function init() {
     }
     if (!captured) {
       for (const ed of editables) {
-        captured = (ed.textContent || '').trim();
+        captured = getEditableText(ed).trim();
         if (captured) { ta = ed; break; }
       }
     }
@@ -163,7 +183,8 @@ export function init() {
   // (WhatsApp Web clears contentEditable on mousedown, so by the time
   // 'click' fires the text is gone)
   document.addEventListener('mousedown', (e) => {
-    const control = e.target.closest?.('button, input[type="button"], input[type="submit"], [role="button"]');
+    const eventTarget = getComposedElementTarget(e);
+    const control = eventTarget?.closest?.('button, input[type="button"], input[type="submit"], [role="button"]');
     if (!control) return;
     const ariaLabel = (control.getAttribute?.('aria-label') || '').toLowerCase();
     const testId = (control.getAttribute?.('data-testid') || '').toLowerCase();
@@ -174,9 +195,9 @@ export function init() {
     if (!looksLikeSend) return;
 
     // Grab text from the contentEditable input before the platform clears it
-    const active = document.activeElement;
+    const active = getDeepActiveElement();
     if (active?.tagName === 'TEXTAREA' || active?.isContentEditable) {
-      const captured = (active.value || active.textContent || '').trim();
+      const captured = getEditableText(active).trim();
       if (captured) {
         clearTimeout(commandDebounce);
         commandDebounce = null;
@@ -186,13 +207,14 @@ export function init() {
   }, true);
 
   document.addEventListener('click', (e) => {
+    const eventTarget = getComposedElementTarget(e);
     // Standard button elements
-    let control = e.target.closest?.('button, input[type="button"], input[type="submit"]');
+    let control = eventTarget?.closest?.('button, input[type="button"], input[type="submit"]');
 
     // WhatsApp Web / Teams send buttons are often <span>/<div> with
     // aria-label="Send" or data-testid containing "send"
     if (!control) {
-      const candidate = e.target.closest?.('[role="button"]') || e.target;
+      const candidate = eventTarget?.closest?.('[role="button"]') || eventTarget;
       const ariaLabel = (candidate.getAttribute?.('aria-label') || '').toLowerCase();
       const testId = (candidate.getAttribute?.('data-testid') || '').toLowerCase();
       if (/^(send|submit)$/.test(ariaLabel) || testId.includes('send')) {
@@ -210,10 +232,10 @@ export function init() {
     const form = control.closest('form');
     const scope = form || control.closest('.input-row, [role="form"], [role="textbox"][contenteditable="true"], [contenteditable="true"]') || control.parentElement;
     let captured = getTextFromControls(scope);
-    let active = document.activeElement;
+    let active = getDeepActiveElement();
     if (!captured) {
       if (active?.tagName === 'TEXTAREA' || active?.isContentEditable) {
-        captured = (active.value || active.textContent || '').trim();
+        captured = getEditableText(active).trim();
       }
     }
     // active may be the button (not the textarea) — search scope for the input element
@@ -230,8 +252,8 @@ export function init() {
 
   // Capture text on Enter + palette keyboard navigation
   document.addEventListener('keydown', (e) => {
-    const ta = e.target;
-    if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
+    const ta = getEventEditableTarget(e);
+    if (!ta) return;
 
     // Language palette keyboard navigation (takes priority over command palette)
     if (langPaletteEl) {
@@ -264,7 +286,7 @@ export function init() {
 
     // Normal Enter → capture text for grammar checking
     if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
-    const text = (ta.value || ta.textContent || '').trim();
+    const text = getEditableText(ta).trim();
     clearTimeout(commandDebounce);
     commandDebounce = null;
 
@@ -281,8 +303,8 @@ export function init() {
   // Detect ?/ commands inline as the user types — no submit needed
   let commandDebounce = null;
   document.addEventListener('input', (e) => {
-    const ta = e.target;
-    if (ta.tagName !== 'TEXTAREA' && !ta.isContentEditable) return;
+    const ta = getEventEditableTarget(e);
+    if (!ta) return;
 
     // Skip command detection when the input event was dispatched by our own
     // partial→full command replacement — prevents double-fire (e.g., ?/c
@@ -290,7 +312,7 @@ export function init() {
     if (state.replacingCommand) return;
 
     clearTimeout(commandDebounce);
-    const value = ta.value || ta.textContent || '';
+    const value = getEditableText(ta);
 
     // Language palette: ?/lang with optional filter
     if (/\?\/lang\s+\S*$/.test(value) || /\?\/lang\s*$/.test(value)) {
@@ -325,7 +347,7 @@ export function init() {
           hideCommandPalette();
           const matched = matches[0];
           commandDebounce = setTimeout(async () => {
-            const currentValue = ta.value || ta.textContent || '';
+            const currentValue = getEditableText(ta);
             const fullCmd = matched.full;  // e.g., "?/polish"
             if (!currentValue.includes(cmdText)) return;
 
@@ -333,8 +355,8 @@ export function init() {
             // textarea BEFORE calling the handler — so the user sees the
             // resolved command and commands that read the textarea (check,
             // fix, polish) can find the full command string.
-            const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
-            const val = ta.value || ta.textContent || '';
+            const val = getEditableText(ta);
+            const idx = val.lastIndexOf(cmdText);
             if (idx >= 0) {
               // ?/lang appends a trailing space to invite parameter input.
               const suffix = matched.name === 'lang' ? ' ' : '';
@@ -377,8 +399,8 @@ export function init() {
             if (matched.name !== 'fix' && matched.name !== 'polish' && matched.name !== 'check') {
               // Brief pause so the user sees the completed command before it's stripped
               await new Promise(r => setTimeout(r, 400));
-              const idx2 = ta.value ? ta.value.lastIndexOf(fullCmd) : (ta.textContent || '').lastIndexOf(fullCmd);
-              const val2 = ta.value || ta.textContent || '';
+              const val2 = getEditableText(ta);
+              const idx2 = val2.lastIndexOf(fullCmd);
               const cleaned = (idx2 >= 0 ? val2.slice(0, idx2) + val2.slice(idx2 + fullCmd.length) : val2).trimEnd();
               state.skipLiveCheck = true;
               if (ta.tagName === 'TEXTAREA') {
@@ -402,7 +424,7 @@ export function init() {
       }
 
       commandDebounce = setTimeout(async () => {
-        const currentValue = ta.value || ta.textContent || '';
+        const currentValue = getEditableText(ta);
         console.debug('[AI Grammar] Debounce fired', { cmdName, cmdText, currentValue: currentValue.slice(-20), includes: currentValue.includes(cmdText) });
         if (!currentValue.includes(cmdText)) return;
 
@@ -428,8 +450,8 @@ export function init() {
           if (cmdName === 'lang' && !cmdArgs) {
             // lang without args — keep the command text, user still typing parameter
           } else {
-            const idx = ta.value ? ta.value.lastIndexOf(cmdText) : (ta.textContent || '').lastIndexOf(cmdText);
-            const val = ta.value || ta.textContent || '';
+            const val = getEditableText(ta);
+            const idx = val.lastIndexOf(cmdText);
             const cleaned = (idx >= 0 ? val.slice(0, idx) + val.slice(idx + cmdText.length) : val).trimEnd();
             if (ta.tagName === 'TEXTAREA') {
               ta.value = cleaned;
