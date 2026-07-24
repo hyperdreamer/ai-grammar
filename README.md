@@ -95,7 +95,7 @@ python main.py          # Runs on http://127.0.0.1:8766
 | Endpoint | Method | Purpose | Response |
 |---|---|---|---|
 | `/health` | GET | Health check | `{"status": "ok"}` |
-| `/version` | GET | Extension version from manifest | `{"version": "7.4.0"}` |
+| `/version` | GET | Extension version from manifest | `{"version": "0.0.0"}` |
 | `/check` | POST | Grammar/spell check | `{"errors": [...], "model": "...", "tokens_used": N}` |
 | `/polish` | POST | AI text polish/rewrite | `{"polished": "...", "model": "...", "tokens_used": N}` |
 | `/translate` | POST | Language translation | `{"translated": "...", "model": "...", "tokens_used": N}` |
