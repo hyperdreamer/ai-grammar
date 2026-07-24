@@ -44,8 +44,8 @@ backend/                 # FastAPI server
   requirements.txt
 
 tests/                   # Test suite
-  test_backend.py        # 20 pytest tests (config, parsing, endpoints, AI retry)
-  test_*.py              # Playwright browser tests (extension + WhatsApp)
+  test_backend.py        # 24 pytest tests (config, parsing, endpoints, AI retry)
+  test_*.py              # Playwright browser tests (extension, WhatsApp, and Pi WebUI)
 
 .github/workflows/
   ci.yml                 # Backend pytest + extension build on push/PR
@@ -58,7 +58,7 @@ The extension uses a **thin adapter** pattern for platform-specific code:
 | Bridge | Lines | Pattern | What it does |
 |---|---|---|---|
 | `whatsapp-bridge.js` | 499 | Thin DOM adapter (~95% platform-specific) | Bidi text normalization, WhatsApp DOM selectors, overlay rendering, chat-switch detection |
-| `teams-bridge.js` | 1,619 | Substantial subsystem (~63% platform-specific) | CKEditor live-draft, floating command bar, error panel, translate picker, grammar toggle |
+| `teams-bridge.js` | 1,593 | Substantial subsystem (~63% platform-specific) | CKEditor live-draft, floating command bar, error panel, translate picker, grammar toggle |
 
 Shared modules drive all backend communication and badge/indicator logic via `window.__aiGrammar`. Platform bridges expose platform-specific APIs (e.g., `window.__aiWhatsApp`).
 
@@ -67,7 +67,7 @@ Shared modules drive all backend communication and badge/indicator logic via `wi
 ```bash
 cd extension
 npm install
-npm run build      # esbuild bundles src/ → content.js (IIFE, ~124KB)
+npm run build      # esbuild bundles src/ → content.js (IIFE, ~137KB)
 ```
 
 The bundled `content.js` is committed to the repo so the extension works without a build step.
@@ -95,7 +95,7 @@ python main.py          # Runs on http://127.0.0.1:8766
 | Endpoint | Method | Purpose | Response |
 |---|---|---|---|
 | `/health` | GET | Health check | `{"status": "ok"}` |
-| `/version` | GET | Extension version from manifest | `{"version": "7.0.0"}` |
+| `/version` | GET | Extension version from manifest | `{"version": "7.4.0"}` |
 | `/check` | POST | Grammar/spell check | `{"errors": [...], "model": "...", "tokens_used": N}` |
 | `/polish` | POST | AI text polish/rewrite | `{"polished": "...", "model": "...", "tokens_used": N}` |
 | `/translate` | POST | Language translation | `{"translated": "...", "model": "...", "tokens_used": N}` |
@@ -199,7 +199,7 @@ python tests/test_full_commands.py            # Commands on WhatsApp Web profile
 python tests/test_pi_webui_shadow_dom.py
 ```
 
-CI runs `pytest test_backend.py` + `npm run build` on every push via GitHub Actions.
+CI runs `pytest test_backend.py`, `npm test`, and `npm run build` on every push via GitHub Actions.
 
 ## Limitations
 
