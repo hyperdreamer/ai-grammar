@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import DEFAULT_MAX_TEXT_CHARS, _debug, _load_debug, load_config, DEFAULT_TEMPERATURE_POLISH, DEFAULT_TEMPERATURE_TRANSLATE
 from .models import CheckRequest, TranslateRequest
-from .providers import _call_ai, _parse_errors, _parse_polished, _parse_translated, POLISH_SYSTEM_PROMPT, TRANSLATE_SYSTEM_PROMPT, _do_ai_call
+from .providers import _call_ai, _call_provider, _parse_errors, _parse_polished, _parse_translated, POLISH_SYSTEM_PROMPT, TRANSLATE_SYSTEM_PROMPT
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -158,30 +157,12 @@ async def polish_text(request: CheckRequest) -> Response:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Configuration error: {type(exc).__name__}: {exc}")
 
-    timeout = httpx.Timeout(
-        connect=config.timeout.connect,
-        read=config.timeout.read,
-        write=config.timeout.write,
-        pool=config.timeout.pool,
-    )
-    headers = {
-        "Authorization": f"Bearer {config.api_key}",
-        "Content-Type": "application/json",
-    }
-    body_data = {
-        "model": config.model,
-        "messages": [
-            {"role": "system", "content": POLISH_SYSTEM_PROMPT},
-            {"role": "user", "content": text},
-        ],
-        "temperature": config.get_temperature("polish", DEFAULT_TEMPERATURE_POLISH),
-    }
-    if request.max_tokens and request.max_tokens > 0:
-        body_data["max_tokens"] = request.max_tokens
-
     try:
-        deadline = config.timeout.read + 5  # buffer so httpx fires first
-        result = await _do_ai_call(body_data, headers, timeout, config, deadline=deadline)
+        result = await _call_provider(
+            POLISH_SYSTEM_PROMPT, text,
+            config.get_temperature("polish", DEFAULT_TEMPERATURE_POLISH),
+            config, request.max_tokens,
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -228,32 +209,15 @@ async def translate_text(request: TranslateRequest) -> Response:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Configuration error: {type(exc).__name__}: {exc}")
 
-    timeout = httpx.Timeout(
-        connect=config.timeout.connect,
-        read=config.timeout.read,
-        write=config.timeout.write,
-        pool=config.timeout.pool,
-    )
-    headers = {
-        "Authorization": f"Bearer {config.api_key}",
-        "Content-Type": "application/json",
-    }
     target_lang_label = "English" if request.target_lang == "en" else request.target_lang
     system_prompt = TRANSLATE_SYSTEM_PROMPT + f"\n\nTarget language: {target_lang_label}"
-    body_data = {
-        "model": config.model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text},
-        ],
-        "temperature": config.get_temperature("translate", DEFAULT_TEMPERATURE_TRANSLATE),
-    }
-    if request.max_tokens and request.max_tokens > 0:
-        body_data["max_tokens"] = request.max_tokens
 
     try:
-        deadline = config.timeout.read + 5  # buffer so httpx fires first
-        result = await _do_ai_call(body_data, headers, timeout, config, deadline=deadline)
+        result = await _call_provider(
+            system_prompt, text,
+            config.get_temperature("translate", DEFAULT_TEMPERATURE_TRANSLATE),
+            config, request.max_tokens,
+        )
     except HTTPException:
         raise
     except Exception as exc:

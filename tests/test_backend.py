@@ -9,8 +9,10 @@ import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import pytest_asyncio
+import yaml
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
@@ -183,6 +185,213 @@ def test_config_env_var_not_set(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Endpoint-aware config tests
+# ---------------------------------------------------------------------------
+
+# Sentinel: pass this to _write_ai_config to omit the key entirely, so tests can
+# tell an absent key apart from a present YAML ``null``.
+_OMITTED = object()
+
+
+def _write_ai_config(tmp_path, monkeypatch, **ai_overrides):
+    """Write a config.yaml whose ai section always has a valid test API key."""
+    ai_section = {"api_key": "test-key-12345"}
+    for key, value in ai_overrides.items():
+        if value is not _OMITTED:
+            ai_section[key] = value
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.safe_dump({"ai": ai_section}, sort_keys=False), encoding="utf-8"
+    )
+    monkeypatch.setattr("backend.config.CONFIG_PATH", config_file)
+    return config_file
+
+
+def test_config_supported_endpoints_and_defaults():
+    """The supported endpoint collection is exact and immutable."""
+    from backend.config import DEFAULT_MESSAGES_MAX_TOKENS, SUPPORTED_ENDPOINTS
+
+    assert set(SUPPORTED_ENDPOINTS) == {
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages",
+    }
+    assert len(SUPPORTED_ENDPOINTS) == 3
+    assert DEFAULT_MESSAGES_MAX_TOKENS == 4096
+    # Pin immutability by type/behavior: a plain `list` has no `add` either,
+    # so asserting only that `.add` raises would let a mutable list through.
+    assert isinstance(SUPPORTED_ENDPOINTS, (frozenset, tuple))
+    assert not hasattr(SUPPORTED_ENDPOINTS, "add")
+    assert not hasattr(SUPPORTED_ENDPOINTS, "append")
+
+
+def test_config_ai_config_endpoint_field_defaults():
+    """AIConfig defaults select legacy mode and the 4096 Messages limit."""
+    from backend.config import AIConfig
+
+    cfg = AIConfig()
+    assert cfg.endpoint is None
+    assert cfg.messages_default_max_tokens == 4096
+
+
+@pytest.mark.parametrize(
+    "raw_api_base,expected_base",
+    [
+        (_OMITTED, "https://api.openai.com/v1"),
+        ("https://gateway", "https://gateway/v1"),
+        ("https://gateway/v1", "https://gateway/v1"),
+        ("https://gateway/", "https://gateway/v1"),
+        ("https://gateway/v1/", "https://gateway/v1/"),
+    ],
+    ids=["omitted", "no-v1-suffix", "v1-suffix", "trailing-slash", "v1-trailing-slash"],
+)
+def test_config_legacy_mode_api_base(
+    tmp_path, monkeypatch, raw_api_base, expected_base
+):
+    """Omitted ai.endpoint keeps the legacy /v1 normalization unchanged."""
+    _write_ai_config(tmp_path, monkeypatch, api_base=raw_api_base)
+
+    from backend.config import load_config
+
+    cfg = load_config()
+    assert cfg.endpoint is None
+    assert cfg.api_base == expected_base
+    assert cfg.messages_default_max_tokens == 4096
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["/v1/chat/completions", "/v1/responses", "/v1/messages"],
+)
+def test_config_explicit_mode_default_api_base(tmp_path, monkeypatch, endpoint):
+    """An explicit endpoint with omitted api_base resolves to api.openai.com."""
+    _write_ai_config(tmp_path, monkeypatch, endpoint=endpoint)
+
+    from backend.config import load_config
+
+    cfg = load_config()
+    assert cfg.endpoint == endpoint
+    assert cfg.api_base == "https://api.openai.com"
+    assert cfg.messages_default_max_tokens == 4096
+
+
+@pytest.mark.parametrize(
+    "raw_api_base,expected_base",
+    [
+        ("https://gateway/proxy/", "https://gateway/proxy"),
+        ("https://gateway/proxy", "https://gateway/proxy"),
+        ("https://gateway/proxy/v1", "https://gateway/proxy/v1"),
+    ],
+    ids=["trailing-slash", "plain", "v1-suffix"],
+)
+def test_config_explicit_mode_api_base(tmp_path, monkeypatch, raw_api_base, expected_base):
+    """Explicit mode trims trailing slashes without rewriting path segments."""
+    _write_ai_config(
+        tmp_path,
+        monkeypatch,
+        endpoint="/v1/messages",
+        api_base=raw_api_base,
+    )
+
+    from backend.config import load_config
+
+    cfg = load_config()
+    assert cfg.endpoint == "/v1/messages"
+    assert cfg.api_base == expected_base
+
+
+def test_config_explicit_mode_retains_messages_default(tmp_path, monkeypatch):
+    """A configured messages_default_max_tokens is retained in explicit mode."""
+    _write_ai_config(
+        tmp_path,
+        monkeypatch,
+        endpoint="/v1/messages",
+        messages_default_max_tokens=8192,
+    )
+
+    from backend.config import load_config
+
+    cfg = load_config()
+    assert cfg.endpoint == "/v1/messages"
+    assert cfg.messages_default_max_tokens == 8192
+
+
+@pytest.mark.parametrize(
+    "raw_endpoint",
+    [
+        None,
+        "chat/completions",
+        "/responses",
+        "https://api.openai.com/v1/responses",
+        "/v1/unknown",
+        42,
+    ],
+    ids=["null", "missing-slash", "missing-v1", "full-url", "unsupported", "non-string"],
+)
+def test_config_rejects_invalid_endpoint(tmp_path, monkeypatch, raw_endpoint):
+    """A present ai.endpoint must be one of the exact supported values."""
+    _write_ai_config(tmp_path, monkeypatch, endpoint=raw_endpoint)
+
+    from backend.config import load_config
+
+    with pytest.raises(RuntimeError):
+        load_config()
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [0, -1, True, "4096", 1.0, None, []],
+    ids=["zero", "negative", "bool", "string", "float", "null", "list"],
+)
+def test_config_rejects_invalid_messages_default_max_tokens(
+    tmp_path, monkeypatch, raw_value
+):
+    """messages_default_max_tokens must be a positive non-bool integer."""
+    _write_ai_config(
+        tmp_path, monkeypatch, messages_default_max_tokens=raw_value
+    )
+
+    from backend.config import load_config
+
+    with pytest.raises(RuntimeError):
+        load_config()
+
+
+def test_config_messages_default_max_tokens_omitted(
+    tmp_path, monkeypatch
+):
+    """Omitting messages_default_max_tokens yields the 4096 default."""
+    _write_ai_config(tmp_path, monkeypatch)
+
+    from backend.config import load_config
+
+    cfg = load_config()
+    assert cfg.messages_default_max_tokens == 4096
+
+
+@pytest.mark.parametrize(
+    "raw_api_base",
+    ["", None, [], "/", "///"],
+    ids=["empty-string", "null", "list", "slash-only", "slashes-only"],
+)
+def test_config_explicit_mode_rejects_invalid_api_base(
+    tmp_path, monkeypatch, raw_api_base
+):
+    """Explicit mode rejects an empty or non-string api_base before use."""
+    _write_ai_config(
+        tmp_path,
+        monkeypatch,
+        endpoint="/v1/chat/completions",
+        api_base=raw_api_base,
+    )
+
+    from backend.config import load_config
+
+    with pytest.raises(RuntimeError):
+        load_config()
+
+
+# ---------------------------------------------------------------------------
 # Parsing tests
 # ---------------------------------------------------------------------------
 
@@ -252,6 +461,20 @@ def test_parse_translated_valid():
 # ---------------------------------------------------------------------------
 
 
+def _transport_request(headers=None):
+    return {
+        "url": "https://gateway/custom",
+        "headers": headers if headers is not None else {},
+        "body": {"test": True},
+    }
+
+
+def _chat_adapter():
+    from backend.providers import ChatCompletionsAdapter
+
+    return ChatCompletionsAdapter()
+
+
 @pytest.mark.asyncio
 async def test_do_ai_call_success(monkeypatch):
     """_do_ai_call returns structured result on success."""
@@ -282,8 +505,8 @@ async def test_do_ai_call_success(monkeypatch):
         from backend.providers import _do_ai_call
 
         result = await _do_ai_call(
-            body={"test": True},
-            headers={"Authorization": "Bearer x"},
+            request=_transport_request(headers={"Authorization": "Bearer x"}),
+            adapter=_chat_adapter(),
             timeout=httpx.Timeout(10),
             config=config,
             deadline=120,
@@ -334,8 +557,8 @@ async def test_do_ai_call_retry_on_500(monkeypatch):
             from backend.providers import _do_ai_call
 
             result = await _do_ai_call(
-                body={"test": True},
-                headers={},
+                request=_transport_request(),
+                adapter=_chat_adapter(),
                 timeout=httpx.Timeout(10),
                 config=config,
                 deadline=120,
@@ -372,8 +595,8 @@ async def test_do_ai_call_timeout(monkeypatch):
 
         with pytest.raises(HTTPException) as exc_info:
             await _do_ai_call(
-                body={"test": True},
-                headers={},
+                request=_transport_request(),
+                adapter=_chat_adapter(),
                 timeout=httpx.Timeout(10),
                 config=config,
                 deadline=120,
@@ -407,8 +630,8 @@ async def test_do_ai_call_unexpected_error(monkeypatch, debug, expected_call_cou
 
             with pytest.raises(HTTPException) as exc_info:
                 await _do_ai_call(
-                    body={"test": True},
-                    headers={},
+                    request=_transport_request(),
+                    adapter=_chat_adapter(),
                     timeout=httpx.Timeout(10),
                     config=config,
                     deadline=120,
@@ -440,3 +663,2141 @@ async def test_catch_all_handler_debug_gate(
     assert resp.status_code == 500
     payload = json.loads(resp.body)
     assert payload == {"error": "Internal error: RuntimeError: simulated crash"}
+
+
+# ---------------------------------------------------------------------------
+# Provider adapter contract and Chat Completions tests
+# ---------------------------------------------------------------------------
+
+
+def _chat_config(**overrides):
+    """Build an AIConfig for adapter tests, applying *overrides* last."""
+    from backend.config import AIConfig
+
+    fields = {
+        "model": "test-model",
+        "api_key": "test-key",
+        "api_base": "https://gateway/v1",
+        "endpoint": None,
+    }
+    fields.update(overrides)
+    return AIConfig(**fields)
+
+
+def _chat_payload():
+    """A well-formed Chat Completions payload with two distinctly useful choices."""
+    return {
+        "model": "upstream-chat-model",
+        "choices": [
+            {"message": {"content": '{"operation": "result"}'}},
+            {"message": {"content": "second choice content"}},
+        ],
+        "usage": {"total_tokens": 15},
+    }
+
+
+def _parse_chat(payload, configured_model="test-model"):
+    """Parse *payload* with the Chat Completions adapter."""
+    from backend.providers import ChatCompletionsAdapter
+
+    return ChatCompletionsAdapter().parse_response(
+        payload, configured_model=configured_model
+    )
+
+
+def test_provider_request_and_result_contracts():
+    """ProviderRequest/ProviderResult expose exactly the documented keys."""
+    from backend.providers import (
+        ChatCompletionsAdapter,
+        ProtocolAdapter,
+        ProviderRequest,
+        ProviderResult,
+    )
+
+    assert set(ProviderRequest.__annotations__) == {"url", "headers", "body"}
+    assert set(ProviderResult.__annotations__) == {"content", "tokens", "model"}
+    # The protocol declares both adapter methods; the adapter provides them.
+    assert getattr(ProtocolAdapter, "_is_protocol", False)
+    assert callable(ProtocolAdapter.build_request)
+    assert callable(ProtocolAdapter.parse_response)
+    adapter = ChatCompletionsAdapter()
+    assert callable(adapter.build_request)
+    assert callable(adapter.parse_response)
+
+
+def test_adapter_response_error_is_dedicated_exception():
+    """Envelope defects raise a dedicated error, never a generic builtin one."""
+    from backend.providers import ProviderResponseError
+
+    assert issubclass(ProviderResponseError, Exception)
+    assert not issubclass(
+        ProviderResponseError, (KeyError, IndexError, TypeError, ValueError)
+    )
+
+
+@pytest.mark.parametrize(
+    "endpoint,api_base,expected_url",
+    [
+        (None, "https://gateway/v1", "https://gateway/v1/chat/completions"),
+        (None, "https://gateway/v1/", "https://gateway/v1//chat/completions"),
+        (None, "https://gateway", "https://gateway/chat/completions"),
+        (
+            "/v1/chat/completions",
+            "https://gateway/proxy/",
+            "https://gateway/proxy/v1/chat/completions",
+        ),
+        (
+            "/v1/chat/completions",
+            "https://gateway/proxy",
+            "https://gateway/proxy/v1/chat/completions",
+        ),
+        (
+            "/v1/chat/completions",
+            "https://gateway/proxy/v1",
+            "https://gateway/proxy/v1/v1/chat/completions",
+        ),
+        ("/v1/responses", "https://gateway/proxy/", "https://gateway/proxy/v1/responses"),
+        ("/v1/messages", "https://gateway/proxy/", "https://gateway/proxy/v1/messages"),
+    ],
+    ids=[
+        "legacy-v1-base",
+        "legacy-trailing-slash-keeps-double-slash",
+        "legacy-bare-base",
+        "explicit-trailing-slash-base",
+        "explicit-plain-base",
+        "explicit-v1-prefixed-base",
+        "explicit-responses",
+        "explicit-messages",
+    ],
+)
+def test_endpoint_url_matches_mode_contract(endpoint, api_base, expected_url):
+    """Legacy mode concatenates /chat/completions; explicit mode appends the path."""
+    from backend.providers import _endpoint_url
+
+    config = _chat_config(endpoint=endpoint, api_base=api_base)
+    assert _endpoint_url(config) == expected_url
+
+
+def test_chat_adapter_build_request_legacy_mode():
+    """Legacy mode targets the normalized /v1 base with a Bearer JSON request."""
+    from backend.providers import ChatCompletionsAdapter
+
+    config = _chat_config(endpoint=None, api_base="https://gateway/v1")
+    request = ChatCompletionsAdapter().build_request(
+        config=config,
+        system_prompt="SYSTEM PROMPT",
+        user_text="USER TEXT",
+        temperature=0.1,
+        max_tokens=None,
+    )
+
+    assert request["url"] == "https://gateway/v1/chat/completions"
+    assert request["headers"] == {
+        "Authorization": "Bearer test-key",
+        "Content-Type": "application/json",
+    }
+    assert request["body"] == {
+        "model": "test-model",
+        "messages": [
+            {"role": "system", "content": "SYSTEM PROMPT"},
+            {"role": "user", "content": "USER TEXT"},
+        ],
+        "temperature": 0.1,
+    }
+
+
+def test_chat_adapter_build_request_explicit_mode():
+    """Explicit mode appends the configured path without URL resolution."""
+    from backend.providers import ChatCompletionsAdapter
+
+    config = _chat_config(
+        endpoint="/v1/chat/completions", api_base="https://gateway/proxy/"
+    )
+    request = ChatCompletionsAdapter().build_request(
+        config=config,
+        system_prompt="SYSTEM PROMPT",
+        user_text="USER TEXT",
+        temperature=0.3,
+        max_tokens=None,
+    )
+
+    assert request["url"] == "https://gateway/proxy/v1/chat/completions"
+    assert request["headers"] == {
+        "Authorization": "Bearer test-key",
+        "Content-Type": "application/json",
+    }
+    assert request["body"] == {
+        "model": "test-model",
+        "messages": [
+            {"role": "system", "content": "SYSTEM PROMPT"},
+            {"role": "user", "content": "USER TEXT"},
+        ],
+        "temperature": 0.3,
+    }
+
+
+@pytest.mark.parametrize(
+    "max_tokens,expected",
+    [
+        (None, "omitted"),
+        (0, "omitted"),
+        (-1, "omitted"),
+        (128, 128),
+    ],
+    ids=["none", "zero", "negative", "positive"],
+)
+def test_chat_adapter_max_tokens_matrix(max_tokens, expected):
+    """Only a positive token limit reaches the request body."""
+    from backend.providers import ChatCompletionsAdapter
+
+    config = _chat_config(endpoint="/v1/chat/completions", api_base="https://gateway")
+    body = ChatCompletionsAdapter().build_request(
+        config=config,
+        system_prompt="SYS",
+        user_text="USER",
+        temperature=0.3,
+        max_tokens=max_tokens,
+    )["body"]
+
+    if expected == "omitted":
+        assert "max_tokens" not in body
+        assert set(body) == {"model", "messages", "temperature"}
+    else:
+        assert body["max_tokens"] == expected
+        assert set(body) == {"model", "messages", "temperature", "max_tokens"}
+
+
+def test_chat_adapter_places_prompts_and_temperature_verbatim():
+    """System prompt and user text are copied verbatim, model/temperature retained."""
+    from backend.providers import ChatCompletionsAdapter
+
+    system_prompt = "SYSTEM  with  spaces\nand a newline"
+    user_text = "  leading and trailing whitespace  \n\ttabbed  "
+    config = _chat_config(model="gpt-4o-mini", endpoint=None)
+    body = ChatCompletionsAdapter().build_request(
+        config=config,
+        system_prompt=system_prompt,
+        user_text=user_text,
+        temperature=0.42,
+        max_tokens=64,
+    )["body"]
+
+    assert body["model"] == "gpt-4o-mini"
+    assert body["temperature"] == 0.42
+    assert body["messages"] == [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_text},
+    ]
+    assert body["max_tokens"] == 64
+
+
+def test_chat_adapter_normalizes_first_choice_and_usage():
+    """Only choices[0].message.content, its model, and total_tokens are returned."""
+    result = _parse_chat(_chat_payload())
+
+    assert result == {
+        "content": '{"operation": "result"}',
+        "tokens": 15,
+        "model": "upstream-chat-model",
+    }
+    assert "second choice content" not in result["content"]
+
+
+def test_chat_adapter_accepts_empty_string_content():
+    """An empty string is a legitimate content value."""
+    payload = _chat_payload()
+    payload["choices"][0]["message"]["content"] = ""
+    assert _parse_chat(payload)["content"] == ""
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("usage"),
+        lambda p: p["usage"].pop("total_tokens"),
+        lambda p: p["usage"].__setitem__("total_tokens", 0),
+    ],
+    ids=["usage-absent", "total-tokens-absent", "total-tokens-zero"],
+)
+def test_chat_adapter_missing_usage_fields_default_to_zero(mutate):
+    """Absent usage envelopes and absent total_tokens both yield 0 tokens."""
+    payload = _chat_payload()
+    mutate(payload)
+    assert _parse_chat(payload)["tokens"] == 0
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [None, [], "usage", 15, True],
+    ids=["null", "list", "string", "int", "bool"],
+)
+def test_chat_adapter_rejects_non_object_usage(usage):
+    """A present but non-object usage envelope is a provider response error."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    payload["usage"] = usage
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, -1, True, 1.0, 1.5, "1", [], {}],
+    ids=["null", "negative", "bool", "float-integral", "float-fractional", "string", "list", "dict"],
+)
+def test_chat_adapter_rejects_invalid_total_tokens(value):
+    """total_tokens must be a genuine non-negative integer; null is not absent."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    payload["usage"]["total_tokens"] = value
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+@pytest.mark.parametrize("field", ["prompt_tokens", "completion_tokens"])
+@pytest.mark.parametrize(
+    "value",
+    [-1, True, 1.0, 1.5, "1", [], {}],
+    ids=["negative", "bool", "float-integral", "float-fractional", "string", "list", "dict"],
+)
+def test_chat_adapter_rejects_invalid_auxiliary_token_counts(field, value):
+    """Every present token-count field is validated, even when the total decides."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    payload["usage"][field] = value
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("choices"),
+        lambda p: p.__setitem__("choices", []),
+        lambda p: p.__setitem__("choices", {"message": {"content": "x"}}),
+        lambda p: p.__setitem__("choices", "not a list"),
+        lambda p: p.__setitem__("choices", ["not an object"]),
+        lambda p: p.__setitem__("choices", [None]),
+    ],
+    ids=[
+        "choices-absent",
+        "choices-empty",
+        "choices-object",
+        "choices-string",
+        "choice-not-object",
+        "choice-null",
+    ],
+)
+def test_chat_adapter_rejects_unusable_choices(mutate):
+    """choices must be a non-empty array whose first entry is an object."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    mutate(payload)
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p["choices"][0].pop("message"),
+        lambda p: p["choices"][0].__setitem__("message", None),
+        lambda p: p["choices"][0].__setitem__("message", "text"),
+        lambda p: p["choices"][0]["message"].pop("content"),
+        lambda p: p["choices"][0]["message"].__setitem__("content", None),
+        lambda p: p["choices"][0]["message"].__setitem__("content", 5),
+        lambda p: p["choices"][0]["message"].__setitem__("content", ["x"]),
+    ],
+    ids=[
+        "message-absent",
+        "message-null",
+        "message-string",
+        "content-absent",
+        "content-null",
+        "content-int",
+        "content-list",
+    ],
+)
+def test_chat_adapter_rejects_unusable_message_content(mutate):
+    """A missing, null, or non-string content is a provider response error."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    mutate(payload)
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [5, None, [], {}, True],
+    ids=["int", "null", "list", "dict", "bool"],
+)
+def test_chat_adapter_rejects_present_non_string_model(model):
+    """A present model must be a string; only an absent key falls back."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    payload["model"] = model
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+def test_chat_adapter_falls_back_when_model_absent():
+    """An absent model key uses the configured model."""
+    payload = _chat_payload()
+    payload.pop("model")
+    assert _parse_chat(payload, configured_model="fallback-model")["model"] == (
+        "fallback-model"
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, [], "envelope", 7],
+    ids=["null", "list", "string", "int"],
+)
+def test_chat_adapter_rejects_non_object_payload(payload):
+    """The response envelope itself must be a JSON object."""
+    from backend.providers import ProviderResponseError
+
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Responses adapter tests
+# ---------------------------------------------------------------------------
+
+#: Sentinel for "the envelope key is missing entirely" in parametrized cases.
+_MISSING = object()
+
+
+class _OutputRead(RuntimeError):
+    """Raised when an adapter reads the guarded output list too early."""
+
+
+class _GuardedOutput(list):
+    """A real list that raises on every read of its contents.
+
+    ``isinstance(guarded, list)`` stays True, so an adapter that validates the
+    envelope in the wrong order reaches this object and trips it. A correctly
+    ordered adapter rejects populated ``error``/``incomplete_details`` fields
+    first and never touches the payload's output.
+    """
+
+    def _trip(self, how):
+        raise _OutputRead(f"output read via {how} before envelope validation")
+
+    def __getitem__(self, index):
+        self._trip("__getitem__")
+
+    def __iter__(self):
+        self._trip("__iter__")
+
+    def __len__(self):
+        self._trip("__len__")
+
+    def __contains__(self, item):
+        self._trip("__contains__")
+
+    def get(self, *args, **kwargs):
+        self._trip("get")
+
+
+class _GuardedEnvelope(dict):
+    """A real mapping that raises when the ``output`` *value* is fetched from it.
+
+    ``_GuardedOutput`` only fires when the list's contents are read, so an
+    adapter that merely fetches ``payload["output"]``/``payload.get("output")``
+    off the envelope (or probes ``"output" in payload``) without inspecting the
+    list would slip past it. This guard makes that fetch itself fatal, which pins
+    the required ordering: populated ``error``/``incomplete_details`` fields must
+    be rejected before the output key is even looked up. The underlying
+    ``output`` value stays a valid list, so nothing else about the envelope
+    changes.
+    """
+
+    def _trip(self, how):
+        raise _OutputRead(
+            f"envelope key 'output' fetched via {how} before envelope validation"
+        )
+
+    def get(self, key, default=None):
+        if key == "output":
+            self._trip("get")
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        if key == "output":
+            self._trip("__getitem__")
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        if key == "output":
+            self._trip("__contains__")
+        return super().__contains__(key)
+
+
+def _responses_config(**overrides):
+    """Build an AIConfig for Responses tests, applying *overrides* last."""
+    from backend.config import AIConfig
+
+    fields = {
+        "model": "test-model",
+        "api_key": "test-key",
+        "api_base": "https://gateway/proxy/",
+        "endpoint": "/v1/responses",
+    }
+    fields.update(overrides)
+    return AIConfig(**fields)
+
+
+def _responses_payload():
+    """The approved Responses fixture: decoys plus three usable output_text parts."""
+    return {
+        "id": "resp_test",
+        "object": "response",
+        "status": "completed",
+        "error": None,
+        "incomplete_details": None,
+        "model": "upstream-responses-model",
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "output_text", "text": "<ignored non-message decoy>"}
+                ],
+            },
+            {
+                "type": "message",
+                "id": "msg_test",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "<part 1>", "annotations": []},
+                    {"type": "refusal", "text": "<ignored non-output_text decoy>"},
+                    {"type": "output_text", "text": "<part 2>", "annotations": []},
+                ],
+            },
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "output_text", "text": "<ignored between-message decoy>"}
+                ],
+            },
+            {
+                "type": "message",
+                "id": "msg_test_2",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "<part 3>", "annotations": []}
+                ],
+            },
+        ],
+        "usage": {"input_tokens": 7, "output_tokens": 8, "total_tokens": 99},
+    }
+
+
+def _parse_responses(payload, configured_model="test-model"):
+    """Parse *payload* with the Responses adapter."""
+    from backend.providers import ResponsesAdapter
+
+    return ResponsesAdapter().parse_response(
+        payload, configured_model=configured_model
+    )
+
+
+# -- request construction ---------------------------------------------------
+
+
+def test_responses_adapter_build_request_explicit_mode():
+    """Explicit mode appends /v1/responses and sends the exact Responses body."""
+    from backend.providers import ResponsesAdapter
+
+    config = _responses_config(api_base="https://gateway/proxy/")
+    request = ResponsesAdapter().build_request(
+        config=config,
+        system_prompt="SYSTEM PROMPT",
+        user_text="USER TEXT",
+        temperature=0.1,
+        max_tokens=None,
+    )
+
+    assert request["url"] == "https://gateway/proxy/v1/responses"
+    assert request["headers"] == {
+        "Authorization": "Bearer test-key",
+        "Content-Type": "application/json",
+    }
+    assert request["body"] == {
+        "model": "test-model",
+        "instructions": "SYSTEM PROMPT",
+        "input": "USER TEXT",
+        "temperature": 0.1,
+        "store": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "api_base,expected_url",
+    [
+        ("https://gateway/proxy/", "https://gateway/proxy/v1/responses"),
+        ("https://gateway/proxy", "https://gateway/proxy/v1/responses"),
+        ("https://gateway/proxy/v1", "https://gateway/proxy/v1/v1/responses"),
+    ],
+    ids=["trailing-slash-base", "plain-base", "v1-prefixed-base"],
+)
+def test_responses_adapter_url_is_plain_concatenation(api_base, expected_url):
+    """Trailing slashes are trimmed; no URL resolution drops gateway prefixes."""
+    from backend.providers import ResponsesAdapter
+
+    config = _responses_config(api_base=api_base)
+    request = ResponsesAdapter().build_request(
+        config=config,
+        system_prompt="SYS",
+        user_text="USER",
+        temperature=0.3,
+        max_tokens=None,
+    )
+    assert request["url"] == expected_url
+
+
+@pytest.mark.parametrize(
+    "max_tokens,expected",
+    [
+        (None, "omitted"),
+        (0, "omitted"),
+        (-1, "omitted"),
+        (128, 128),
+    ],
+    ids=["omitted", "zero", "negative", "positive"],
+)
+def test_responses_adapter_max_output_tokens_matrix(max_tokens, expected):
+    """Only a positive token limit becomes max_output_tokens; store is always False."""
+    from backend.providers import ResponsesAdapter
+
+    config = _responses_config(api_base="https://gateway/proxy/")
+    request = ResponsesAdapter().build_request(
+        config=config,
+        system_prompt="SYSTEM PROMPT",
+        user_text="USER TEXT",
+        temperature=0.3,
+        max_tokens=max_tokens,
+    )
+
+    assert request["url"] == "https://gateway/proxy/v1/responses"
+    assert request["headers"] == {
+        "Authorization": "Bearer test-key",
+        "Content-Type": "application/json",
+    }
+    body = request["body"]
+    assert body["model"] == "test-model"
+    assert body["instructions"] == "SYSTEM PROMPT"
+    assert body["input"] == "USER TEXT"
+    assert isinstance(body["input"], str)
+    assert body["temperature"] == 0.3
+    assert body["store"] is False
+
+    if expected == "omitted":
+        assert "max_output_tokens" not in body
+        assert set(body) == {"model", "instructions", "input", "temperature", "store"}
+    else:
+        assert body["max_output_tokens"] == expected
+        assert set(body) == {
+            "model",
+            "instructions",
+            "input",
+            "temperature",
+            "store",
+            "max_output_tokens",
+        }
+
+
+def test_responses_adapter_places_prompts_and_temperature_verbatim():
+    """Instructions and input are copied verbatim; model/temperature are retained."""
+    from backend.providers import ResponsesAdapter
+
+    system_prompt = "SYSTEM  with  spaces\nand a newline"
+    user_text = "  leading and trailing whitespace  \n\ttabbed  "
+    config = _responses_config(model="gpt-4o-mini")
+    body = ResponsesAdapter().build_request(
+        config=config,
+        system_prompt=system_prompt,
+        user_text=user_text,
+        temperature=0.42,
+        max_tokens=64,
+    )["body"]
+
+    assert body["model"] == "gpt-4o-mini"
+    assert body["instructions"] == system_prompt
+    assert body["input"] == user_text
+    assert body["temperature"] == 0.42
+    assert body["max_output_tokens"] == 64
+    assert body["store"] is False
+
+
+# -- success extraction -----------------------------------------------------
+
+
+def test_responses_adapter_normalizes_output_text_and_usage():
+    """Only message output_text parts concatenate; total_tokens takes precedence."""
+    result = _parse_responses(_responses_payload())
+
+    assert result == {
+        "content": "<part 1><part 2><part 3>",
+        "tokens": 99,
+        "model": "upstream-responses-model",
+    }
+
+
+@pytest.mark.parametrize(
+    "total_state", [_MISSING, None], ids=["total-absent", "total-null"]
+)
+def test_responses_adapter_falls_back_to_component_sum_when_total_missing(
+    total_state,
+):
+    """An absent or null total_tokens sums the validated 7+8 components to 15.
+
+    Both states are covered so the expected 15 cannot be satisfied by an adapter
+    that returns zero whenever ``total_tokens`` is unavailable.
+    """
+    payload = _responses_payload()
+    if total_state is _MISSING:
+        payload["usage"].pop("total_tokens")
+    else:
+        payload["usage"]["total_tokens"] = None
+
+    assert _parse_responses(payload)["tokens"] == 15
+
+
+@pytest.mark.parametrize("usage_state", [_MISSING, None], ids=["absent", "null"])
+def test_responses_adapter_absent_or_null_usage_normalizes_to_zero(usage_state):
+    """Responses allows an absent or explicitly null usage envelope."""
+    payload = _responses_payload()
+    if usage_state is _MISSING:
+        payload.pop("usage")
+    else:
+        payload["usage"] = None
+
+    assert _parse_responses(payload)["tokens"] == 0
+
+
+def test_responses_adapter_falls_back_when_model_absent():
+    """An absent model key uses the configured model."""
+    payload = _responses_payload()
+    payload.pop("model")
+
+    assert _parse_responses(payload, configured_model="fallback-model")["model"] == (
+        "fallback-model"
+    )
+
+
+# -- completion state -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        _MISSING,
+        None,
+        False,
+        1,
+        {},
+        "failed",
+        "cancelled",
+        "incomplete",
+        "in_progress",
+        "queued",
+        "unknown-status",
+    ],
+    ids=[
+        "missing",
+        "null",
+        "false",
+        "int",
+        "object",
+        "failed",
+        "cancelled",
+        "incomplete",
+        "in_progress",
+        "queued",
+        "unknown",
+    ],
+)
+def test_responses_adapter_rejects_non_completed_status(status):
+    """Only the exact string 'completed' is a usable envelope, despite usable text."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    if status is _MISSING:
+        payload.pop("status")
+    else:
+        payload["status"] = status
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+def test_responses_adapter_rejects_failed_status_with_route_valid_text():
+    """A failed envelope is rejected even when output holds parseable operation JSON."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    payload["status"] = "failed"
+    payload["output"] = [
+        {
+            "type": "message",
+            "content": [
+                {"type": "output_text", "text": '{"polished":"Polished output"}'}
+            ],
+        }
+    ]
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+@pytest.mark.parametrize(
+    "error_state", [_MISSING, None], ids=["error-omitted", "error-null"]
+)
+@pytest.mark.parametrize(
+    "details_state",
+    [_MISSING, None],
+    ids=["incomplete-details-omitted", "incomplete-details-null"],
+)
+def test_responses_adapter_accepts_absent_or_null_error_fields(
+    error_state, details_state
+):
+    """A completed envelope is valid when both error fields are absent or null."""
+    payload = _responses_payload()
+    for field, state in (
+        ("error", error_state),
+        ("incomplete_details", details_state),
+    ):
+        if state is _MISSING:
+            payload.pop(field)
+        else:
+            payload[field] = None
+
+    assert _parse_responses(payload) == {
+        "content": "<part 1><part 2><part 3>",
+        "tokens": 99,
+        "model": "upstream-responses-model",
+    }
+
+
+@pytest.mark.parametrize("field", ["error", "incomplete_details"])
+@pytest.mark.parametrize(
+    "value",
+    [{}, {"code": "provider_error"}, [], ["populated"], "", "populated", False, True, 0, 1, 0.0, 1.5],
+    ids=[
+        "empty-object",
+        "populated-object",
+        "empty-array",
+        "populated-array",
+        "empty-string",
+        "populated-string",
+        "false",
+        "true",
+        "zero",
+        "positive-int",
+        "zero-float",
+        "fractional-float",
+    ],
+)
+def test_responses_adapter_rejects_populated_error_fields_before_output_access(
+    field, value
+):
+    """Any present non-null error field is fatal before the output is read."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    payload["output"] = _GuardedOutput(payload["output"])
+    payload = _GuardedEnvelope(payload)
+    payload[field] = value
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+def test_responses_guarded_output_trips_when_read():
+    """Positive control: the guard fires if extraction is actually attempted."""
+    payload = _responses_payload()
+    payload["output"] = _GuardedOutput(payload["output"])
+
+    with pytest.raises(_OutputRead):
+        _parse_responses(payload)
+
+
+def test_responses_guarded_envelope_trips_when_adapter_fetches_output():
+    """Positive control: adapter extraction must fetch output off the envelope."""
+    payload = _GuardedEnvelope(_responses_payload())
+
+    with pytest.raises(_OutputRead):
+        _parse_responses(payload)
+
+
+def test_responses_guarded_envelope_trips_on_every_fetch_path():
+    """Positive control: get, __getitem__, and ``in`` all trip the envelope guard."""
+    payload = _GuardedEnvelope(_responses_payload())
+
+    # The underlying value stays a valid list, so only the fetch is fatal.
+    assert dict.__getitem__(payload, "output") == _responses_payload()["output"]
+
+    with pytest.raises(_OutputRead):
+        payload.get("output")
+    with pytest.raises(_OutputRead):
+        payload["output"]
+    with pytest.raises(_OutputRead):
+        "output" in payload
+
+    # Unrelated keys stay readable.
+    assert payload.get("status") == "completed"
+    assert payload["status"] == "completed"
+    assert "usage" in payload
+
+
+# -- output shape validation ------------------------------------------------
+
+
+def _only_content(content):
+    """Build an output list holding one message item with *content*."""
+    return [{"type": "message", "content": content}]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("output"),
+        lambda p: p.__setitem__("output", None),
+        lambda p: p.__setitem__("output", {"type": "message"}),
+        lambda p: p.__setitem__("output", "not a list"),
+        lambda p: p.__setitem__("output", []),
+        lambda p: p.__setitem__("output", ["not an object"]),
+        lambda p: p.__setitem__("output", [None]),
+        lambda p: p.__setitem__("output", [{"type": "message"}]),
+        lambda p: p.__setitem__("output", _only_content(None)),
+        lambda p: p.__setitem__("output", _only_content("text")),
+        lambda p: p.__setitem__("output", _only_content({"type": "output_text"})),
+        lambda p: p.__setitem__("output", _only_content(["not a part"])),
+        lambda p: p.__setitem__("output", _only_content([{"type": "output_text"}])),
+        lambda p: p.__setitem__(
+            "output", _only_content([{"type": "output_text", "text": None}])
+        ),
+        lambda p: p.__setitem__(
+            "output", _only_content([{"type": "output_text", "text": 5}])
+        ),
+        lambda p: p.__setitem__(
+            "output", _only_content([{"type": "output_text", "text": ["x"]}])
+        ),
+        lambda p: p.__setitem__(
+            "output",
+            [
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "output_text", "text": "decoy"}],
+                }
+            ],
+        ),
+        lambda p: p.__setitem__(
+            "output", _only_content([{"type": "refusal", "text": "decoy"}])
+        ),
+    ],
+    ids=[
+        "output-absent",
+        "output-null",
+        "output-object",
+        "output-string",
+        "output-empty",
+        "output-item-string",
+        "output-item-null",
+        "content-absent",
+        "content-null",
+        "content-string",
+        "content-object",
+        "content-part-string",
+        "output-text-absent",
+        "output-text-null",
+        "output-text-int",
+        "output-text-list",
+        "only-reasoning-decoy",
+        "only-refusal-part",
+    ],
+)
+def test_responses_adapter_rejects_unusable_output(mutate):
+    """Missing/malformed output and unusable output_text parts are fatal."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    mutate(payload)
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [5, None, [], {}, True],
+    ids=["int", "null", "list", "dict", "bool"],
+)
+def test_responses_adapter_rejects_present_non_string_model(model):
+    """A present model must be a string; only an absent key falls back."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    payload["model"] = model
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, [], "envelope", 7],
+    ids=["null", "list", "string", "int"],
+)
+def test_responses_adapter_rejects_non_object_payload(payload):
+    """The response envelope itself must be a JSON object."""
+    from backend.providers import ProviderResponseError
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+# -- usage shape validation -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [False, True, 1, "1", []],
+    ids=["false", "true", "int", "string", "list"],
+)
+def test_responses_adapter_rejects_non_object_usage(usage):
+    """A present non-object usage envelope is a provider response error."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    payload["usage"] = usage
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+@pytest.mark.parametrize("field", ["total_tokens", "input_tokens", "output_tokens"])
+@pytest.mark.parametrize(
+    "value",
+    [-1, True, 1.0, 1.5, "1", [], {}],
+    ids=[
+        "negative",
+        "bool",
+        "float-integral",
+        "float-fractional",
+        "string",
+        "list",
+        "dict",
+    ],
+)
+def test_responses_adapter_rejects_invalid_count_values(field, value):
+    """Every token count must be an exact non-negative integer."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    # The fixture's other counts stay valid, so only *field* is at fault.
+    payload["usage"][field] = value
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+@pytest.mark.parametrize("component", ["input_tokens", "output_tokens"])
+@pytest.mark.parametrize("state", [_MISSING, None], ids=["absent", "null"])
+def test_responses_adapter_absent_or_null_components_keep_total(component, state):
+    """Absent/null components stay valid and do not change total_tokens=99."""
+    payload = _responses_payload()
+    if state is _MISSING:
+        payload["usage"].pop(component)
+    else:
+        payload["usage"][component] = None
+
+    assert _parse_responses(payload)["tokens"] == 99
+
+
+@pytest.mark.parametrize(
+    "total_state", [_MISSING, None], ids=["total-absent", "total-null"]
+)
+@pytest.mark.parametrize(
+    "input_state", [_MISSING, None], ids=["input-absent", "input-null"]
+)
+@pytest.mark.parametrize(
+    "output_state", [_MISSING, None], ids=["output-absent", "output-null"]
+)
+def test_responses_adapter_absent_counts_normalize_to_zero(
+    total_state, input_state, output_state
+):
+    """Absent/null totals and components all contribute zero."""
+    payload = _responses_payload()
+    usage = payload["usage"]
+    for field, state in (
+        ("total_tokens", total_state),
+        ("input_tokens", input_state),
+        ("output_tokens", output_state),
+    ):
+        if state is _MISSING:
+            usage.pop(field)
+        else:
+            usage[field] = None
+
+    assert _parse_responses(payload)["tokens"] == 0
+
+
+def test_responses_adapter_null_total_still_validates_components():
+    """A null total_tokens does not excuse an invalid component count."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    payload["usage"]["total_tokens"] = None
+    payload["usage"]["input_tokens"] = "7"
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+# ---------------------------------------------------------------------------
+# Anthropic Messages adapter tests
+# ---------------------------------------------------------------------------
+
+
+def _messages_config(**overrides):
+    """Build an AIConfig for Messages tests, applying *overrides* last."""
+    from backend.config import AIConfig
+
+    fields = {
+        "model": "test-model",
+        "api_key": "test-key",
+        "api_base": "https://gateway/proxy/",
+        "endpoint": "/v1/messages",
+        "messages_default_max_tokens": 4096,
+    }
+    fields.update(overrides)
+    return AIConfig(**fields)
+
+
+def _messages_payload():
+    """The approved Messages fixture: a thinking decoy plus two text blocks."""
+    return {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "upstream-messages-model",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": "<ignored thinking decoy>",
+                "signature": "sig_test",
+            },
+            {"type": "text", "text": "<part 1>"},
+            {"type": "text", "text": "<part 2>"},
+        ],
+        "usage": {"input_tokens": 7, "output_tokens": 8},
+    }
+
+
+def _parse_messages(payload, configured_model="test-model"):
+    """Parse *payload* with the Messages adapter."""
+    from backend.providers import MessagesAdapter
+
+    return MessagesAdapter().parse_response(
+        payload, configured_model=configured_model
+    )
+
+
+# -- request construction ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "configured_default", [4096, 8192], ids=["default-4096", "default-8192"]
+)
+@pytest.mark.parametrize(
+    "max_tokens,expected",
+    [
+        (None, "fallback"),
+        (0, "fallback"),
+        (-1, "fallback"),
+        (128, 128),
+    ],
+    ids=["absent", "zero", "negative", "positive"],
+)
+def test_messages_adapter_max_tokens_matrix(configured_default, max_tokens, expected):
+    """max_tokens is mandatory: a positive caller limit wins, else the configured default."""
+    from backend.providers import MessagesAdapter
+
+    config = _messages_config(messages_default_max_tokens=configured_default)
+    request = MessagesAdapter().build_request(
+        config=config,
+        system_prompt="SYSTEM PROMPT",
+        user_text="USER TEXT",
+        temperature=0.3,
+        max_tokens=max_tokens,
+    )
+
+    assert request["url"] == "https://gateway/proxy/v1/messages"
+    assert request["headers"] == {
+        "x-api-key": "test-key",
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    assert "Authorization" not in request["headers"]
+
+    body = request["body"]
+    assert body == {
+        "model": "test-model",
+        "system": "SYSTEM PROMPT",
+        "messages": [{"role": "user", "content": "USER TEXT"}],
+        "temperature": 0.3,
+        "max_tokens": configured_default if expected == "fallback" else expected,
+    }
+    assert set(body) == {
+        "model",
+        "system",
+        "messages",
+        "temperature",
+        "max_tokens",
+    }
+    assert len(body["messages"]) == 1
+    assert isinstance(body["max_tokens"], int)
+    assert body["max_tokens"] > 0
+
+
+@pytest.mark.parametrize(
+    "api_base,expected_url",
+    [
+        ("https://gateway/proxy/", "https://gateway/proxy/v1/messages"),
+        ("https://gateway/proxy", "https://gateway/proxy/v1/messages"),
+        ("https://gateway/proxy/v1", "https://gateway/proxy/v1/v1/messages"),
+        ("https://gateway/proxy/a/b/", "https://gateway/proxy/a/b/v1/messages"),
+    ],
+    ids=["trailing-slash-base", "plain-base", "v1-prefixed-base", "nested-prefix"],
+)
+def test_messages_adapter_url_is_plain_concatenation(api_base, expected_url):
+    """Trailing slashes are trimmed; no URL resolution drops gateway prefixes."""
+    from backend.providers import MessagesAdapter
+
+    config = _messages_config(api_base=api_base)
+    request = MessagesAdapter().build_request(
+        config=config,
+        system_prompt="SYS",
+        user_text="USER",
+        temperature=0.3,
+        max_tokens=None,
+    )
+    assert request["url"] == expected_url
+
+
+def test_messages_adapter_places_prompts_and_temperature_verbatim():
+    """System prompt and user text are copied verbatim at their exact locations."""
+    from backend.providers import MessagesAdapter
+
+    system_prompt = "SYSTEM  with  spaces\nand a newline"
+    user_text = "  leading and trailing whitespace  \n\ttabbed  "
+    config = _messages_config(model="claude-test", messages_default_max_tokens=2048)
+    body = MessagesAdapter().build_request(
+        config=config,
+        system_prompt=system_prompt,
+        user_text=user_text,
+        temperature=0.42,
+        max_tokens=None,
+    )["body"]
+
+    assert body["model"] == "claude-test"
+    assert body["system"] == system_prompt
+    assert body["messages"] == [{"role": "user", "content": user_text}]
+    assert body["temperature"] == 0.42
+    assert body["max_tokens"] == 2048
+
+
+# -- success extraction -----------------------------------------------------
+
+
+def test_messages_adapter_normalizes_text_blocks_and_usage():
+    """Only text blocks concatenate; input+output tokens are summed."""
+    result = _parse_messages(_messages_payload())
+
+    assert result == {
+        "content": "<part 1><part 2>",
+        "tokens": 15,
+        "model": "upstream-messages-model",
+    }
+
+
+def test_messages_adapter_falls_back_when_model_absent():
+    """An absent model key uses the configured model."""
+    payload = _messages_payload()
+    payload.pop("model")
+
+    assert _parse_messages(payload, configured_model="fallback-model")["model"] == (
+        "fallback-model"
+    )
+
+
+# -- stop_reason handling ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "stop_reason",
+    ["max_tokens", "end_turn", "stop_sequence", "pause_turn", "refusal", "other"],
+    ids=["max-tokens", "end-turn", "stop-sequence", "pause-turn", "refusal", "other"],
+)
+def test_messages_adapter_accepts_any_string_stop_reason(stop_reason):
+    """A truncated or otherwise-stopped call still yields its extracted text."""
+    payload = _messages_payload()
+    payload["stop_reason"] = stop_reason
+
+    assert _parse_messages(payload) == {
+        "content": "<part 1><part 2>",
+        "tokens": 15,
+        "model": "upstream-messages-model",
+    }
+
+
+def test_messages_adapter_accepts_absent_stop_reason():
+    """The adapter never requires a stop reason."""
+    payload = _messages_payload()
+    payload.pop("stop_reason")
+
+    assert _parse_messages(payload)["content"] == "<part 1><part 2>"
+
+
+@pytest.mark.parametrize(
+    "stop_reason",
+    [None, False, True, 0, 1, 1.5, [], {}, ["max_tokens"]],
+    ids=[
+        "null",
+        "false",
+        "true",
+        "zero",
+        "int",
+        "float",
+        "list",
+        "dict",
+        "list-of-str",
+    ],
+)
+def test_messages_adapter_rejects_present_non_string_stop_reason(stop_reason):
+    """A present non-string stop_reason is a malformed envelope."""
+    from backend.providers import ProviderResponseError
+
+    payload = _messages_payload()
+    payload["stop_reason"] = stop_reason
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+# -- content shape validation ------------------------------------------------
+
+
+def _only_messages_content(*blocks):
+    """Return a mutator replacing content with exactly *blocks*."""
+
+    def mutate(payload):
+        payload["content"] = list(blocks)
+
+    return mutate
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("content"),
+        lambda p: p.__setitem__("content", None),
+        lambda p: p.__setitem__("content", "text"),
+        lambda p: p.__setitem__("content", {"type": "text", "text": "x"}),
+        lambda p: p.__setitem__("content", 7),
+        _only_messages_content(),
+        _only_messages_content("text-block"),
+        _only_messages_content(None),
+        _only_messages_content(["text-block"]),
+        _only_messages_content({"type": "thinking", "thinking": "only thinking"}),
+        _only_messages_content({"type": "tool_use", "id": "t", "name": "n", "input": {}}),
+        _only_messages_content({"type": "text"}),
+        _only_messages_content({"type": "text", "text": None}),
+        _only_messages_content({"type": "text", "text": 7}),
+        _only_messages_content({"type": "text", "text": ["<part 1>"]}),
+        _only_messages_content({"text": "<untyped block>"}),
+    ],
+    ids=[
+        "content-absent",
+        "content-null",
+        "content-string",
+        "content-object",
+        "content-int",
+        "content-empty",
+        "content-block-string",
+        "content-block-null",
+        "content-block-list",
+        "only-thinking",
+        "only-tool-use",
+        "text-absent",
+        "text-null",
+        "text-int",
+        "text-list",
+        "untyped-block",
+    ],
+)
+def test_messages_adapter_rejects_unusable_content(mutate):
+    """Missing/non-list content, non-object blocks, and unusable text are fatal."""
+    from backend.providers import ProviderResponseError
+
+    payload = _messages_payload()
+    mutate(payload)
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, [], "envelope", 7, True],
+    ids=["null", "list", "string", "int", "bool"],
+)
+def test_messages_adapter_rejects_non_object_payload(payload):
+    """The response envelope itself must be a JSON object."""
+    from backend.providers import ProviderResponseError
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [5, None, [], {}, True],
+    ids=["int", "null", "list", "dict", "bool"],
+)
+def test_messages_adapter_rejects_present_non_string_model(model):
+    """A present model must be a string; only an absent key falls back."""
+    from backend.providers import ProviderResponseError
+
+    payload = _messages_payload()
+    payload["model"] = model
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}},
+        {
+            "type": "error",
+            "error": {"type": "overloaded_error", "message": "overloaded"},
+            "content": [],
+        },
+        {
+            "type": "error",
+            "error": {"type": "authentication_error", "message": "invalid x-api-key"},
+            "content": [{"type": "thinking", "thinking": "no usable text"}],
+        },
+        {
+            "type": "error",
+            "error": {"type": "api_error", "message": "internal"},
+            "content": None,
+        },
+    ],
+    ids=["no-content", "empty-content", "no-text-blocks", "null-content"],
+)
+def test_messages_adapter_rejects_http_success_error_envelopes(payload):
+    """An HTTP-200 error body has no usable content and must not be accepted."""
+    from backend.providers import ProviderResponseError
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+# -- usage shape validation -------------------------------------------------
+
+
+def test_messages_adapter_absent_usage_normalizes_to_zero():
+    """An absent usage envelope normalizes to zero tokens."""
+    payload = _messages_payload()
+    payload.pop("usage")
+
+    assert _parse_messages(payload)["tokens"] == 0
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [None, False, True, 0, 1, "1", []],
+    ids=["null", "false", "true", "zero", "int", "string", "list"],
+)
+def test_messages_adapter_rejects_non_object_usage(usage):
+    """Messages requires an object usage envelope; null is not allowed."""
+    from backend.providers import ProviderResponseError
+
+    payload = _messages_payload()
+    payload["usage"] = usage
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+@pytest.mark.parametrize("component", ["input_tokens", "output_tokens"])
+@pytest.mark.parametrize("state", [_MISSING, None], ids=["absent", "null"])
+def test_messages_adapter_absent_or_null_counts_normalize_to_zero(component, state):
+    """A missing or null individual count contributes zero."""
+    payload = _messages_payload()
+    if state is _MISSING:
+        payload["usage"].pop(component)
+    else:
+        payload["usage"][component] = None
+
+    # The other component stays at 7 (input) or 8 (output).
+    expected = 8 if component == "input_tokens" else 7
+    assert _parse_messages(payload)["tokens"] == expected
+
+
+@pytest.mark.parametrize("field", ["input_tokens", "output_tokens"])
+@pytest.mark.parametrize(
+    "value",
+    [-1, True, 1.0, 1.5, "1", [], {}],
+    ids=["negative", "bool", "float-integral", "float-fractional", "string", "list", "dict"],
+)
+def test_messages_adapter_rejects_invalid_count_values(field, value):
+    """Every token count must be an exact non-negative integer."""
+    from backend.providers import ProviderResponseError
+
+    payload = _messages_payload()
+    # The other component stays valid, so only *field* is at fault.
+    payload["usage"][field] = value
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+# ---------------------------------------------------------------------------
+# Shared transport and route/protocol integration
+# ---------------------------------------------------------------------------
+
+
+_PROTOCOL_MODES = [
+    pytest.param(None, "chat", id="legacy-chat"),
+    pytest.param("/v1/chat/completions", "chat", id="explicit-chat"),
+    pytest.param("/v1/responses", "responses", id="responses"),
+    pytest.param("/v1/messages", "messages", id="messages"),
+]
+_OPERATION_CASES = [
+    pytest.param("/check", "errors", [], "[]", id="check"),
+    pytest.param(
+        "/polish", "polished", "Improved text.",
+        '{"polished":"Improved text."}', id="polish",
+    ),
+    pytest.param(
+        "/translate", "translated", "Translated text.",
+        '{"translated":"Translated text."}', id="translate",
+    ),
+]
+_ROUTE_PARSERS = {
+    "/check": "_parse_errors",
+    "/polish": "_parse_polished",
+    "/translate": "_parse_translated",
+}
+
+
+def _operation_envelope(protocol, content):
+    """Operation-valid upstream payloads with distinct models and known usage."""
+    if protocol == "responses":
+        return {
+            "id": "resp_route",
+            "object": "response",
+            "status": "completed",
+            "model": "upstream-responses-model",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": content}],
+            }],
+            "usage": {"input_tokens": 7, "output_tokens": 8, "total_tokens": 15},
+        }
+    if protocol == "messages":
+        return {
+            "id": "msg_route",
+            "type": "message",
+            "role": "assistant",
+            "model": "upstream-messages-model",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": content}],
+            "usage": {"input_tokens": 7, "output_tokens": 8},
+        }
+    return {
+        "id": "chat_route",
+        "object": "chat.completion",
+        "model": "upstream-chat-model",
+        "choices": [{"message": {"role": "assistant", "content": content}}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 8, "total_tokens": 15},
+    }
+
+
+def _provider_response(payload=None, *, status=200, text=None):
+    kwargs = {"content": text} if text is not None else {"json": payload}
+    return httpx.Response(
+        status, request=httpx.Request("POST", "https://gateway/upstream"), **kwargs
+    )
+
+
+class _RecordedProviderHTTP:
+    """Replace only the provider's AsyncClient and record its wire boundary."""
+
+    def __init__(self, outcomes):
+        self.outcomes = outcomes
+        self.calls = []
+        self.options = []
+
+    def __call__(self, **options):
+        self.options.append(options)
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return None
+
+    async def post(self, url, *, headers, json):
+        self.calls.append({"url": url, "headers": headers, "body": json})
+        outcome = self.outcomes[min(len(self.calls) - 1, len(self.outcomes) - 1)]
+        if isinstance(outcome, Exception):
+            raise outcome
+        if callable(outcome):
+            return await outcome()
+        return outcome
+
+
+@pytest.fixture
+def provider_http(monkeypatch):
+    def install(*outcomes):
+        fake = _RecordedProviderHTTP(outcomes)
+        fake.sleep = AsyncMock()
+        monkeypatch.setattr("httpx.AsyncClient", fake)
+        monkeypatch.setattr("backend.providers.asyncio.sleep", fake.sleep)
+        return fake
+
+    return install
+
+
+def _route_config(tmp_path, monkeypatch, endpoint, **overrides):
+    fields = {
+        "model": "configured-model",
+        "api_base": "https://gateway/proxy/",
+        "endpoint": _OMITTED if endpoint is None else endpoint,
+    }
+    fields.update(overrides)
+    _write_ai_config(tmp_path, monkeypatch, **fields)
+
+
+def _record_parser(monkeypatch, route):
+    import backend.routes as routes
+
+    name = _ROUTE_PARSERS[route]
+    parser = MagicMock(wraps=getattr(routes, name))
+    monkeypatch.setattr(routes, name, parser)
+    return parser
+
+
+def _expected_system_prompt(route, *, language="auto", target="en"):
+    from backend.providers import (
+        GRAMMAR_SYSTEM_PROMPT, POLISH_SYSTEM_PROMPT, TRANSLATE_SYSTEM_PROMPT,
+    )
+
+    if route == "/check":
+        return GRAMMAR_SYSTEM_PROMPT + (
+            "" if language == "auto" else
+            f"\n\nThe text is in {language}. Focus on errors specific to this language."
+        )
+    if route == "/polish":
+        return POLISH_SYSTEM_PROMPT
+    return TRANSLATE_SYSTEM_PROMPT + (
+        "\n\nTarget language: English" if target == "en" else
+        f"\n\nTarget language: {target}"
+    )
+
+
+@pytest.mark.parametrize("endpoint,protocol", _PROTOCOL_MODES)
+def test_provider_adapter_selection(endpoint, protocol):
+    from backend.providers import (
+        ChatCompletionsAdapter, ResponsesAdapter, MessagesAdapter, _get_adapter,
+    )
+
+    expected = {
+        "chat": ChatCompletionsAdapter,
+        "responses": ResponsesAdapter,
+        "messages": MessagesAdapter,
+    }[protocol]
+    assert type(_get_adapter(_chat_config(endpoint=endpoint))) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint,protocol", _PROTOCOL_MODES)
+async def test_call_provider_preserves_timeout_deadline_and_normalizes(
+    monkeypatch, provider_http, endpoint, protocol
+):
+    from backend.config import TimeoutConfig
+    import backend.providers as providers
+
+    config = _chat_config(
+        endpoint=endpoint, api_base="https://gateway/proxy/v1/",
+        timeout=TimeoutConfig(connect=2, read=3, write=4, pool=5),
+    )
+    fake = provider_http(_provider_response(_operation_envelope(protocol, "text")))
+    recorded = []
+    original_call = providers._do_ai_call
+
+    async def record_call(request, adapter, timeout, config, deadline):
+        recorded.append((request, adapter, timeout, config, deadline))
+        return await original_call(request, adapter, timeout, config, deadline)
+
+    monkeypatch.setattr(providers, "_do_ai_call", record_call)
+    result = await providers._call_provider("SYSTEM", "USER", 0.42, config, 128)
+
+    assert result == {"content": "text", "tokens": 15, "model": f"upstream-{protocol}-model"}
+    assert len(recorded) == 1
+    request, _adapter, timeout, passed_config, deadline = recorded[0]
+    assert passed_config is config
+    assert deadline == 8
+    assert timeout.connect == 2
+    assert timeout.read == 3
+    assert timeout.write == 4
+    assert timeout.pool == 5
+    expected_suffix = "/chat/completions" if endpoint is None else endpoint
+    expected_base = "https://gateway/proxy/v1/" if endpoint is None else "https://gateway/proxy/v1"
+    assert request["url"] == expected_base + expected_suffix
+    assert fake.calls == [request]
+    assert fake.options[0]["timeout"] is timeout
+    assert fake.options[0]["limits"].max_keepalive_connections == 5
+    fake.sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+@pytest.mark.parametrize("endpoint,protocol", _PROTOCOL_MODES)
+@pytest.mark.parametrize("limit", [_OMITTED, 0, 128], ids=["omitted", "zero", "positive"])
+async def test_route_protocol_token_matrix(
+    client, tmp_path, monkeypatch, provider_http,
+    route, key, value, content, endpoint, protocol, limit,
+):
+    _route_config(
+        tmp_path, monkeypatch, endpoint,
+        endpoints={"check": 0.11, "polish": 0.22, "translate": 0.33},
+    )
+    fake = provider_http(_provider_response(_operation_envelope(protocol, content)))
+    parser = _record_parser(monkeypatch, route)
+    body = {"text": " \nInput text.\t ", "language": "fr", "target_lang": "en"}
+    if limit is not _OMITTED:
+        body["max_tokens"] = limit
+    response = await client.post(route, json=body)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {key: value, "model": f"upstream-{protocol}-model", "tokens_used": 15}
+    assert set(response.json()) == {key, "model", "tokens_used"}
+    assert response.headers["connection"] == "close"
+    parser.assert_called_once_with(content)
+    assert len(fake.calls) == 1
+    wire = fake.calls[0]
+    assert wire["url"] == (
+        "https://gateway/proxy/v1/chat/completions" if endpoint is None else
+        "https://gateway/proxy" + endpoint
+    )
+    expected_headers = (
+        {"x-api-key": "test-key-12345", "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+        if protocol == "messages" else
+        {"Authorization": "Bearer test-key-12345", "Content-Type": "application/json"}
+    )
+    assert wire["headers"] == expected_headers
+    expected_body = {
+        "model": "configured-model",
+        "temperature": {"/check": 0.11, "/polish": 0.22, "/translate": 0.33}[route],
+    }
+    system = _expected_system_prompt(route, language="fr")
+    if protocol == "responses":
+        expected_body.update(instructions=system, input="Input text.", store=False)
+        if limit == 128:
+            expected_body["max_output_tokens"] = 128
+    elif protocol == "messages":
+        expected_body.update(
+            system=system, messages=[{"role": "user", "content": "Input text."}],
+            max_tokens=128 if limit == 128 else 4096,
+        )
+    else:
+        expected_body["messages"] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "Input text."},
+        ]
+        if limit == 128:
+            expected_body["max_tokens"] = 128
+    assert wire["body"] == expected_body
+    fake.sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+@pytest.mark.parametrize("limit", [_OMITTED, 0, 128], ids=["omitted", "zero", "positive"])
+async def test_route_messages_configured_token_fallback(
+    client, tmp_path, monkeypatch, provider_http, route, key, value, content, limit,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/messages", messages_default_max_tokens=8192)
+    fake = provider_http(_provider_response(_operation_envelope("messages", content)))
+    body = {"text": "text"}
+    if limit is not _OMITTED:
+        body["max_tokens"] = limit
+    response = await client.post(route, json=body)
+    assert response.status_code == 200, response.text
+    assert fake.calls[0]["body"]["max_tokens"] == (128 if limit == 128 else 8192)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+@pytest.mark.parametrize("override", [None, 0.47], ids=["default-temperature", "global-temperature"])
+async def test_route_exact_prompts_default_and_global_temperature(
+    client, tmp_path, monkeypatch, provider_http, route, key, value, content, override,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/responses", temperature=override)
+    fake = provider_http(_provider_response(_operation_envelope("responses", content)))
+    response = await client.post(route, json={"text": "text", "language": "auto"})
+    assert response.status_code == 200, response.text
+    assert fake.calls[0]["body"]["instructions"] == _expected_system_prompt(route)
+    default = 0.1 if route == "/check" else 0.3
+    assert fake.calls[0]["body"]["temperature"] == (default if override is None else override)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["en", "zh", "French"])
+async def test_translate_route_exact_target_label(client, tmp_path, monkeypatch, provider_http, target):
+    _route_config(tmp_path, monkeypatch, "/v1/responses")
+    fake = provider_http(_provider_response(_operation_envelope("responses", '{"translated":"text"}')))
+    response = await client.post("/translate", json={"text": "text", "target_lang": target})
+    assert response.status_code == 200, response.text
+    assert fake.calls[0]["body"]["instructions"] == _expected_system_prompt("/translate", target=target)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+@pytest.mark.parametrize("endpoint,protocol", _PROTOCOL_MODES)
+async def test_route_protocol_truncates_before_provider(
+    client, tmp_path, monkeypatch, provider_http, route, key, value, content, endpoint, protocol,
+):
+    _route_config(tmp_path, monkeypatch, endpoint)
+    fake = provider_http(_provider_response(_operation_envelope(protocol, content)))
+    text = "0123456789" * 6000
+    response = await client.post(route, json={"text": " \n" + text + "\t "})
+    assert response.status_code == 200, response.text
+    body = fake.calls[0]["body"]
+    upstream_text = body["input"] if protocol == "responses" else body["messages"][-1]["content"]
+    assert upstream_text == text[:50000]
+    assert len(upstream_text) == 50000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+async def test_route_legacy_v1_trailing_slash_is_preserved(
+    client, tmp_path, monkeypatch, provider_http, route, key, value, content,
+):
+    _route_config(tmp_path, monkeypatch, None, api_base="https://gateway/proxy/v1/")
+    fake = provider_http(_provider_response(_operation_envelope("chat", content)))
+    response = await client.post(route, json={"text": "text"})
+    assert response.status_code == 200, response.text
+    assert fake.calls[0]["url"] == "https://gateway/proxy/v1//chat/completions"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/check", "/polish", "/translate"])
+@pytest.mark.parametrize("invalid", [None, "", "chat/completions", "/responses", "/v1/responses/", "https://api.openai.com/v1/responses", "/v1/unknown", 42, False, [], {}])
+async def test_route_invalid_endpoint_stops_before_client(
+    client, tmp_path, monkeypatch, route, invalid,
+):
+    _write_ai_config(tmp_path, monkeypatch, endpoint=invalid)
+    with patch("httpx.AsyncClient", side_effect=AssertionError("network constructed")) as constructor:
+        response = await client.post(route, json={"text": "text"})
+    assert response.status_code == 500
+    assert set(response.json()) == {"detail"}
+    assert response.json()["detail"].startswith("Unsupported ai.endpoint value:")
+    constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/check", "/polish", "/translate"])
+@pytest.mark.parametrize("invalid", ["", None, 42, False, [], {}, "/", "///"])
+async def test_route_invalid_explicit_api_base_stops_before_client(
+    client, tmp_path, monkeypatch, route, invalid,
+):
+    _write_ai_config(tmp_path, monkeypatch, endpoint="/v1/messages", api_base=invalid)
+    with patch("httpx.AsyncClient", side_effect=AssertionError("network constructed")) as constructor:
+        response = await client.post(route, json={"text": "text"})
+    assert response.status_code == 500
+    assert response.json() == {"detail": "ai.api_base must be a non-empty string when ai.endpoint is set."}
+    constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+async def test_empty_route_skips_config_and_provider(
+    client, monkeypatch, route, key, value, content,
+):
+    loader = MagicMock(side_effect=AssertionError("configuration loaded"))
+    monkeypatch.setattr("backend.config.load_config", loader)
+    monkeypatch.setattr("backend.routes.load_config", loader)
+    with patch("httpx.AsyncClient", side_effect=AssertionError("network constructed")) as constructor:
+        response = await client.post(route, json={"text": " \n\t "})
+    assert response.status_code == 200
+    assert response.json() == {key: [] if key == "errors" else "", "model": "", "tokens_used": 0}
+    loader.assert_not_called()
+    constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled", "incomplete", "in_progress", "queued", _MISSING, None, "unknown"])
+async def test_responses_route_requires_completed_before_parser(
+    client, tmp_path, monkeypatch, provider_http, status,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/responses")
+    payload = _operation_envelope("responses", '{"polished":"text"}')
+    if status is _MISSING:
+        payload.pop("status")
+    else:
+        payload["status"] = status
+    fake = provider_http(_provider_response(payload))
+    parser = _record_parser(monkeypatch, "/polish")
+    response = await client.post("/polish", json={"text": "text"})
+    assert response.status_code == (200 if status == "completed" else 502), response.text
+    if status == "completed":
+        parser.assert_called_once_with('{"polished":"text"}')
+        assert len(fake.calls) == 1
+    else:
+        assert set(response.json()) == {"detail"}
+        assert response.json()["detail"].startswith("AI provider error:")
+        parser.assert_not_called()
+        assert len(fake.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [_MISSING, None], ids=["absent-error", "null-error"])
+@pytest.mark.parametrize("details", [_MISSING, None], ids=["absent-details", "null-details"])
+async def test_responses_route_accepts_absent_null_error_fields(
+    client, tmp_path, monkeypatch, provider_http, error, details,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/responses")
+    payload = _operation_envelope("responses", '{"polished":"text"}')
+    for field, value in (("error", error), ("incomplete_details", details)):
+        if value is not _MISSING:
+            payload[field] = value
+    fake = provider_http(_provider_response(payload))
+    response = await client.post("/polish", json={"text": "text"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"polished": "text", "model": "upstream-responses-model", "tokens_used": 15}
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["error", "incomplete_details"])
+@pytest.mark.parametrize("value", [{}, {"code": "failed"}, [], ["error"], "", "error", False, True, 0, 1, 0.0, 1.5])
+async def test_responses_route_rejects_non_null_errors_before_output(
+    client, tmp_path, monkeypatch, provider_http, field, value,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/responses")
+    payload = _GuardedEnvelope(_operation_envelope("responses", '{"polished":"text"}'))
+    payload[field] = value
+    response_double = _provider_response({})
+    response_double.json = MagicMock(return_value=payload)
+    fake = provider_http(response_double)
+    parser = _record_parser(monkeypatch, "/polish")
+    response = await client.post("/polish", json={"text": "text"})
+    assert response.status_code == 502
+    assert set(response.json()) == {"detail"}
+    assert response.json()["detail"].startswith("AI provider error:")
+    assert field in response.json()["detail"]
+    assert "output" not in response.json()["detail"]
+    assert len(fake.calls) == 2
+    parser.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [
+    ("output", None), ("output", []), ("output", "bad"),
+    ("output", [{"type": "message", "content": [{"type": "output_text", "text": None}]}]),
+    ("usage", False), ("usage", []), ("usage", "bad"),
+    ("usage", {"total_tokens": -1}), ("usage", {"total_tokens": True}),
+    ("usage", {"input_tokens": "7"}), ("usage", {"output_tokens": 1.0}),
+])
+async def test_responses_route_malformed_output_usage_is_502(
+    client, tmp_path, monkeypatch, provider_http, field, value,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/responses")
+    payload = _operation_envelope("responses", '{"polished":"text"}')
+    payload[field] = value
+    fake = provider_http(_provider_response(payload))
+    parser = _record_parser(monkeypatch, "/polish")
+    response = await client.post("/polish", json={"text": "text"})
+    assert response.status_code == 502
+    assert set(response.json()) == {"detail"}
+    assert response.json()["detail"].startswith("AI provider error:")
+    assert len(fake.calls) == 2
+    parser.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+@pytest.mark.parametrize("wrapper", ["plain", "fence", "prose"])
+async def test_messages_route_truncation_keeps_parser_recovery(
+    client, tmp_path, monkeypatch, provider_http, route, key, value, content, wrapper,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/messages")
+    if wrapper == "fence":
+        content = f"```json\n{content}\n```"
+    elif wrapper == "prose":
+        content = f"Here is the result: {content} End of result."
+    payload = _operation_envelope("messages", content)
+    payload["stop_reason"] = "max_tokens"
+    fake = provider_http(_provider_response(payload))
+    parser = _record_parser(monkeypatch, route)
+    response = await client.post(route, json={"text": "text"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {key: value, "model": "upstream-messages-model", "tokens_used": 15}
+    parser.assert_called_once_with(content)
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,content", [
+    ("/check", "not JSON"), ("/check", "{}"), ("/check", "[broken"),
+    ("/polish", "not JSON"), ("/polish", "{}"), ("/polish", '{"translated":"wrong"}'),
+    ("/polish", '{"polished":""}'), ("/polish", '{"polished":7}'),
+    ("/translate", "not JSON"), ("/translate", "{}"), ("/translate", '{"polished":"wrong"}'),
+    ("/translate", '{"translated":""}'), ("/translate", '{"translated":7}'),
+])
+async def test_messages_route_parser_failure_is_not_retried(
+    client, tmp_path, monkeypatch, provider_http, route, content,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/messages")
+    payload = _operation_envelope("messages", content)
+    payload["stop_reason"] = "max_tokens"
+    fake = provider_http(_provider_response(payload))
+    parser = _record_parser(monkeypatch, route)
+    response = await client.post(route, json={"text": "text"})
+    assert response.status_code == 502
+    assert set(response.json()) == {"detail"}
+    parser.assert_called_once_with(content)
+    assert len(fake.calls) == 1
+    fake.sleep.assert_not_awaited()
+
+
+_VALID_ROUTE_ERROR = {
+    "start": 0, "end": 3, "error": "bad", "correction": "good",
+    "explanation": "fix", "type": "error",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("items,expected", [
+    ([_VALID_ROUTE_ERROR], [_VALID_ROUTE_ERROR]),
+    ([{}, None, 7, {"start": "wrong"}, _VALID_ROUTE_ERROR], [_VALID_ROUTE_ERROR]),
+    ([{}, None, 7], []), ([], []),
+])
+async def test_messages_check_route_skips_malformed_error_items(
+    client, tmp_path, monkeypatch, provider_http, items, expected,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/messages")
+    payload = _operation_envelope("messages", json.dumps(items))
+    payload["stop_reason"] = "max_tokens"
+    fake = provider_http(_provider_response(payload))
+    response = await client.post("/check", json={"text": "bad"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"errors": expected, "model": "upstream-messages-model", "tokens_used": 15}
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_transport_uses_resolved_request_and_retries_once(provider_http):
+    from backend.providers import _do_ai_call
+
+    fake = provider_http(
+        _provider_response(status=500, text="first failure"),
+        _provider_response(_operation_envelope("chat", "success")),
+    )
+    request = _transport_request({"custom-header": "custom-value"})
+    result = await _do_ai_call(request, _chat_adapter(), httpx.Timeout(10), _chat_config(), 20)
+    assert result == {"content": "success", "model": "upstream-chat-model", "tokens": 15}
+    assert fake.calls == [request, request]
+    assert len(fake.options) == 2
+    assert all(options["limits"].max_keepalive_connections == 5 for options in fake.options)
+    fake.sleep.assert_awaited_once_with(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True], ids=["debug-off", "debug-on"])
+@pytest.mark.parametrize("failure,status,prefix", [
+    ("http-status", 502, "AI provider error: 503 — "),
+    ("native-timeout", 504, "AI provider timed out"),
+    ("httpx-timeout", 502, "AI provider error:"),
+    ("httpx-request", 502, "AI provider error:"),
+    ("json", 502, "AI provider error:"),
+    ("provider-response", 502, "AI provider error:"),
+    ("unexpected", 502, "Unexpected AI error: RuntimeError:"),
+])
+async def test_transport_final_failure_mapping_retry_and_debug(
+    monkeypatch, provider_http, debug, failure, status, prefix,
+):
+    from backend.providers import _do_ai_call
+
+    outcomes = {
+        "http-status": _provider_response(status=503, text="x" * 600),
+        "native-timeout": asyncio.TimeoutError("timed out"),
+        "httpx-timeout": httpx.ReadTimeout("read timed out"),
+        "httpx-request": httpx.ConnectError("connection failed"),
+        "json": _provider_response(text="{broken"),
+        "provider-response": _provider_response({"choices": []}),
+        "unexpected": RuntimeError("simulated crash"),
+    }
+    fake = provider_http(outcomes[failure])
+    monkeypatch.setattr("backend.providers._load_debug", lambda: debug)
+    with patch("traceback.print_exc") as traceback:
+        with pytest.raises(HTTPException) as caught:
+            await _do_ai_call(
+                _transport_request(), _chat_adapter(), httpx.Timeout(10), _chat_config(), 20,
+            )
+    assert caught.value.status_code == status
+    assert caught.value.detail.startswith(prefix)
+    if failure == "http-status":
+        assert caught.value.detail == prefix + "x" * 500
+    if failure == "native-timeout":
+        assert caught.value.detail == prefix
+    assert len(fake.calls) == 2
+    assert fake.calls == [_transport_request(), _transport_request()]
+    fake.sleep.assert_awaited_once_with(1)
+    assert traceback.call_count == (2 if debug and failure == "unexpected" else 0)
+
+
+@pytest.mark.asyncio
+async def test_transport_real_deadline_retries_and_cancels_each_attempt(provider_http):
+    from backend.providers import _do_ai_call
+
+    cancellations = []
+
+    async def blocked_post():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancellations.append(True)
+
+    fake = provider_http(blocked_post)
+    with pytest.raises(HTTPException) as caught:
+        await _do_ai_call(
+            _transport_request(), _chat_adapter(), httpx.Timeout(10), _chat_config(), 0.01,
+        )
+    assert caught.value.status_code == 504
+    assert caught.value.detail == "AI provider timed out"
+    assert len(fake.calls) == 2
+    assert cancellations == [True, True]
+    fake.sleep.assert_awaited_once_with(1)
