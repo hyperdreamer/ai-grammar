@@ -648,3 +648,407 @@ async def test_catch_all_handler_debug_gate(
     assert resp.status_code == 500
     payload = json.loads(resp.body)
     assert payload == {"error": "Internal error: RuntimeError: simulated crash"}
+
+
+# ---------------------------------------------------------------------------
+# Provider adapter contract and Chat Completions tests
+# ---------------------------------------------------------------------------
+
+
+def _chat_config(**overrides):
+    """Build an AIConfig for adapter tests, applying *overrides* last."""
+    from backend.config import AIConfig
+
+    fields = {
+        "model": "test-model",
+        "api_key": "test-key",
+        "api_base": "https://gateway/v1",
+        "endpoint": None,
+    }
+    fields.update(overrides)
+    return AIConfig(**fields)
+
+
+def _chat_payload():
+    """A well-formed Chat Completions payload with two distinctly useful choices."""
+    return {
+        "model": "upstream-chat-model",
+        "choices": [
+            {"message": {"content": '{"operation": "result"}'}},
+            {"message": {"content": "second choice content"}},
+        ],
+        "usage": {"total_tokens": 15},
+    }
+
+
+def _parse_chat(payload, configured_model="test-model"):
+    """Parse *payload* with the Chat Completions adapter."""
+    from backend.providers import ChatCompletionsAdapter
+
+    return ChatCompletionsAdapter().parse_response(
+        payload, configured_model=configured_model
+    )
+
+
+def test_provider_request_and_result_contracts():
+    """ProviderRequest/ProviderResult expose exactly the documented keys."""
+    from backend.providers import (
+        ChatCompletionsAdapter,
+        ProtocolAdapter,
+        ProviderRequest,
+        ProviderResult,
+    )
+
+    assert set(ProviderRequest.__annotations__) == {"url", "headers", "body"}
+    assert set(ProviderResult.__annotations__) == {"content", "tokens", "model"}
+    # The protocol declares both adapter methods; the adapter provides them.
+    assert getattr(ProtocolAdapter, "_is_protocol", False)
+    assert callable(ProtocolAdapter.build_request)
+    assert callable(ProtocolAdapter.parse_response)
+    adapter = ChatCompletionsAdapter()
+    assert callable(adapter.build_request)
+    assert callable(adapter.parse_response)
+
+
+def test_adapter_response_error_is_dedicated_exception():
+    """Envelope defects raise a dedicated error, never a generic builtin one."""
+    from backend.providers import ProviderResponseError
+
+    assert issubclass(ProviderResponseError, Exception)
+    assert not issubclass(
+        ProviderResponseError, (KeyError, IndexError, TypeError, ValueError)
+    )
+
+
+@pytest.mark.parametrize(
+    "endpoint,api_base,expected_url",
+    [
+        (None, "https://gateway/v1", "https://gateway/v1/chat/completions"),
+        (None, "https://gateway/v1/", "https://gateway/v1//chat/completions"),
+        (None, "https://gateway", "https://gateway/chat/completions"),
+        (
+            "/v1/chat/completions",
+            "https://gateway/proxy/",
+            "https://gateway/proxy/v1/chat/completions",
+        ),
+        (
+            "/v1/chat/completions",
+            "https://gateway/proxy",
+            "https://gateway/proxy/v1/chat/completions",
+        ),
+        (
+            "/v1/chat/completions",
+            "https://gateway/proxy/v1",
+            "https://gateway/proxy/v1/v1/chat/completions",
+        ),
+        ("/v1/responses", "https://gateway/proxy/", "https://gateway/proxy/v1/responses"),
+        ("/v1/messages", "https://gateway/proxy/", "https://gateway/proxy/v1/messages"),
+    ],
+    ids=[
+        "legacy-v1-base",
+        "legacy-trailing-slash-keeps-double-slash",
+        "legacy-bare-base",
+        "explicit-trailing-slash-base",
+        "explicit-plain-base",
+        "explicit-v1-prefixed-base",
+        "explicit-responses",
+        "explicit-messages",
+    ],
+)
+def test_endpoint_url_matches_mode_contract(endpoint, api_base, expected_url):
+    """Legacy mode concatenates /chat/completions; explicit mode appends the path."""
+    from backend.providers import _endpoint_url
+
+    config = _chat_config(endpoint=endpoint, api_base=api_base)
+    assert _endpoint_url(config) == expected_url
+
+
+def test_chat_adapter_build_request_legacy_mode():
+    """Legacy mode targets the normalized /v1 base with a Bearer JSON request."""
+    from backend.providers import ChatCompletionsAdapter
+
+    config = _chat_config(endpoint=None, api_base="https://gateway/v1")
+    request = ChatCompletionsAdapter().build_request(
+        config=config,
+        system_prompt="SYSTEM PROMPT",
+        user_text="USER TEXT",
+        temperature=0.1,
+        max_tokens=None,
+    )
+
+    assert request["url"] == "https://gateway/v1/chat/completions"
+    assert request["headers"] == {
+        "Authorization": "Bearer test-key",
+        "Content-Type": "application/json",
+    }
+    assert request["body"] == {
+        "model": "test-model",
+        "messages": [
+            {"role": "system", "content": "SYSTEM PROMPT"},
+            {"role": "user", "content": "USER TEXT"},
+        ],
+        "temperature": 0.1,
+    }
+
+
+def test_chat_adapter_build_request_explicit_mode():
+    """Explicit mode appends the configured path without URL resolution."""
+    from backend.providers import ChatCompletionsAdapter
+
+    config = _chat_config(
+        endpoint="/v1/chat/completions", api_base="https://gateway/proxy/"
+    )
+    request = ChatCompletionsAdapter().build_request(
+        config=config,
+        system_prompt="SYSTEM PROMPT",
+        user_text="USER TEXT",
+        temperature=0.3,
+        max_tokens=None,
+    )
+
+    assert request["url"] == "https://gateway/proxy/v1/chat/completions"
+    assert request["headers"] == {
+        "Authorization": "Bearer test-key",
+        "Content-Type": "application/json",
+    }
+    assert request["body"] == {
+        "model": "test-model",
+        "messages": [
+            {"role": "system", "content": "SYSTEM PROMPT"},
+            {"role": "user", "content": "USER TEXT"},
+        ],
+        "temperature": 0.3,
+    }
+
+
+@pytest.mark.parametrize(
+    "max_tokens,expected",
+    [
+        (None, "omitted"),
+        (0, "omitted"),
+        (-1, "omitted"),
+        (128, 128),
+    ],
+    ids=["none", "zero", "negative", "positive"],
+)
+def test_chat_adapter_max_tokens_matrix(max_tokens, expected):
+    """Only a positive token limit reaches the request body."""
+    from backend.providers import ChatCompletionsAdapter
+
+    config = _chat_config(endpoint="/v1/chat/completions", api_base="https://gateway")
+    body = ChatCompletionsAdapter().build_request(
+        config=config,
+        system_prompt="SYS",
+        user_text="USER",
+        temperature=0.3,
+        max_tokens=max_tokens,
+    )["body"]
+
+    if expected == "omitted":
+        assert "max_tokens" not in body
+        assert set(body) == {"model", "messages", "temperature"}
+    else:
+        assert body["max_tokens"] == expected
+        assert set(body) == {"model", "messages", "temperature", "max_tokens"}
+
+
+def test_chat_adapter_places_prompts_and_temperature_verbatim():
+    """System prompt and user text are copied verbatim, model/temperature retained."""
+    from backend.providers import ChatCompletionsAdapter
+
+    system_prompt = "SYSTEM  with  spaces\nand a newline"
+    user_text = "  leading and trailing whitespace  \n\ttabbed  "
+    config = _chat_config(model="gpt-4o-mini", endpoint=None)
+    body = ChatCompletionsAdapter().build_request(
+        config=config,
+        system_prompt=system_prompt,
+        user_text=user_text,
+        temperature=0.42,
+        max_tokens=64,
+    )["body"]
+
+    assert body["model"] == "gpt-4o-mini"
+    assert body["temperature"] == 0.42
+    assert body["messages"] == [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_text},
+    ]
+    assert body["max_tokens"] == 64
+
+
+def test_chat_adapter_normalizes_first_choice_and_usage():
+    """Only choices[0].message.content, its model, and total_tokens are returned."""
+    result = _parse_chat(_chat_payload())
+
+    assert result == {
+        "content": '{"operation": "result"}',
+        "tokens": 15,
+        "model": "upstream-chat-model",
+    }
+    assert "second choice content" not in result["content"]
+
+
+def test_chat_adapter_accepts_empty_string_content():
+    """An empty string is a legitimate content value."""
+    payload = _chat_payload()
+    payload["choices"][0]["message"]["content"] = ""
+    assert _parse_chat(payload)["content"] == ""
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("usage"),
+        lambda p: p["usage"].pop("total_tokens"),
+        lambda p: p["usage"].__setitem__("total_tokens", 0),
+    ],
+    ids=["usage-absent", "total-tokens-absent", "total-tokens-zero"],
+)
+def test_chat_adapter_missing_usage_fields_default_to_zero(mutate):
+    """Absent usage envelopes and absent total_tokens both yield 0 tokens."""
+    payload = _chat_payload()
+    mutate(payload)
+    assert _parse_chat(payload)["tokens"] == 0
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [None, [], "usage", 15, True],
+    ids=["null", "list", "string", "int", "bool"],
+)
+def test_chat_adapter_rejects_non_object_usage(usage):
+    """A present but non-object usage envelope is a provider response error."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    payload["usage"] = usage
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [-1, True, 1.0, 1.5, "1", [], {}],
+    ids=["negative", "bool", "float-integral", "float-fractional", "string", "list", "dict"],
+)
+def test_chat_adapter_rejects_invalid_total_tokens(value):
+    """total_tokens must be a genuine non-negative integer."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    payload["usage"]["total_tokens"] = value
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+@pytest.mark.parametrize("field", ["prompt_tokens", "completion_tokens"])
+@pytest.mark.parametrize(
+    "value",
+    [-1, True, 1.0, 1.5, "1", [], {}],
+    ids=["negative", "bool", "float-integral", "float-fractional", "string", "list", "dict"],
+)
+def test_chat_adapter_rejects_invalid_auxiliary_token_counts(field, value):
+    """Every present token-count field is validated, even when the total decides."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    payload["usage"][field] = value
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("choices"),
+        lambda p: p.__setitem__("choices", []),
+        lambda p: p.__setitem__("choices", {"message": {"content": "x"}}),
+        lambda p: p.__setitem__("choices", "not a list"),
+        lambda p: p.__setitem__("choices", ["not an object"]),
+        lambda p: p.__setitem__("choices", [None]),
+    ],
+    ids=[
+        "choices-absent",
+        "choices-empty",
+        "choices-object",
+        "choices-string",
+        "choice-not-object",
+        "choice-null",
+    ],
+)
+def test_chat_adapter_rejects_unusable_choices(mutate):
+    """choices must be a non-empty array whose first entry is an object."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    mutate(payload)
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p["choices"][0].pop("message"),
+        lambda p: p["choices"][0].__setitem__("message", None),
+        lambda p: p["choices"][0].__setitem__("message", "text"),
+        lambda p: p["choices"][0]["message"].pop("content"),
+        lambda p: p["choices"][0]["message"].__setitem__("content", None),
+        lambda p: p["choices"][0]["message"].__setitem__("content", 5),
+        lambda p: p["choices"][0]["message"].__setitem__("content", ["x"]),
+    ],
+    ids=[
+        "message-absent",
+        "message-null",
+        "message-string",
+        "content-absent",
+        "content-null",
+        "content-int",
+        "content-list",
+    ],
+)
+def test_chat_adapter_rejects_unusable_message_content(mutate):
+    """A missing, null, or non-string content is a provider response error."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    mutate(payload)
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [5, None, [], {}, True],
+    ids=["int", "null", "list", "dict", "bool"],
+)
+def test_chat_adapter_rejects_present_non_string_model(model):
+    """A present model must be a string; only an absent key falls back."""
+    from backend.providers import ProviderResponseError
+
+    payload = _chat_payload()
+    payload["model"] = model
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)
+
+
+def test_chat_adapter_falls_back_when_model_absent():
+    """An absent model key uses the configured model."""
+    payload = _chat_payload()
+    payload.pop("model")
+    assert _parse_chat(payload, configured_model="fallback-model")["model"] == (
+        "fallback-model"
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, [], "envelope", 7],
+    ids=["null", "list", "string", "int"],
+)
+def test_chat_adapter_rejects_non_object_payload(payload):
+    """The response envelope itself must be a JSON object."""
+    from backend.providers import ProviderResponseError
+
+    with pytest.raises(ProviderResponseError):
+        _parse_chat(payload)

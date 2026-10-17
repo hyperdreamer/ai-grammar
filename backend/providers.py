@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Protocol, TypedDict
 
 import httpx
 from fastapi import HTTPException
@@ -35,6 +36,192 @@ Preserve the tone, intent, and formatting of the original. Do not add explanatio
 
 
 from .models import ErrorItem
+
+
+# ---------------------------------------------------------------------------
+# Provider protocol contracts
+# ---------------------------------------------------------------------------
+
+
+class ProviderRequest(TypedDict):
+    """A fully-resolved HTTP request for one provider protocol call."""
+
+    url: str
+    headers: dict[str, str]
+    body: dict[str, Any]
+
+
+class ProviderResult(TypedDict):
+    """The normalized result of one provider protocol call."""
+
+    content: str
+    tokens: int
+    model: str
+
+
+class ProviderResponseError(Exception):
+    """A provider envelope was malformed, incomplete, or unusable.
+
+    Adapters raise this instead of leaking ``KeyError``/``IndexError``/``TypeError``
+    from envelope inspection, so callers can map one error class to HTTP 502.
+    """
+
+
+class ProtocolAdapter(Protocol):
+    """A provider wire protocol: request construction and response parsing."""
+
+    def build_request(
+        self,
+        *,
+        config: AIConfig,
+        system_prompt: str,
+        user_text: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> ProviderRequest: ...
+
+    def parse_response(
+        self, payload: object, *, configured_model: str
+    ) -> ProviderResult: ...
+
+
+# Sentinel distinguishing an absent key from a present ``None`` value.
+_ABSENT = object()
+
+
+def _require_non_negative_int(value: object, field: str) -> int:
+    """Return *value* if it is a genuine non-negative integer, else raise.
+
+    ``type(value) is int`` deliberately rejects ``bool`` (a subclass of ``int``),
+    and floats such as ``1.0`` are rejected because they are not integers.
+    """
+    if type(value) is not int or value < 0:
+        raise ProviderResponseError(
+            f"provider response field {field} must be a non-negative integer, "
+            f"got {value!r}"
+        )
+    return value
+
+
+def _require_model(payload: Mapping[str, Any], configured_model: str) -> str:
+    """Return the envelope's model, falling back only when the key is absent."""
+    raw_model = payload.get("model", _ABSENT)
+    if raw_model is _ABSENT:
+        return configured_model
+    if not isinstance(raw_model, str):
+        raise ProviderResponseError(
+            f"provider response field model must be a string, got {raw_model!r}"
+        )
+    return raw_model
+
+
+def _require_usage_tokens(payload: Mapping[str, Any]) -> int:
+    """Validate the usage envelope and return its total token count.
+
+    An absent ``usage`` or ``total_tokens`` yields ``0``. Every token-count field
+    that is present is validated, even when ``total_tokens`` decides the result.
+    """
+    usage = payload.get("usage", _ABSENT)
+    if usage is _ABSENT:
+        return 0
+    if not isinstance(usage, Mapping):
+        raise ProviderResponseError(
+            f"provider response field usage must be an object, got {usage!r}"
+        )
+    for field in ("total_tokens", "prompt_tokens", "completion_tokens"):
+        if field in usage:
+            _require_non_negative_int(usage[field], f"usage.{field}")
+    return usage.get("total_tokens", 0)
+
+
+def _endpoint_url(config: AIConfig) -> str:
+    """Return the request URL for *config*'s configured mode.
+
+    Legacy mode (``endpoint is None``) keeps the historical
+    ``api_base + "/chat/completions"`` concatenation, including any double slash
+    a trailing-slash base produces. Explicit mode trims trailing slashes from the
+    base and appends the configured path verbatim — no URL resolution, so custom
+    gateway prefixes are preserved.
+    """
+    if config.endpoint is None:
+        return config.api_base + "/chat/completions"
+    return config.api_base.rstrip("/") + config.endpoint
+
+
+class ChatCompletionsAdapter:
+    """The OpenAI-compatible Chat Completions protocol (legacy and explicit)."""
+
+    def build_request(
+        self,
+        *,
+        config: AIConfig,
+        system_prompt: str,
+        user_text: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> ProviderRequest:
+        body: dict[str, Any] = {
+            "model": config.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_text},
+            ],
+            "temperature": temperature,
+        }
+        # Only include max_tokens if explicitly set (0 or None = unbounded)
+        if max_tokens is not None and max_tokens > 0:
+            body["max_tokens"] = max_tokens
+
+        return {
+            "url": _endpoint_url(config),
+            "headers": {
+                "Authorization": f"Bearer {config.api_key}",
+                "Content-Type": "application/json",
+            },
+            "body": body,
+        }
+
+    def parse_response(
+        self, payload: object, *, configured_model: str
+    ) -> ProviderResult:
+        if not isinstance(payload, Mapping):
+            raise ProviderResponseError(
+                f"provider response must be an object, got {type(payload).__name__}"
+            )
+
+        choices = payload.get("choices", _ABSENT)
+        if choices is _ABSENT:
+            raise ProviderResponseError("provider response is missing choices")
+        if not isinstance(choices, list) or not choices:
+            raise ProviderResponseError(
+                f"provider response choices must be a non-empty array, got {choices!r}"
+            )
+
+        first_choice = choices[0]
+        if not isinstance(first_choice, Mapping):
+            raise ProviderResponseError(
+                f"provider response choices[0] must be an object, got {first_choice!r}"
+            )
+
+        message = first_choice.get("message", _ABSENT)
+        if not isinstance(message, Mapping):
+            raise ProviderResponseError(
+                f"provider response choices[0].message must be an object, got {message!r}"
+            )
+
+        content = message.get("content", _ABSENT)
+        if not isinstance(content, str):
+            # An empty string is legitimate content; None/absent is not.
+            raise ProviderResponseError(
+                "provider response choices[0].message.content must be a string, "
+                f"got {content!r}"
+            )
+
+        return {
+            "content": content,
+            "tokens": _require_usage_tokens(payload),
+            "model": _require_model(payload, configured_model),
+        }
 
 
 # ---------------------------------------------------------------------------
