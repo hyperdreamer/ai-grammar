@@ -220,6 +220,67 @@ def _responses_output_text(payload: Mapping[str, Any]) -> str:
     return "".join(texts)
 
 
+def _messages_usage_tokens(payload: Mapping[str, Any]) -> int:
+    """Validate the Messages usage envelope and return its summed token count.
+
+    An absent ``usage`` normalizes to ``0``; a present non-object ``usage`` —
+    including ``null`` — is malformed. ``input_tokens`` and ``output_tokens`` are
+    summed, where an absent or null count contributes ``0`` while any other
+    non-integer value is rejected.
+    """
+    usage = payload.get("usage", _ABSENT)
+    if usage is _ABSENT:
+        return 0
+    if not isinstance(usage, Mapping):
+        raise ProviderResponseError(
+            f"provider response field usage must be an object, got {usage!r}"
+        )
+
+    total = 0
+    for field in ("input_tokens", "output_tokens"):
+        value = usage.get(field, _ABSENT)
+        if value is _ABSENT or value is None:
+            continue
+        total += _require_non_negative_int(value, f"usage.{field}")
+    return total
+
+
+def _messages_content_text(payload: Mapping[str, Any]) -> str:
+    """Concatenate the usable ``text`` blocks of a Messages envelope.
+
+    Only blocks whose ``type`` is exactly ``"text"`` contribute; thinking,
+    tool-use, and other block types are ignored. Selected text is appended in
+    provider order without separators. At least one selectable block is required,
+    but truncated text is *not* rejected here — the transport layer owns that.
+    """
+    content = payload.get("content", _ABSENT)
+    if not isinstance(content, list):
+        raise ProviderResponseError(
+            f"provider response field content must be an array, got {content!r}"
+        )
+
+    texts: list[str] = []
+    for index, block in enumerate(content):
+        if not isinstance(block, Mapping):
+            raise ProviderResponseError(
+                f"provider response field content[{index}] must be an object, "
+                f"got {block!r}"
+            )
+        if block.get("type") != "text":
+            continue
+        text = block.get("text", _ABSENT)
+        if not isinstance(text, str):
+            raise ProviderResponseError(
+                f"provider response field content[{index}].text must be a string, "
+                f"got {text!r}"
+            )
+        texts.append(text)
+
+    if not texts:
+        raise ProviderResponseError("provider response has no usable text blocks")
+    return "".join(texts)
+
+
 def _endpoint_url(config: AIConfig) -> str:
     """Return the request URL for *config*'s configured mode.
 
@@ -372,6 +433,67 @@ class ResponsesAdapter:
         return {
             "content": _responses_output_text(payload),
             "tokens": _require_responses_usage_tokens(payload),
+            "model": _require_model(payload, configured_model),
+        }
+
+
+class MessagesAdapter:
+    """The Anthropic Messages protocol (explicit ``/v1/messages`` mode)."""
+
+    def build_request(
+        self,
+        *,
+        config: AIConfig,
+        system_prompt: str,
+        user_text: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> ProviderRequest:
+        # max_tokens is mandatory for the Messages protocol, so a positive caller
+        # limit wins and everything else falls back to the configured default.
+        effective_max_tokens = (
+            max_tokens
+            if max_tokens is not None and max_tokens > 0
+            else config.messages_default_max_tokens
+        )
+        body: dict[str, Any] = {
+            "model": config.model,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_text}],
+            "temperature": temperature,
+            "max_tokens": effective_max_tokens,
+        }
+
+        return {
+            "url": config.api_base.rstrip("/") + "/v1/messages",
+            "headers": {
+                "x-api-key": config.api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            "body": body,
+        }
+
+    def parse_response(
+        self, payload: object, *, configured_model: str
+    ) -> ProviderResult:
+        if not isinstance(payload, Mapping):
+            raise ProviderResponseError(
+                f"provider response must be an object, got {type(payload).__name__}"
+            )
+
+        # A present stop_reason must be a string; "max_tokens" (truncation) is a
+        # legitimate value and must not be rejected.
+        stop_reason = payload.get("stop_reason", _ABSENT)
+        if stop_reason is not _ABSENT and not isinstance(stop_reason, str):
+            raise ProviderResponseError(
+                "provider response field stop_reason must be a string, "
+                f"got {stop_reason!r}"
+            )
+
+        return {
+            "content": _messages_content_text(payload),
+            "tokens": _messages_usage_tokens(payload),
             "model": _require_model(payload, configured_model),
         }
 

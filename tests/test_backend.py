@@ -1748,3 +1748,417 @@ def test_responses_adapter_null_total_still_validates_components():
 
     with pytest.raises(ProviderResponseError):
         _parse_responses(payload)
+
+
+# ---------------------------------------------------------------------------
+# Anthropic Messages adapter tests
+# ---------------------------------------------------------------------------
+
+
+def _messages_config(**overrides):
+    """Build an AIConfig for Messages tests, applying *overrides* last."""
+    from backend.config import AIConfig
+
+    fields = {
+        "model": "test-model",
+        "api_key": "test-key",
+        "api_base": "https://gateway/proxy/",
+        "endpoint": "/v1/messages",
+        "messages_default_max_tokens": 4096,
+    }
+    fields.update(overrides)
+    return AIConfig(**fields)
+
+
+def _messages_payload():
+    """The approved Messages fixture: a thinking decoy plus two text blocks."""
+    return {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "upstream-messages-model",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": "<ignored thinking decoy>",
+                "signature": "sig_test",
+            },
+            {"type": "text", "text": "<part 1>"},
+            {"type": "text", "text": "<part 2>"},
+        ],
+        "usage": {"input_tokens": 7, "output_tokens": 8},
+    }
+
+
+def _parse_messages(payload, configured_model="test-model"):
+    """Parse *payload* with the Messages adapter."""
+    from backend.providers import MessagesAdapter
+
+    return MessagesAdapter().parse_response(
+        payload, configured_model=configured_model
+    )
+
+
+# -- request construction ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "configured_default", [4096, 8192], ids=["default-4096", "default-8192"]
+)
+@pytest.mark.parametrize(
+    "max_tokens,expected",
+    [
+        (None, "fallback"),
+        (0, "fallback"),
+        (-1, "fallback"),
+        (128, 128),
+    ],
+    ids=["absent", "zero", "negative", "positive"],
+)
+def test_messages_adapter_max_tokens_matrix(configured_default, max_tokens, expected):
+    """max_tokens is mandatory: a positive caller limit wins, else the configured default."""
+    from backend.providers import MessagesAdapter
+
+    config = _messages_config(messages_default_max_tokens=configured_default)
+    request = MessagesAdapter().build_request(
+        config=config,
+        system_prompt="SYSTEM PROMPT",
+        user_text="USER TEXT",
+        temperature=0.3,
+        max_tokens=max_tokens,
+    )
+
+    assert request["url"] == "https://gateway/proxy/v1/messages"
+    assert request["headers"] == {
+        "x-api-key": "test-key",
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    assert "Authorization" not in request["headers"]
+
+    body = request["body"]
+    assert body == {
+        "model": "test-model",
+        "system": "SYSTEM PROMPT",
+        "messages": [{"role": "user", "content": "USER TEXT"}],
+        "temperature": 0.3,
+        "max_tokens": configured_default if expected == "fallback" else expected,
+    }
+    assert set(body) == {
+        "model",
+        "system",
+        "messages",
+        "temperature",
+        "max_tokens",
+    }
+    assert len(body["messages"]) == 1
+    assert isinstance(body["max_tokens"], int)
+    assert body["max_tokens"] > 0
+
+
+@pytest.mark.parametrize(
+    "api_base,expected_url",
+    [
+        ("https://gateway/proxy/", "https://gateway/proxy/v1/messages"),
+        ("https://gateway/proxy", "https://gateway/proxy/v1/messages"),
+        ("https://gateway/proxy/v1", "https://gateway/proxy/v1/v1/messages"),
+        ("https://gateway/proxy/a/b/", "https://gateway/proxy/a/b/v1/messages"),
+    ],
+    ids=["trailing-slash-base", "plain-base", "v1-prefixed-base", "nested-prefix"],
+)
+def test_messages_adapter_url_is_plain_concatenation(api_base, expected_url):
+    """Trailing slashes are trimmed; no URL resolution drops gateway prefixes."""
+    from backend.providers import MessagesAdapter
+
+    config = _messages_config(api_base=api_base)
+    request = MessagesAdapter().build_request(
+        config=config,
+        system_prompt="SYS",
+        user_text="USER",
+        temperature=0.3,
+        max_tokens=None,
+    )
+    assert request["url"] == expected_url
+
+
+def test_messages_adapter_places_prompts_and_temperature_verbatim():
+    """System prompt and user text are copied verbatim at their exact locations."""
+    from backend.providers import MessagesAdapter
+
+    system_prompt = "SYSTEM  with  spaces\nand a newline"
+    user_text = "  leading and trailing whitespace  \n\ttabbed  "
+    config = _messages_config(model="claude-test", messages_default_max_tokens=2048)
+    body = MessagesAdapter().build_request(
+        config=config,
+        system_prompt=system_prompt,
+        user_text=user_text,
+        temperature=0.42,
+        max_tokens=None,
+    )["body"]
+
+    assert body["model"] == "claude-test"
+    assert body["system"] == system_prompt
+    assert body["messages"] == [{"role": "user", "content": user_text}]
+    assert body["temperature"] == 0.42
+    assert body["max_tokens"] == 2048
+
+
+# -- success extraction -----------------------------------------------------
+
+
+def test_messages_adapter_normalizes_text_blocks_and_usage():
+    """Only text blocks concatenate; input+output tokens are summed."""
+    result = _parse_messages(_messages_payload())
+
+    assert result == {
+        "content": "<part 1><part 2>",
+        "tokens": 15,
+        "model": "upstream-messages-model",
+    }
+
+
+def test_messages_adapter_falls_back_when_model_absent():
+    """An absent model key uses the configured model."""
+    payload = _messages_payload()
+    payload.pop("model")
+
+    assert _parse_messages(payload, configured_model="fallback-model")["model"] == (
+        "fallback-model"
+    )
+
+
+# -- stop_reason handling ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "stop_reason",
+    ["max_tokens", "end_turn", "stop_sequence", "pause_turn", "refusal", "other"],
+    ids=["max-tokens", "end-turn", "stop-sequence", "pause-turn", "refusal", "other"],
+)
+def test_messages_adapter_accepts_any_string_stop_reason(stop_reason):
+    """A truncated or otherwise-stopped call still yields its extracted text."""
+    payload = _messages_payload()
+    payload["stop_reason"] = stop_reason
+
+    assert _parse_messages(payload) == {
+        "content": "<part 1><part 2>",
+        "tokens": 15,
+        "model": "upstream-messages-model",
+    }
+
+
+def test_messages_adapter_accepts_absent_stop_reason():
+    """The adapter never requires a stop reason."""
+    payload = _messages_payload()
+    payload.pop("stop_reason")
+
+    assert _parse_messages(payload)["content"] == "<part 1><part 2>"
+
+
+@pytest.mark.parametrize(
+    "stop_reason",
+    [None, False, True, 0, 1, 1.5, [], {}, ["max_tokens"]],
+    ids=[
+        "null",
+        "false",
+        "true",
+        "zero",
+        "int",
+        "float",
+        "list",
+        "dict",
+        "list-of-str",
+    ],
+)
+def test_messages_adapter_rejects_present_non_string_stop_reason(stop_reason):
+    """A present non-string stop_reason is a malformed envelope."""
+    from backend.providers import ProviderResponseError
+
+    payload = _messages_payload()
+    payload["stop_reason"] = stop_reason
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+# -- content shape validation ------------------------------------------------
+
+
+def _only_messages_content(*blocks):
+    """Return a mutator replacing content with exactly *blocks*."""
+
+    def mutate(payload):
+        payload["content"] = list(blocks)
+
+    return mutate
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("content"),
+        lambda p: p.__setitem__("content", None),
+        lambda p: p.__setitem__("content", "text"),
+        lambda p: p.__setitem__("content", {"type": "text", "text": "x"}),
+        lambda p: p.__setitem__("content", 7),
+        _only_messages_content(),
+        _only_messages_content("text-block"),
+        _only_messages_content(None),
+        _only_messages_content(["text-block"]),
+        _only_messages_content({"type": "thinking", "thinking": "only thinking"}),
+        _only_messages_content({"type": "tool_use", "id": "t", "name": "n", "input": {}}),
+        _only_messages_content({"type": "text"}),
+        _only_messages_content({"type": "text", "text": None}),
+        _only_messages_content({"type": "text", "text": 7}),
+        _only_messages_content({"type": "text", "text": ["<part 1>"]}),
+        _only_messages_content({"text": "<untyped block>"}),
+    ],
+    ids=[
+        "content-absent",
+        "content-null",
+        "content-string",
+        "content-object",
+        "content-int",
+        "content-empty",
+        "content-block-string",
+        "content-block-null",
+        "content-block-list",
+        "only-thinking",
+        "only-tool-use",
+        "text-absent",
+        "text-null",
+        "text-int",
+        "text-list",
+        "untyped-block",
+    ],
+)
+def test_messages_adapter_rejects_unusable_content(mutate):
+    """Missing/non-list content, non-object blocks, and unusable text are fatal."""
+    from backend.providers import ProviderResponseError
+
+    payload = _messages_payload()
+    mutate(payload)
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, [], "envelope", 7, True],
+    ids=["null", "list", "string", "int", "bool"],
+)
+def test_messages_adapter_rejects_non_object_payload(payload):
+    """The response envelope itself must be a JSON object."""
+    from backend.providers import ProviderResponseError
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [5, None, [], {}, True],
+    ids=["int", "null", "list", "dict", "bool"],
+)
+def test_messages_adapter_rejects_present_non_string_model(model):
+    """A present model must be a string; only an absent key falls back."""
+    from backend.providers import ProviderResponseError
+
+    payload = _messages_payload()
+    payload["model"] = model
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}},
+        {
+            "type": "error",
+            "error": {"type": "overloaded_error", "message": "overloaded"},
+            "content": [],
+        },
+        {
+            "type": "error",
+            "error": {"type": "authentication_error", "message": "invalid x-api-key"},
+            "content": [{"type": "thinking", "thinking": "no usable text"}],
+        },
+        {
+            "type": "error",
+            "error": {"type": "api_error", "message": "internal"},
+            "content": None,
+        },
+    ],
+    ids=["no-content", "empty-content", "no-text-blocks", "null-content"],
+)
+def test_messages_adapter_rejects_http_success_error_envelopes(payload):
+    """An HTTP-200 error body has no usable content and must not be accepted."""
+    from backend.providers import ProviderResponseError
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+# -- usage shape validation -------------------------------------------------
+
+
+def test_messages_adapter_absent_usage_normalizes_to_zero():
+    """An absent usage envelope normalizes to zero tokens."""
+    payload = _messages_payload()
+    payload.pop("usage")
+
+    assert _parse_messages(payload)["tokens"] == 0
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [None, False, True, 0, 1, "1", []],
+    ids=["null", "false", "true", "zero", "int", "string", "list"],
+)
+def test_messages_adapter_rejects_non_object_usage(usage):
+    """Messages requires an object usage envelope; null is not allowed."""
+    from backend.providers import ProviderResponseError
+
+    payload = _messages_payload()
+    payload["usage"] = usage
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
+
+
+@pytest.mark.parametrize("component", ["input_tokens", "output_tokens"])
+@pytest.mark.parametrize("state", [_MISSING, None], ids=["absent", "null"])
+def test_messages_adapter_absent_or_null_counts_normalize_to_zero(component, state):
+    """A missing or null individual count contributes zero."""
+    payload = _messages_payload()
+    if state is _MISSING:
+        payload["usage"].pop(component)
+    else:
+        payload["usage"][component] = None
+
+    # The other component stays at 7 (input) or 8 (output).
+    expected = 8 if component == "input_tokens" else 7
+    assert _parse_messages(payload)["tokens"] == expected
+
+
+@pytest.mark.parametrize("field", ["input_tokens", "output_tokens"])
+@pytest.mark.parametrize(
+    "value",
+    [-1, True, 1.0, 1.5, "1", [], {}],
+    ids=["negative", "bool", "float-integral", "float-fractional", "string", "list", "dict"],
+)
+def test_messages_adapter_rejects_invalid_count_values(field, value):
+    """Every token count must be an exact non-negative integer."""
+    from backend.providers import ProviderResponseError
+
+    payload = _messages_payload()
+    # The other component stays valid, so only *field* is at fault.
+    payload["usage"][field] = value
+
+    with pytest.raises(ProviderResponseError):
+        _parse_messages(payload)
