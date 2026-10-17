@@ -1,0 +1,299 @@
+source_plan:
+  path: docs/superpowers/plans/2026-10-17-anthropic-compatible-endpoints.md
+  sha256: f81a3ca7af94a9e87d334e240e9581c2beaa9cbc8b0df7da8a2209a686b6384d
+  commit_oid: 4bf2c87a3aa5b3b4bc0ce46e9db4da94ab5ad2b0
+  task_numbers: [1, 2, 3, 4, 5, 6]
+  validator: /home/henry/.pi/agent/skills/subagent-driven-development/scripts/sdd-state
+  validator_command: validate-plan
+  validator_exit_code: 0
+schema_version: 1
+run_id: pm-run-20261017-002314-ba572e0c
+epoch: 1
+topic: anthropic-compatible-endpoints
+integration_baseline_oid: 4bf2c87a3aa5b3b4bc0ce46e9db4da94ab5ad2b0
+lanes:
+  - id: backend
+    description: Backend configuration, provider adapters, shared transport, and route integration
+    task_ids: [T-001, T-002, T-003, T-004, T-005]
+    sequences: [1, 2, 3, 4, 5]
+  - id: documentation
+    description: Configuration example, README documentation, and final regression verification
+    task_ids: [T-006]
+    sequences: [1]
+tasks:
+  - id: T-001
+    plan_task: 1
+    title: Add endpoint-aware configuration loading
+    lane: backend
+    sequence: 1
+    implementer_tier: standard
+    depends_on: []
+    ownership:
+      - backend/config.py
+      - tests/test_backend.py
+    exclusive_resources:
+      - backend/config.py
+      - tests/test_backend.py
+    produces:
+      - name: configuration-contract
+        signature: 'Configuration contract: ai.endpoint is optional; exact explicit values are /v1/chat/completions, /v1/responses, /v1/messages; absent endpoint preserves legacy /v1 normalization and Chat Completions; explicit api_base defaults to https://api.openai.com and appends endpoint after trailing-slash trim; messages_default_max_tokens defaults to 4096.'
+        digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+    consumes: []
+    interfaces:
+      produces:
+        - name: configuration-contract
+          signature: 'Configuration contract: ai.endpoint is optional; exact explicit values are /v1/chat/completions, /v1/responses, /v1/messages; absent endpoint preserves legacy /v1 normalization and Chat Completions; explicit api_base defaults to https://api.openai.com and appends endpoint after trailing-slash trim; messages_default_max_tokens defaults to 4096.'
+          digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+      consumes: []
+    validation:
+      - argv: ["python", "-m", "pytest", "tests/test_backend.py", "-k", "config or endpoint or messages_default", "-q"]
+        cwd: "."
+        timeout_seconds: 120
+        mutates_git: false
+      - argv: ["python", "-m", "pytest", "tests/test_backend.py", "-q"]
+        cwd: "."
+        timeout_seconds: 180
+        mutates_git: false
+  - id: T-002
+    plan_task: 2
+    title: Define provider contracts and implement Chat Completions
+    lane: backend
+    sequence: 2
+    implementer_tier: advanced
+    depends_on: [T-001]
+    ownership:
+      - backend/providers.py
+      - tests/test_backend.py
+    exclusive_resources:
+      - backend/providers.py
+      - tests/test_backend.py
+    produces:
+      - name: protocol-auth-contract
+        signature: 'Protocol/auth contract: Chat Completions and Responses use Authorization: Bearer; Messages uses x-api-key and anthropic-version: 2023-06-01; adapters normalize provider results to content, tokens, model.'
+        digest: 0ac8e690edb7e758639fc66a7a07161e964e1be985d40730be3db6477acca713
+    consumes:
+      - interface: configuration-contract
+        from: T-001
+        digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+    interfaces:
+      produces:
+        - name: protocol-auth-contract
+          signature: 'Protocol/auth contract: Chat Completions and Responses use Authorization: Bearer; Messages uses x-api-key and anthropic-version: 2023-06-01; adapters normalize provider results to content, tokens, model.'
+          digest: 0ac8e690edb7e758639fc66a7a07161e964e1be985d40730be3db6477acca713
+      consumes:
+        - interface: configuration-contract
+          from: T-001
+          digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+    validation:
+      - argv: ["python", "-m", "pytest", "tests/test_backend.py", "-k", "adapter or provider_request or chat or endpoint_url", "-q"]
+        cwd: "."
+        timeout_seconds: 120
+        mutates_git: false
+      - argv: ["python", "-m", "pytest", "tests/test_backend.py", "-q"]
+        cwd: "."
+        timeout_seconds: 180
+        mutates_git: false
+  - id: T-003
+    plan_task: 3
+    title: Implement strict OpenAI Responses adaptation
+    lane: backend
+    sequence: 3
+    implementer_tier: advanced
+    depends_on: [T-001, T-002]
+    ownership:
+      - backend/providers.py
+      - tests/test_backend.py
+    exclusive_resources:
+      - backend/providers.py
+      - tests/test_backend.py
+    produces:
+      - name: responses-storage-contract
+        signature: 'Responses storage contract: Requests set store: false, disabling storage of generated responses for later API retrieval only; provider and gateway retention policies, including abuse-monitoring logs, still apply.'
+        digest: 408ec2e30ae56f08959919975a9be9c8981517df90bf1a8667efe91d4cee7865
+    consumes:
+      - interface: configuration-contract
+        from: T-001
+        digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+      - interface: protocol-auth-contract
+        from: T-002
+        digest: 0ac8e690edb7e758639fc66a7a07161e964e1be985d40730be3db6477acca713
+    interfaces:
+      produces:
+        - name: responses-storage-contract
+          signature: 'Responses storage contract: Requests set store: false, disabling storage of generated responses for later API retrieval only; provider and gateway retention policies, including abuse-monitoring logs, still apply.'
+          digest: 408ec2e30ae56f08959919975a9be9c8981517df90bf1a8667efe91d4cee7865
+      consumes:
+        - interface: configuration-contract
+          from: T-001
+          digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+        - interface: protocol-auth-contract
+          from: T-002
+          digest: 0ac8e690edb7e758639fc66a7a07161e964e1be985d40730be3db6477acca713
+    validation:
+      - argv: ["python", "-m", "pytest", "tests/test_backend.py", "-k", "responses", "-q"]
+        cwd: "."
+        timeout_seconds: 120
+        mutates_git: false
+      - argv: ["python", "-m", "pytest", "tests/test_backend.py", "-q"]
+        cwd: "."
+        timeout_seconds: 180
+        mutates_git: false
+  - id: T-004
+    plan_task: 4
+    title: Implement Anthropic Messages adaptation
+    lane: backend
+    sequence: 4
+    implementer_tier: advanced
+    depends_on: [T-001, T-002, T-003]
+    ownership:
+      - backend/providers.py
+      - tests/test_backend.py
+    exclusive_resources:
+      - backend/providers.py
+      - tests/test_backend.py
+    produces: []
+    consumes:
+      - interface: configuration-contract
+        from: T-001
+        digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+      - interface: protocol-auth-contract
+        from: T-002
+        digest: 0ac8e690edb7e758639fc66a7a07161e964e1be985d40730be3db6477acca713
+    interfaces:
+      produces: []
+      consumes:
+        - interface: configuration-contract
+          from: T-001
+          digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+        - interface: protocol-auth-contract
+          from: T-002
+          digest: 0ac8e690edb7e758639fc66a7a07161e964e1be985d40730be3db6477acca713
+    validation:
+      - argv: ["python", "-m", "pytest", "tests/test_backend.py", "-k", "messages", "-q"]
+        cwd: "."
+        timeout_seconds: 120
+        mutates_git: false
+      - argv: ["python", "-m", "pytest", "tests/test_backend.py", "-q"]
+        cwd: "."
+        timeout_seconds: 180
+        mutates_git: false
+  - id: T-005
+    plan_task: 5
+    title: Refactor shared transport and integrate all routes
+    lane: backend
+    sequence: 5
+    implementer_tier: capable
+    depends_on: [T-001, T-002, T-003, T-004]
+    ownership:
+      - backend/providers.py
+      - backend/routes.py
+      - tests/test_backend.py
+    exclusive_resources:
+      - backend/providers.py
+      - backend/routes.py
+      - tests/test_backend.py
+    produces:
+      - name: local-api-contract
+        signature: 'Local API contract: /check returns errors, model, tokens_used; /polish returns polished, model, tokens_used; /translate returns translated, model, tokens_used; protocol differences remain behind the backend.'
+        digest: 32627aa1673b1e4f9459ea004e1d7caeeeb5c7e059805b20b3f088708b6b6828
+    consumes:
+      - interface: configuration-contract
+        from: T-001
+        digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+      - interface: protocol-auth-contract
+        from: T-002
+        digest: 0ac8e690edb7e758639fc66a7a07161e964e1be985d40730be3db6477acca713
+      - interface: responses-storage-contract
+        from: T-003
+        digest: 408ec2e30ae56f08959919975a9be9c8981517df90bf1a8667efe91d4cee7865
+    interfaces:
+      produces:
+        - name: local-api-contract
+          signature: 'Local API contract: /check returns errors, model, tokens_used; /polish returns polished, model, tokens_used; /translate returns translated, model, tokens_used; protocol differences remain behind the backend.'
+          digest: 32627aa1673b1e4f9459ea004e1d7caeeeb5c7e059805b20b3f088708b6b6828
+      consumes:
+        - interface: configuration-contract
+          from: T-001
+          digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+        - interface: protocol-auth-contract
+          from: T-002
+          digest: 0ac8e690edb7e758639fc66a7a07161e964e1be985d40730be3db6477acca713
+        - interface: responses-storage-contract
+          from: T-003
+          digest: 408ec2e30ae56f08959919975a9be9c8981517df90bf1a8667efe91d4cee7865
+    validation:
+      - argv: ["python", "-m", "pytest", "tests/test_backend.py", "-k", "provider or route or transport or retry or protocol or empty or timeout", "-q"]
+        cwd: "."
+        timeout_seconds: 180
+        mutates_git: false
+      - argv: ["python", "-m", "pytest", "tests/test_backend.py", "-q"]
+        cwd: "."
+        timeout_seconds: 180
+        mutates_git: false
+      - argv: ["python", "-m", "pytest", "-q"]
+        cwd: "."
+        timeout_seconds: 240
+        mutates_git: false
+      - argv: ["git", "diff", "--name-only", "--", "extension"]
+        cwd: "."
+        timeout_seconds: 30
+        mutates_git: false
+  - id: T-006
+    plan_task: 6
+    title: Document explicit endpoint configuration and verify the deliverable
+    lane: documentation
+    sequence: 1
+    implementer_tier: standard
+    depends_on: [T-005]
+    ownership:
+      - backend/config.example.yaml
+      - README.md
+    exclusive_resources:
+      - backend/config.example.yaml
+      - README.md
+    produces: []
+    consumes:
+      - interface: configuration-contract
+        from: T-001
+        digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+      - interface: protocol-auth-contract
+        from: T-002
+        digest: 0ac8e690edb7e758639fc66a7a07161e964e1be985d40730be3db6477acca713
+      - interface: responses-storage-contract
+        from: T-003
+        digest: 408ec2e30ae56f08959919975a9be9c8981517df90bf1a8667efe91d4cee7865
+      - interface: local-api-contract
+        from: T-005
+        digest: 32627aa1673b1e4f9459ea004e1d7caeeeb5c7e059805b20b3f088708b6b6828
+    interfaces:
+      produces: []
+      consumes:
+        - interface: configuration-contract
+          from: T-001
+          digest: 28de5eeb901847f8d59943ca7bb6b28b033dcc979ceb5dd13b51ead14618994b
+        - interface: protocol-auth-contract
+          from: T-002
+          digest: 0ac8e690edb7e758639fc66a7a07161e964e1be985d40730be3db6477acca713
+        - interface: responses-storage-contract
+          from: T-003
+          digest: 408ec2e30ae56f08959919975a9be9c8981517df90bf1a8667efe91d4cee7865
+        - interface: local-api-contract
+          from: T-005
+          digest: 32627aa1673b1e4f9459ea004e1d7caeeeb5c7e059805b20b3f088708b6b6828
+    validation:
+      - argv: ["git", "diff", "--check"]
+        cwd: "."
+        timeout_seconds: 30
+        mutates_git: false
+      - argv: ["python", "-m", "pytest", "tests/test_backend.py", "-q"]
+        cwd: "."
+        timeout_seconds: 180
+        mutates_git: false
+      - argv: ["python", "-m", "pytest", "-q"]
+        cwd: "."
+        timeout_seconds: 240
+        mutates_git: false
+      - argv: ["git", "diff", "--name-only", "--", "extension"]
+        cwd: "."
+        timeout_seconds: 30
+        mutates_git: false

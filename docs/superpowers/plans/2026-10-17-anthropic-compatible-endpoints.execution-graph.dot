@@ -1,0 +1,28 @@
+digraph anthropic_compatible_endpoints {
+  rankdir=TB;
+  graph [label="anthropic-compatible-endpoints\\nmanifest_sha256=17f9146789996b9ca5f6c646b4def07f2b0eecbd4801c11b16453f2c3ce00b0c", labelloc=t];
+  node [shape=box, style=rounded];
+  subgraph cluster_backend {
+    label="backend";
+    T_001 [label="Task 1: Add endpoint-aware configuration loading\\nstandard"];
+    T_002 [label="Task 2: Define provider contracts and implement Chat Completions\\nadvanced"];
+    T_003 [label="Task 3: Implement strict OpenAI Responses adaptation\\nadvanced"];
+    T_004 [label="Task 4: Implement Anthropic Messages adaptation\\nadvanced"];
+    T_005 [label="Task 5: Refactor shared transport and integrate all routes\\ncapable"];
+  }
+  subgraph cluster_documentation {
+    label="documentation";
+    T_006 [label="Task 6: Document explicit endpoint configuration and verify the deliverable\\nstandard"];
+  }
+  T_001 -> T_002 [label="depends_on"];
+  T_001 -> T_003 [label="depends_on"];
+  T_002 -> T_003 [label="depends_on"];
+  T_001 -> T_004 [label="depends_on"];
+  T_002 -> T_004 [label="depends_on"];
+  T_003 -> T_004 [label="depends_on"];
+  T_001 -> T_005 [label="depends_on"];
+  T_002 -> T_005 [label="depends_on"];
+  T_003 -> T_005 [label="depends_on"];
+  T_004 -> T_005 [label="depends_on"];
+  T_005 -> T_006 [label="depends_on"];
+}
