@@ -1094,6 +1094,40 @@ class _GuardedOutput(list):
         self._trip("get")
 
 
+class _GuardedEnvelope(dict):
+    """A real mapping that raises when the ``output`` *value* is fetched from it.
+
+    ``_GuardedOutput`` only fires when the list's contents are read, so an
+    adapter that merely fetches ``payload["output"]``/``payload.get("output")``
+    off the envelope (or probes ``"output" in payload``) without inspecting the
+    list would slip past it. This guard makes that fetch itself fatal, which pins
+    the required ordering: populated ``error``/``incomplete_details`` fields must
+    be rejected before the output key is even looked up. The underlying
+    ``output`` value stays a valid list, so nothing else about the envelope
+    changes.
+    """
+
+    def _trip(self, how):
+        raise _OutputRead(
+            f"envelope key 'output' fetched via {how} before envelope validation"
+        )
+
+    def get(self, key, default=None):
+        if key == "output":
+            self._trip("get")
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        if key == "output":
+            self._trip("__getitem__")
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        if key == "output":
+            self._trip("__contains__")
+        return super().__contains__(key)
+
+
 def _responses_config(**overrides):
     """Build an AIConfig for Responses tests, applying *overrides* last."""
     from backend.config import AIConfig
@@ -1304,10 +1338,22 @@ def test_responses_adapter_normalizes_output_text_and_usage():
     }
 
 
-def test_responses_adapter_falls_back_to_component_sum_when_total_null():
-    """A null total_tokens sums the validated input/output components."""
+@pytest.mark.parametrize(
+    "total_state", [_MISSING, None], ids=["total-absent", "total-null"]
+)
+def test_responses_adapter_falls_back_to_component_sum_when_total_missing(
+    total_state,
+):
+    """An absent or null total_tokens sums the validated 7+8 components to 15.
+
+    Both states are covered so the expected 15 cannot be satisfied by an adapter
+    that returns zero whenever ``total_tokens`` is unavailable.
+    """
     payload = _responses_payload()
-    payload["usage"]["total_tokens"] = None
+    if total_state is _MISSING:
+        payload["usage"].pop("total_tokens")
+    else:
+        payload["usage"]["total_tokens"] = None
 
     assert _parse_responses(payload)["tokens"] == 15
 
@@ -1455,6 +1501,7 @@ def test_responses_adapter_rejects_populated_error_fields_before_output_access(
 
     payload = _responses_payload()
     payload["output"] = _GuardedOutput(payload["output"])
+    payload = _GuardedEnvelope(payload)
     payload[field] = value
 
     with pytest.raises(ProviderResponseError):
@@ -1468,6 +1515,34 @@ def test_responses_guarded_output_trips_when_read():
 
     with pytest.raises(_OutputRead):
         _parse_responses(payload)
+
+
+def test_responses_guarded_envelope_trips_when_adapter_fetches_output():
+    """Positive control: adapter extraction must fetch output off the envelope."""
+    payload = _GuardedEnvelope(_responses_payload())
+
+    with pytest.raises(_OutputRead):
+        _parse_responses(payload)
+
+
+def test_responses_guarded_envelope_trips_on_every_fetch_path():
+    """Positive control: get, __getitem__, and ``in`` all trip the envelope guard."""
+    payload = _GuardedEnvelope(_responses_payload())
+
+    # The underlying value stays a valid list, so only the fetch is fatal.
+    assert dict.__getitem__(payload, "output") == _responses_payload()["output"]
+
+    with pytest.raises(_OutputRead):
+        payload.get("output")
+    with pytest.raises(_OutputRead):
+        payload["output"]
+    with pytest.raises(_OutputRead):
+        "output" in payload
+
+    # Unrelated keys stay readable.
+    assert payload.get("status") == "completed"
+    assert payload["status"] == "completed"
+    assert "usage" in payload
 
 
 # -- output shape validation ------------------------------------------------
