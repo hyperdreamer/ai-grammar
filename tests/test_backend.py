@@ -9,6 +9,7 @@ import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import pytest_asyncio
 import yaml
@@ -460,6 +461,20 @@ def test_parse_translated_valid():
 # ---------------------------------------------------------------------------
 
 
+def _transport_request(headers=None):
+    return {
+        "url": "https://gateway/custom",
+        "headers": headers if headers is not None else {},
+        "body": {"test": True},
+    }
+
+
+def _chat_adapter():
+    from backend.providers import ChatCompletionsAdapter
+
+    return ChatCompletionsAdapter()
+
+
 @pytest.mark.asyncio
 async def test_do_ai_call_success(monkeypatch):
     """_do_ai_call returns structured result on success."""
@@ -490,8 +505,8 @@ async def test_do_ai_call_success(monkeypatch):
         from backend.providers import _do_ai_call
 
         result = await _do_ai_call(
-            body={"test": True},
-            headers={"Authorization": "Bearer x"},
+            request=_transport_request(headers={"Authorization": "Bearer x"}),
+            adapter=_chat_adapter(),
             timeout=httpx.Timeout(10),
             config=config,
             deadline=120,
@@ -542,8 +557,8 @@ async def test_do_ai_call_retry_on_500(monkeypatch):
             from backend.providers import _do_ai_call
 
             result = await _do_ai_call(
-                body={"test": True},
-                headers={},
+                request=_transport_request(),
+                adapter=_chat_adapter(),
                 timeout=httpx.Timeout(10),
                 config=config,
                 deadline=120,
@@ -580,8 +595,8 @@ async def test_do_ai_call_timeout(monkeypatch):
 
         with pytest.raises(HTTPException) as exc_info:
             await _do_ai_call(
-                body={"test": True},
-                headers={},
+                request=_transport_request(),
+                adapter=_chat_adapter(),
                 timeout=httpx.Timeout(10),
                 config=config,
                 deadline=120,
@@ -615,8 +630,8 @@ async def test_do_ai_call_unexpected_error(monkeypatch, debug, expected_call_cou
 
             with pytest.raises(HTTPException) as exc_info:
                 await _do_ai_call(
-                    body={"test": True},
-                    headers={},
+                    request=_transport_request(),
+                    adapter=_chat_adapter(),
                     timeout=httpx.Timeout(10),
                     config=config,
                     deadline=120,
@@ -2162,3 +2177,627 @@ def test_messages_adapter_rejects_invalid_count_values(field, value):
 
     with pytest.raises(ProviderResponseError):
         _parse_messages(payload)
+
+
+# ---------------------------------------------------------------------------
+# Shared transport and route/protocol integration
+# ---------------------------------------------------------------------------
+
+
+_PROTOCOL_MODES = [
+    pytest.param(None, "chat", id="legacy-chat"),
+    pytest.param("/v1/chat/completions", "chat", id="explicit-chat"),
+    pytest.param("/v1/responses", "responses", id="responses"),
+    pytest.param("/v1/messages", "messages", id="messages"),
+]
+_OPERATION_CASES = [
+    pytest.param("/check", "errors", [], "[]", id="check"),
+    pytest.param(
+        "/polish", "polished", "Improved text.",
+        '{"polished":"Improved text."}', id="polish",
+    ),
+    pytest.param(
+        "/translate", "translated", "Translated text.",
+        '{"translated":"Translated text."}', id="translate",
+    ),
+]
+_ROUTE_PARSERS = {
+    "/check": "_parse_errors",
+    "/polish": "_parse_polished",
+    "/translate": "_parse_translated",
+}
+
+
+def _operation_envelope(protocol, content):
+    """Operation-valid upstream payloads with distinct models and known usage."""
+    if protocol == "responses":
+        return {
+            "id": "resp_route",
+            "object": "response",
+            "status": "completed",
+            "model": "upstream-responses-model",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": content}],
+            }],
+            "usage": {"input_tokens": 7, "output_tokens": 8, "total_tokens": 15},
+        }
+    if protocol == "messages":
+        return {
+            "id": "msg_route",
+            "type": "message",
+            "role": "assistant",
+            "model": "upstream-messages-model",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": content}],
+            "usage": {"input_tokens": 7, "output_tokens": 8},
+        }
+    return {
+        "id": "chat_route",
+        "object": "chat.completion",
+        "model": "upstream-chat-model",
+        "choices": [{"message": {"role": "assistant", "content": content}}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 8, "total_tokens": 15},
+    }
+
+
+def _provider_response(payload=None, *, status=200, text=None):
+    kwargs = {"content": text} if text is not None else {"json": payload}
+    return httpx.Response(
+        status, request=httpx.Request("POST", "https://gateway/upstream"), **kwargs
+    )
+
+
+class _RecordedProviderHTTP:
+    """Replace only the provider's AsyncClient and record its wire boundary."""
+
+    def __init__(self, outcomes):
+        self.outcomes = outcomes
+        self.calls = []
+        self.options = []
+
+    def __call__(self, **options):
+        self.options.append(options)
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return None
+
+    async def post(self, url, *, headers, json):
+        self.calls.append({"url": url, "headers": headers, "body": json})
+        outcome = self.outcomes[min(len(self.calls) - 1, len(self.outcomes) - 1)]
+        if isinstance(outcome, Exception):
+            raise outcome
+        if callable(outcome):
+            return await outcome()
+        return outcome
+
+
+@pytest.fixture
+def provider_http(monkeypatch):
+    def install(*outcomes):
+        fake = _RecordedProviderHTTP(outcomes)
+        fake.sleep = AsyncMock()
+        monkeypatch.setattr("httpx.AsyncClient", fake)
+        monkeypatch.setattr("backend.providers.asyncio.sleep", fake.sleep)
+        return fake
+
+    return install
+
+
+def _route_config(tmp_path, monkeypatch, endpoint, **overrides):
+    fields = {
+        "model": "configured-model",
+        "api_base": "https://gateway/proxy/",
+        "endpoint": _OMITTED if endpoint is None else endpoint,
+    }
+    fields.update(overrides)
+    _write_ai_config(tmp_path, monkeypatch, **fields)
+
+
+def _record_parser(monkeypatch, route):
+    import backend.routes as routes
+
+    name = _ROUTE_PARSERS[route]
+    parser = MagicMock(wraps=getattr(routes, name))
+    monkeypatch.setattr(routes, name, parser)
+    return parser
+
+
+def _expected_system_prompt(route, *, language="auto", target="en"):
+    from backend.providers import (
+        GRAMMAR_SYSTEM_PROMPT, POLISH_SYSTEM_PROMPT, TRANSLATE_SYSTEM_PROMPT,
+    )
+
+    if route == "/check":
+        return GRAMMAR_SYSTEM_PROMPT + (
+            "" if language == "auto" else
+            f"\n\nThe text is in {language}. Focus on errors specific to this language."
+        )
+    if route == "/polish":
+        return POLISH_SYSTEM_PROMPT
+    return TRANSLATE_SYSTEM_PROMPT + (
+        "\n\nTarget language: English" if target == "en" else
+        f"\n\nTarget language: {target}"
+    )
+
+
+@pytest.mark.parametrize("endpoint,protocol", _PROTOCOL_MODES)
+def test_provider_adapter_selection(endpoint, protocol):
+    from backend.providers import (
+        ChatCompletionsAdapter, ResponsesAdapter, MessagesAdapter, _get_adapter,
+    )
+
+    expected = {
+        "chat": ChatCompletionsAdapter,
+        "responses": ResponsesAdapter,
+        "messages": MessagesAdapter,
+    }[protocol]
+    assert type(_get_adapter(_chat_config(endpoint=endpoint))) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint,protocol", _PROTOCOL_MODES)
+async def test_call_provider_preserves_timeout_deadline_and_normalizes(
+    monkeypatch, provider_http, endpoint, protocol
+):
+    from backend.config import TimeoutConfig
+    import backend.providers as providers
+
+    config = _chat_config(
+        endpoint=endpoint, api_base="https://gateway/proxy/v1/",
+        timeout=TimeoutConfig(connect=2, read=3, write=4, pool=5),
+    )
+    fake = provider_http(_provider_response(_operation_envelope(protocol, "text")))
+    recorded = []
+    original_call = providers._do_ai_call
+
+    async def record_call(request, adapter, timeout, config, deadline):
+        recorded.append((request, adapter, timeout, config, deadline))
+        return await original_call(request, adapter, timeout, config, deadline)
+
+    monkeypatch.setattr(providers, "_do_ai_call", record_call)
+    result = await providers._call_provider("SYSTEM", "USER", 0.42, config, 128)
+
+    assert result == {"content": "text", "tokens": 15, "model": f"upstream-{protocol}-model"}
+    assert len(recorded) == 1
+    request, _adapter, timeout, passed_config, deadline = recorded[0]
+    assert passed_config is config
+    assert deadline == 8
+    assert timeout.connect == 2
+    assert timeout.read == 3
+    assert timeout.write == 4
+    assert timeout.pool == 5
+    expected_suffix = "/chat/completions" if endpoint is None else endpoint
+    expected_base = "https://gateway/proxy/v1/" if endpoint is None else "https://gateway/proxy/v1"
+    assert request["url"] == expected_base + expected_suffix
+    assert fake.calls == [request]
+    assert fake.options[0]["timeout"] is timeout
+    assert fake.options[0]["limits"].max_keepalive_connections == 5
+    fake.sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+@pytest.mark.parametrize("endpoint,protocol", _PROTOCOL_MODES)
+@pytest.mark.parametrize("limit", [_OMITTED, 0, 128], ids=["omitted", "zero", "positive"])
+async def test_route_protocol_token_matrix(
+    client, tmp_path, monkeypatch, provider_http,
+    route, key, value, content, endpoint, protocol, limit,
+):
+    _route_config(
+        tmp_path, monkeypatch, endpoint,
+        endpoints={"check": 0.11, "polish": 0.22, "translate": 0.33},
+    )
+    fake = provider_http(_provider_response(_operation_envelope(protocol, content)))
+    parser = _record_parser(monkeypatch, route)
+    body = {"text": " \nInput text.\t ", "language": "fr", "target_lang": "en"}
+    if limit is not _OMITTED:
+        body["max_tokens"] = limit
+    response = await client.post(route, json=body)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {key: value, "model": f"upstream-{protocol}-model", "tokens_used": 15}
+    assert set(response.json()) == {key, "model", "tokens_used"}
+    assert response.headers["connection"] == "close"
+    parser.assert_called_once_with(content)
+    assert len(fake.calls) == 1
+    wire = fake.calls[0]
+    assert wire["url"] == (
+        "https://gateway/proxy/v1/chat/completions" if endpoint is None else
+        "https://gateway/proxy" + endpoint
+    )
+    expected_headers = (
+        {"x-api-key": "test-key-12345", "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+        if protocol == "messages" else
+        {"Authorization": "Bearer test-key-12345", "Content-Type": "application/json"}
+    )
+    assert wire["headers"] == expected_headers
+    expected_body = {
+        "model": "configured-model",
+        "temperature": {"/check": 0.11, "/polish": 0.22, "/translate": 0.33}[route],
+    }
+    system = _expected_system_prompt(route, language="fr")
+    if protocol == "responses":
+        expected_body.update(instructions=system, input="Input text.", store=False)
+        if limit == 128:
+            expected_body["max_output_tokens"] = 128
+    elif protocol == "messages":
+        expected_body.update(
+            system=system, messages=[{"role": "user", "content": "Input text."}],
+            max_tokens=128 if limit == 128 else 4096,
+        )
+    else:
+        expected_body["messages"] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "Input text."},
+        ]
+        if limit == 128:
+            expected_body["max_tokens"] = 128
+    assert wire["body"] == expected_body
+    fake.sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+@pytest.mark.parametrize("limit", [_OMITTED, 0, 128], ids=["omitted", "zero", "positive"])
+async def test_route_messages_configured_token_fallback(
+    client, tmp_path, monkeypatch, provider_http, route, key, value, content, limit,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/messages", messages_default_max_tokens=8192)
+    fake = provider_http(_provider_response(_operation_envelope("messages", content)))
+    body = {"text": "text"}
+    if limit is not _OMITTED:
+        body["max_tokens"] = limit
+    response = await client.post(route, json=body)
+    assert response.status_code == 200, response.text
+    assert fake.calls[0]["body"]["max_tokens"] == (128 if limit == 128 else 8192)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+@pytest.mark.parametrize("override", [None, 0.47], ids=["default-temperature", "global-temperature"])
+async def test_route_exact_prompts_default_and_global_temperature(
+    client, tmp_path, monkeypatch, provider_http, route, key, value, content, override,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/responses", temperature=override)
+    fake = provider_http(_provider_response(_operation_envelope("responses", content)))
+    response = await client.post(route, json={"text": "text", "language": "auto"})
+    assert response.status_code == 200, response.text
+    assert fake.calls[0]["body"]["instructions"] == _expected_system_prompt(route)
+    default = 0.1 if route == "/check" else 0.3
+    assert fake.calls[0]["body"]["temperature"] == (default if override is None else override)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["en", "zh", "French"])
+async def test_translate_route_exact_target_label(client, tmp_path, monkeypatch, provider_http, target):
+    _route_config(tmp_path, monkeypatch, "/v1/responses")
+    fake = provider_http(_provider_response(_operation_envelope("responses", '{"translated":"text"}')))
+    response = await client.post("/translate", json={"text": "text", "target_lang": target})
+    assert response.status_code == 200, response.text
+    assert fake.calls[0]["body"]["instructions"] == _expected_system_prompt("/translate", target=target)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+@pytest.mark.parametrize("endpoint,protocol", _PROTOCOL_MODES)
+async def test_route_protocol_truncates_before_provider(
+    client, tmp_path, monkeypatch, provider_http, route, key, value, content, endpoint, protocol,
+):
+    _route_config(tmp_path, monkeypatch, endpoint)
+    fake = provider_http(_provider_response(_operation_envelope(protocol, content)))
+    text = "0123456789" * 6000
+    response = await client.post(route, json={"text": " \n" + text + "\t "})
+    assert response.status_code == 200, response.text
+    body = fake.calls[0]["body"]
+    upstream_text = body["input"] if protocol == "responses" else body["messages"][-1]["content"]
+    assert upstream_text == text[:50000]
+    assert len(upstream_text) == 50000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+async def test_route_legacy_v1_trailing_slash_is_preserved(
+    client, tmp_path, monkeypatch, provider_http, route, key, value, content,
+):
+    _route_config(tmp_path, monkeypatch, None, api_base="https://gateway/proxy/v1/")
+    fake = provider_http(_provider_response(_operation_envelope("chat", content)))
+    response = await client.post(route, json={"text": "text"})
+    assert response.status_code == 200, response.text
+    assert fake.calls[0]["url"] == "https://gateway/proxy/v1//chat/completions"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/check", "/polish", "/translate"])
+@pytest.mark.parametrize("invalid", [None, "", "chat/completions", "/responses", "/v1/responses/", "https://api.openai.com/v1/responses", "/v1/unknown", 42, False, [], {}])
+async def test_route_invalid_endpoint_stops_before_client(
+    client, tmp_path, monkeypatch, route, invalid,
+):
+    _write_ai_config(tmp_path, monkeypatch, endpoint=invalid)
+    with patch("httpx.AsyncClient", side_effect=AssertionError("network constructed")) as constructor:
+        response = await client.post(route, json={"text": "text"})
+    assert response.status_code == 500
+    assert set(response.json()) == {"detail"}
+    assert response.json()["detail"].startswith("Unsupported ai.endpoint value:")
+    constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/check", "/polish", "/translate"])
+@pytest.mark.parametrize("invalid", ["", None, 42, False, [], {}, "/", "///"])
+async def test_route_invalid_explicit_api_base_stops_before_client(
+    client, tmp_path, monkeypatch, route, invalid,
+):
+    _write_ai_config(tmp_path, monkeypatch, endpoint="/v1/messages", api_base=invalid)
+    with patch("httpx.AsyncClient", side_effect=AssertionError("network constructed")) as constructor:
+        response = await client.post(route, json={"text": "text"})
+    assert response.status_code == 500
+    assert response.json() == {"detail": "ai.api_base must be a non-empty string when ai.endpoint is set."}
+    constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+async def test_empty_route_skips_config_and_provider(
+    client, monkeypatch, route, key, value, content,
+):
+    loader = MagicMock(side_effect=AssertionError("configuration loaded"))
+    monkeypatch.setattr("backend.config.load_config", loader)
+    monkeypatch.setattr("backend.routes.load_config", loader)
+    with patch("httpx.AsyncClient", side_effect=AssertionError("network constructed")) as constructor:
+        response = await client.post(route, json={"text": " \n\t "})
+    assert response.status_code == 200
+    assert response.json() == {key: [] if key == "errors" else "", "model": "", "tokens_used": 0}
+    loader.assert_not_called()
+    constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled", "incomplete", "in_progress", "queued", _MISSING, None, "unknown"])
+async def test_responses_route_requires_completed_before_parser(
+    client, tmp_path, monkeypatch, provider_http, status,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/responses")
+    payload = _operation_envelope("responses", '{"polished":"text"}')
+    if status is _MISSING:
+        payload.pop("status")
+    else:
+        payload["status"] = status
+    fake = provider_http(_provider_response(payload))
+    parser = _record_parser(monkeypatch, "/polish")
+    response = await client.post("/polish", json={"text": "text"})
+    assert response.status_code == (200 if status == "completed" else 502), response.text
+    if status == "completed":
+        parser.assert_called_once_with('{"polished":"text"}')
+        assert len(fake.calls) == 1
+    else:
+        assert set(response.json()) == {"detail"}
+        assert response.json()["detail"].startswith("AI provider error:")
+        parser.assert_not_called()
+        assert len(fake.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [_MISSING, None], ids=["absent-error", "null-error"])
+@pytest.mark.parametrize("details", [_MISSING, None], ids=["absent-details", "null-details"])
+async def test_responses_route_accepts_absent_null_error_fields(
+    client, tmp_path, monkeypatch, provider_http, error, details,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/responses")
+    payload = _operation_envelope("responses", '{"polished":"text"}')
+    for field, value in (("error", error), ("incomplete_details", details)):
+        if value is not _MISSING:
+            payload[field] = value
+    fake = provider_http(_provider_response(payload))
+    response = await client.post("/polish", json={"text": "text"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"polished": "text", "model": "upstream-responses-model", "tokens_used": 15}
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["error", "incomplete_details"])
+@pytest.mark.parametrize("value", [{}, {"code": "failed"}, [], ["error"], "", "error", False, True, 0, 1, 0.0, 1.5])
+async def test_responses_route_rejects_non_null_errors_before_output(
+    client, tmp_path, monkeypatch, provider_http, field, value,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/responses")
+    payload = _GuardedEnvelope(_operation_envelope("responses", '{"polished":"text"}'))
+    payload[field] = value
+    response_double = _provider_response({})
+    response_double.json = MagicMock(return_value=payload)
+    fake = provider_http(response_double)
+    parser = _record_parser(monkeypatch, "/polish")
+    response = await client.post("/polish", json={"text": "text"})
+    assert response.status_code == 502
+    assert set(response.json()) == {"detail"}
+    assert response.json()["detail"].startswith("AI provider error:")
+    assert field in response.json()["detail"]
+    assert "output" not in response.json()["detail"]
+    assert len(fake.calls) == 2
+    parser.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [
+    ("output", None), ("output", []), ("output", "bad"),
+    ("output", [{"type": "message", "content": [{"type": "output_text", "text": None}]}]),
+    ("usage", False), ("usage", []), ("usage", "bad"),
+    ("usage", {"total_tokens": -1}), ("usage", {"total_tokens": True}),
+    ("usage", {"input_tokens": "7"}), ("usage", {"output_tokens": 1.0}),
+])
+async def test_responses_route_malformed_output_usage_is_502(
+    client, tmp_path, monkeypatch, provider_http, field, value,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/responses")
+    payload = _operation_envelope("responses", '{"polished":"text"}')
+    payload[field] = value
+    fake = provider_http(_provider_response(payload))
+    parser = _record_parser(monkeypatch, "/polish")
+    response = await client.post("/polish", json={"text": "text"})
+    assert response.status_code == 502
+    assert set(response.json()) == {"detail"}
+    assert response.json()["detail"].startswith("AI provider error:")
+    assert len(fake.calls) == 2
+    parser.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,key,value,content", _OPERATION_CASES)
+@pytest.mark.parametrize("wrapper", ["plain", "fence", "prose"])
+async def test_messages_route_truncation_keeps_parser_recovery(
+    client, tmp_path, monkeypatch, provider_http, route, key, value, content, wrapper,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/messages")
+    if wrapper == "fence":
+        content = f"```json\n{content}\n```"
+    elif wrapper == "prose":
+        content = f"Here is the result: {content} End of result."
+    payload = _operation_envelope("messages", content)
+    payload["stop_reason"] = "max_tokens"
+    fake = provider_http(_provider_response(payload))
+    parser = _record_parser(monkeypatch, route)
+    response = await client.post(route, json={"text": "text"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {key: value, "model": "upstream-messages-model", "tokens_used": 15}
+    parser.assert_called_once_with(content)
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route,content", [
+    ("/check", "not JSON"), ("/check", "{}"), ("/check", "[broken"),
+    ("/polish", "not JSON"), ("/polish", "{}"), ("/polish", '{"translated":"wrong"}'),
+    ("/polish", '{"polished":""}'), ("/polish", '{"polished":7}'),
+    ("/translate", "not JSON"), ("/translate", "{}"), ("/translate", '{"polished":"wrong"}'),
+    ("/translate", '{"translated":""}'), ("/translate", '{"translated":7}'),
+])
+async def test_messages_route_parser_failure_is_not_retried(
+    client, tmp_path, monkeypatch, provider_http, route, content,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/messages")
+    payload = _operation_envelope("messages", content)
+    payload["stop_reason"] = "max_tokens"
+    fake = provider_http(_provider_response(payload))
+    parser = _record_parser(monkeypatch, route)
+    response = await client.post(route, json={"text": "text"})
+    assert response.status_code == 502
+    assert set(response.json()) == {"detail"}
+    parser.assert_called_once_with(content)
+    assert len(fake.calls) == 1
+    fake.sleep.assert_not_awaited()
+
+
+_VALID_ROUTE_ERROR = {
+    "start": 0, "end": 3, "error": "bad", "correction": "good",
+    "explanation": "fix", "type": "error",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("items,expected", [
+    ([_VALID_ROUTE_ERROR], [_VALID_ROUTE_ERROR]),
+    ([{}, None, 7, {"start": "wrong"}, _VALID_ROUTE_ERROR], [_VALID_ROUTE_ERROR]),
+    ([{}, None, 7], []), ([], []),
+])
+async def test_messages_check_route_skips_malformed_error_items(
+    client, tmp_path, monkeypatch, provider_http, items, expected,
+):
+    _route_config(tmp_path, monkeypatch, "/v1/messages")
+    payload = _operation_envelope("messages", json.dumps(items))
+    payload["stop_reason"] = "max_tokens"
+    fake = provider_http(_provider_response(payload))
+    response = await client.post("/check", json={"text": "bad"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"errors": expected, "model": "upstream-messages-model", "tokens_used": 15}
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_transport_uses_resolved_request_and_retries_once(provider_http):
+    from backend.providers import _do_ai_call
+
+    fake = provider_http(
+        _provider_response(status=500, text="first failure"),
+        _provider_response(_operation_envelope("chat", "success")),
+    )
+    request = _transport_request({"custom-header": "custom-value"})
+    result = await _do_ai_call(request, _chat_adapter(), httpx.Timeout(10), _chat_config(), 20)
+    assert result == {"content": "success", "model": "upstream-chat-model", "tokens": 15}
+    assert fake.calls == [request, request]
+    assert len(fake.options) == 2
+    assert all(options["limits"].max_keepalive_connections == 5 for options in fake.options)
+    fake.sleep.assert_awaited_once_with(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True], ids=["debug-off", "debug-on"])
+@pytest.mark.parametrize("failure,status,prefix", [
+    ("http-status", 502, "AI provider error: 503 — "),
+    ("native-timeout", 504, "AI provider timed out"),
+    ("httpx-timeout", 502, "AI provider error:"),
+    ("httpx-request", 502, "AI provider error:"),
+    ("json", 502, "AI provider error:"),
+    ("provider-response", 502, "AI provider error:"),
+    ("unexpected", 502, "Unexpected AI error: RuntimeError:"),
+])
+async def test_transport_final_failure_mapping_retry_and_debug(
+    monkeypatch, provider_http, debug, failure, status, prefix,
+):
+    from backend.providers import _do_ai_call
+
+    outcomes = {
+        "http-status": _provider_response(status=503, text="x" * 600),
+        "native-timeout": asyncio.TimeoutError("timed out"),
+        "httpx-timeout": httpx.ReadTimeout("read timed out"),
+        "httpx-request": httpx.ConnectError("connection failed"),
+        "json": _provider_response(text="{broken"),
+        "provider-response": _provider_response({"choices": []}),
+        "unexpected": RuntimeError("simulated crash"),
+    }
+    fake = provider_http(outcomes[failure])
+    monkeypatch.setattr("backend.providers._load_debug", lambda: debug)
+    with patch("traceback.print_exc") as traceback:
+        with pytest.raises(HTTPException) as caught:
+            await _do_ai_call(
+                _transport_request(), _chat_adapter(), httpx.Timeout(10), _chat_config(), 20,
+            )
+    assert caught.value.status_code == status
+    assert caught.value.detail.startswith(prefix)
+    if failure == "http-status":
+        assert caught.value.detail == prefix + "x" * 500
+    if failure == "native-timeout":
+        assert caught.value.detail == prefix
+    assert len(fake.calls) == 2
+    assert fake.calls == [_transport_request(), _transport_request()]
+    fake.sleep.assert_awaited_once_with(1)
+    assert traceback.call_count == (2 if debug and failure == "unexpected" else 0)
+
+
+@pytest.mark.asyncio
+async def test_transport_real_deadline_retries_and_cancels_each_attempt(provider_http):
+    from backend.providers import _do_ai_call
+
+    cancellations = []
+
+    async def blocked_post():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancellations.append(True)
+
+    fake = provider_http(blocked_post)
+    with pytest.raises(HTTPException) as caught:
+        await _do_ai_call(
+            _transport_request(), _chat_adapter(), httpx.Timeout(10), _chat_config(), 0.01,
+        )
+    assert caught.value.status_code == 504
+    assert caught.value.detail == "AI provider timed out"
+    assert len(fake.calls) == 2
+    assert cancellations == [True, True]
+    fake.sleep.assert_awaited_once_with(1)

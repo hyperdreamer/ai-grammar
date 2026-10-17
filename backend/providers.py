@@ -502,29 +502,46 @@ class MessagesAdapter:
 # AI provider call
 # ---------------------------------------------------------------------------
 
-async def _do_ai_call(body: dict, headers: dict, timeout: httpx.Timeout, config: AIConfig, deadline: float) -> dict[str, Any]:
-    """Shared AI provider call with retry logic."""
+def _get_adapter(config: AIConfig) -> ProtocolAdapter:
+    """Select the exact configured protocol, with Chat as the legacy default."""
+    adapters = {
+        None: ChatCompletionsAdapter,
+        "/v1/chat/completions": ChatCompletionsAdapter,
+        "/v1/responses": ResponsesAdapter,
+        "/v1/messages": MessagesAdapter,
+    }
+    return adapters[config.endpoint]()
+
+
+async def _do_ai_call(
+    request: ProviderRequest,
+    adapter: ProtocolAdapter,
+    timeout: httpx.Timeout,
+    config: AIConfig,
+    deadline: float,
+) -> ProviderResult:
+    """Send a resolved request and normalize its response with one retry."""
     debug = _load_debug()
     _debug("ai", f"calling model={config.model} base={config.api_base}", enabled=debug)
-
-    async def make_request():
-        async with httpx.AsyncClient(timeout=timeout, limits=httpx.Limits(max_keepalive_connections=5)) as client:
-            resp = await client.post(
-                f"{config.api_base}/chat/completions",
-                headers=headers,
-                json=body,
-            )
-            resp.raise_for_status()
-            return resp.json()
 
     last_exc: Exception | None = None
     for attempt in (1, 2):
         try:
-            data = await asyncio.wait_for(make_request(), timeout=deadline)
-            content = data["choices"][0]["message"]["content"]
-            tokens = data.get("usage", {}).get("total_tokens", 0)
-            _debug("ai", f"response: {len(content)} chars tokens={tokens} model={data.get('model', config.model)}", enabled=debug)
-            return {"content": content, "tokens": tokens, "model": data.get("model", config.model)}
+            async def make_request() -> ProviderResult:
+                async with httpx.AsyncClient(timeout=timeout, limits=httpx.Limits(max_keepalive_connections=5)) as client:
+                    resp = await client.post(
+                        request["url"],
+                        headers=request["headers"],
+                        json=request["body"],
+                    )
+                    resp.raise_for_status()
+                    return adapter.parse_response(
+                        resp.json(), configured_model=config.model
+                    )
+
+            result = await asyncio.wait_for(make_request(), timeout=deadline)
+            _debug("ai", f"response: {len(result['content'])} chars tokens={result['tokens']} model={result['model']}", enabled=debug)
+            return result
         except asyncio.TimeoutError:
             last_exc = HTTPException(status_code=504, detail="AI provider timed out")
         except httpx.HTTPStatusError as exc:
@@ -532,7 +549,7 @@ async def _do_ai_call(body: dict, headers: dict, timeout: httpx.Timeout, config:
             last_exc = HTTPException(
                 status_code=502, detail=f"AI provider error: {exc.response.status_code} — {detail}"
             )
-        except (httpx.RequestError, httpx.TimeoutException, ValueError, KeyError, IndexError) as exc:
+        except (httpx.RequestError, httpx.TimeoutException, ValueError, KeyError, IndexError, ProviderResponseError) as exc:
             last_exc = HTTPException(status_code=502, detail=f"AI provider error: {exc}")
         except Exception as exc:
             import traceback
@@ -546,12 +563,22 @@ async def _do_ai_call(body: dict, headers: dict, timeout: httpx.Timeout, config:
     raise last_exc  # type: ignore[misc]
 
 
-async def _call_ai(text: str, language: str, config: AIConfig, max_tokens: int | None = None) -> dict[str, Any]:
-    """Send text to AI provider for grammar checking and parse the response."""
-    system_prompt = GRAMMAR_SYSTEM_PROMPT
-    if language != "auto":
-        system_prompt += f"\n\nThe text is in {language}. Focus on errors specific to this language."
-
+async def _call_provider(
+    system_prompt: str,
+    user_text: str,
+    temperature: float,
+    config: AIConfig,
+    max_tokens: int | None = None,
+) -> ProviderResult:
+    """Build a protocol request and send it with the configured timeouts."""
+    adapter = _get_adapter(config)
+    request = adapter.build_request(
+        config=config,
+        system_prompt=system_prompt,
+        user_text=user_text,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
     timeout_cfg = config.timeout
     timeout = httpx.Timeout(
         connect=timeout_cfg.connect,
@@ -559,26 +586,21 @@ async def _call_ai(text: str, language: str, config: AIConfig, max_tokens: int |
         write=timeout_cfg.write,
         pool=timeout_cfg.pool,
     )
-
     deadline = timeout_cfg.read + 5  # buffer so httpx fires first
-    headers = {
-        "Authorization": f"Bearer {config.api_key}",
-        "Content-Type": "application/json",
-    }
+    return await _do_ai_call(request, adapter, timeout, config, deadline)
 
-    body = {
-        "model": config.model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text},
-        ],
-        "temperature": config.get_temperature("check", DEFAULT_TEMPERATURE_CHECK),
-    }
-    # Only include max_tokens if explicitly set (0 or None = unbounded)
-    if max_tokens and max_tokens > 0:
-        body["max_tokens"] = max_tokens
 
-    return await _do_ai_call(body, headers, timeout, config, deadline)
+async def _call_ai(text: str, language: str, config: AIConfig, max_tokens: int | None = None) -> ProviderResult:
+    """Send text to the configured provider for grammar checking."""
+    system_prompt = GRAMMAR_SYSTEM_PROMPT
+    if language != "auto":
+        system_prompt += f"\n\nThe text is in {language}. Focus on errors specific to this language."
+
+    return await _call_provider(
+        system_prompt, text,
+        config.get_temperature("check", DEFAULT_TEMPERATURE_CHECK),
+        config, max_tokens,
+    )
 
 
 def _parse_errors(content: str) -> list[ErrorItem]:
