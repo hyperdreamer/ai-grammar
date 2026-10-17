@@ -100,7 +100,21 @@ python main.py          # Runs on http://127.0.0.1:8766
 | `/polish` | POST | AI text polish/rewrite | `{"polished": "...", "model": "...", "tokens_used": N}` |
 | `/translate` | POST | Language translation | `{"translated": "...", "model": "...", "tokens_used": N}` |
 
-All endpoints accept `{"text": "...", "language": "auto"}`. The backend calls any OpenAI-compatible API (`/v1/chat/completions`) with structured prompts and parses the JSON response.
+All endpoints accept `{"text": "...", "language": "auto"}`. The backend sends structured prompts to the configured provider protocol and parses the JSON response. The endpoint is selectable, but the local contract above is fixed: the browser extension keeps using these same routes and response keys regardless of which upstream protocol is configured.
+
+### Provider endpoints
+
+`ai.endpoint` selects the upstream protocol. Only these exact values are supported:
+
+| `ai.endpoint` | Protocol | Authentication |
+|---|---|---|
+| `/v1/chat/completions` | OpenAI Chat Completions | `Authorization: Bearer <key>` |
+| `/v1/responses` | OpenAI Responses | `Authorization: Bearer <key>` |
+| `/v1/messages` | Anthropic Messages | `x-api-key: <key>` (plus `anthropic-version: 2023-06-01`) |
+
+Omitting `ai.endpoint` keeps the legacy behavior: `api_base` defaults to `https://api.openai.com/v1`, is normalized with `/v1` (appended unless it already ends in `/v1`, so a base ending in `/v1/` keeps that trailing slash and produces a `//` in the request URL), and the Chat Completions path is used.
+
+With an explicit `ai.endpoint`, the path is appended to `api_base` after trimming trailing slashes — no URL resolution — so a custom gateway prefix is preserved rather than discarded. Explicit mode also defaults `api_base` to `https://api.openai.com` when it is omitted.
 
 ### Configuration
 
@@ -112,9 +126,23 @@ server:
 
 ai:
   model: gpt-4o-mini
-  api_base: https://api.openai.com     # /v1 auto-appended
+  endpoint: /v1/chat/completions       # OpenAI Chat Completions (Bearer auth)
+  api_base: https://api.openai.com     # gateway prefix; the endpoint is appended
   api_key: $OPENAI_API_KEY             # $ prefix = read from env var
+  messages_default_max_tokens: 4096    # /v1/messages fallback only
+
+# ── or switch the upstream protocol ──
+# ai:
+#   endpoint: /v1/responses            # OpenAI Responses, still Bearer auth
+#
+# ai:
+#   endpoint: /v1/messages             # Anthropic Messages, x-api-key auth
+#   api_base: https://api.anthropic.com
 ```
+
+`messages_default_max_tokens` (default `4096`, must be a positive integer) is the `max_tokens` value used for `/v1/messages` when the caller supplies no positive limit. The Messages protocol requires `max_tokens`; the OpenAI protocols simply omit the field when there is no caller limit. A positive caller limit always wins over this fallback.
+
+With `/v1/responses`, each request sets `store: false`. This disables storage of the generated response for later API retrieval only — provider and gateway retention policies, including abuse-monitoring logs, still apply. It does not prevent all retention.
 
 To change the AI temperature (defaults: check=0.1, polish=0.3, translate=0.3):
 ```yaml
@@ -126,7 +154,7 @@ ai:
     polish: 0.7
 ```
 
-Works with any OpenAI-compatible API — OpenAI, Anthropic (via proxy), DeepSeek, local LLMs, etc.
+Works with any provider exposing one of the three supported protocols — OpenAI, Anthropic, DeepSeek, local LLMs, and compatible gateways.
 
 ## Usage
 

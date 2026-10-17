@@ -19,7 +19,21 @@ ai:
   # and are much cheaper than flagship models for this task.
   model: gpt-4o-mini
 
-  # API base URL. /v1 is auto-appended if omitted.
+  # --- Provider endpoint (protocol selection) ---
+  # Only these three exact values are accepted:
+  #   /v1/chat/completions  OpenAI Chat Completions (Authorization: Bearer)
+  #   /v1/responses         OpenAI Responses       (Authorization: Bearer)
+  #   /v1/messages          Anthropic Messages     (x-api-key)
+  # Omitting this key keeps the legacy behavior: the base is normalized with
+  # /v1 and the Chat Completions path is used.
+  endpoint: /v1/chat/completions
+
+  # API base URL (the gateway prefix; the endpoint path is appended to it).
+  # Legacy mode (no `endpoint` key): /v1 is appended unless already present, and
+  # the historical trailing-slash result is preserved.
+  # Explicit mode: trailing slashes are trimmed from this base and the configured
+  # endpoint is appended verbatim, so custom gateway prefixes are kept as-is.
+  # Explicit mode also defaults this value to https://api.openai.com when omitted.
   # Examples:
   #   OpenAI:        https://api.openai.com
   #   Tencent TokenHub: https://tokenhub.tencentmaas.com
@@ -30,7 +44,14 @@ ai:
   # --- API Key ---
   # $ prefix: read from environment variable (recommended).
   # No prefix: inline key directly in this file.
+  # Sent as `Authorization: Bearer <key>` for both OpenAI protocols, and as
+  # `x-api-key: <key>` for /v1/messages (Messages has no Bearer auth).
   api_key: $OPENAI_API_KEY
+
+  # Fallback max_tokens for /v1/messages when the caller sends no positive limit
+  # (Messages requires max_tokens). Must be a positive integer; not used by the
+  # OpenAI protocols, which simply omit the field when no caller limit is given.
+  messages_default_max_tokens: 4096
 
   # --- Timeouts (all values in seconds) ---
   timeout:
