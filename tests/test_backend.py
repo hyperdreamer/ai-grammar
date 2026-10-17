@@ -217,8 +217,11 @@ def test_config_supported_endpoints_and_defaults():
     }
     assert len(SUPPORTED_ENDPOINTS) == 3
     assert DEFAULT_MESSAGES_MAX_TOKENS == 4096
-    with pytest.raises((AttributeError, TypeError)):
-        SUPPORTED_ENDPOINTS.add("/v1/other")  # type: ignore[attr-defined]
+    # Pin immutability by type/behavior: a plain `list` has no `add` either,
+    # so asserting only that `.add` raises would let a mutable list through.
+    assert isinstance(SUPPORTED_ENDPOINTS, (frozenset, tuple))
+    assert not hasattr(SUPPORTED_ENDPOINTS, "add")
+    assert not hasattr(SUPPORTED_ENDPOINTS, "append")
 
 
 def test_config_ai_config_endpoint_field_defaults():
@@ -367,8 +370,8 @@ def test_config_messages_default_max_tokens_omitted(
 
 @pytest.mark.parametrize(
     "raw_api_base",
-    ["", None, []],
-    ids=["empty-string", "null", "list"],
+    ["", None, [], "/", "///"],
+    ids=["empty-string", "null", "list", "slash-only", "slashes-only"],
 )
 def test_config_explicit_mode_rejects_invalid_api_base(
     tmp_path, monkeypatch, raw_api_base

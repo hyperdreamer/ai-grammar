@@ -180,13 +180,18 @@ def load_config() -> AIConfig:
         else:
             api_base = raw_base
     else:
-        # Explicit mode: trim trailing slashes, keep every path segment as-is
+        # Explicit mode: trim trailing slashes, keep every path segment as-is.
+        # Validation runs on the POST-strip value: a slash-only base such as
+        # "/" would otherwise resolve to "" and build a relative request URL.
         raw_base = ai_section.get("api_base", "https://api.openai.com")
-        if not isinstance(raw_base, str) or not raw_base:
+        if isinstance(raw_base, str):
+            api_base = raw_base.rstrip("/")
+        else:
+            api_base = raw_base
+        if not isinstance(api_base, str) or not api_base:
             raise RuntimeError(
                 "ai.api_base must be a non-empty string when ai.endpoint is set."
             )
-        api_base = raw_base.rstrip("/")
 
     # Temperature config: global override or per-endpoint
     temperature = ai_section.get("temperature")
