@@ -928,11 +928,11 @@ def test_chat_adapter_rejects_non_object_usage(usage):
 
 @pytest.mark.parametrize(
     "value",
-    [-1, True, 1.0, 1.5, "1", [], {}],
-    ids=["negative", "bool", "float-integral", "float-fractional", "string", "list", "dict"],
+    [None, -1, True, 1.0, 1.5, "1", [], {}],
+    ids=["null", "negative", "bool", "float-integral", "float-fractional", "string", "list", "dict"],
 )
 def test_chat_adapter_rejects_invalid_total_tokens(value):
-    """total_tokens must be a genuine non-negative integer."""
+    """total_tokens must be a genuine non-negative integer; null is not absent."""
     from backend.providers import ProviderResponseError
 
     payload = _chat_payload()
