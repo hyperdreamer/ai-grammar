@@ -18,6 +18,19 @@ DEFAULT_TEMPERATURE_CHECK = 0.1
 DEFAULT_TEMPERATURE_POLISH = 0.3
 DEFAULT_TEMPERATURE_TRANSLATE = 0.3
 
+# Explicit provider endpoint paths accepted from ai.endpoint. Only these exact
+# values are supported; omitting the key keeps legacy /v1 normalization.
+SUPPORTED_ENDPOINTS = frozenset(
+    {
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages",
+    }
+)
+
+# Fallback max_tokens for the Messages protocol when the caller supplies none.
+DEFAULT_MESSAGES_MAX_TOKENS = 4096
+
 
 # ---------------------------------------------------------------------------
 # Debug logging (timestamped stderr, gated by config.debug)
@@ -60,6 +73,8 @@ class AIConfig:
     timeout: TimeoutConfig = TimeoutConfig()
     temperature: float | None = None  # global override for all endpoints
     endpoint_temperatures: dict[str, float] | None = None  # per-endpoint overrides
+    endpoint: str | None = None  # explicit provider path; None selects legacy mode
+    messages_default_max_tokens: int = DEFAULT_MESSAGES_MAX_TOKENS
 
     def get_temperature(self, endpoint: str, default: float) -> float:
         """Return the temperature for *endpoint*, falling back through
@@ -83,6 +98,38 @@ class ServerConfig:
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
+
+
+def _resolve_endpoint(ai_section: dict) -> str | None:
+    """Return the validated explicit endpoint, or None for legacy mode.
+
+    An absent ``ai.endpoint`` key selects legacy mode; a present key must hold
+    one of the exact ``SUPPORTED_ENDPOINTS`` strings.
+    """
+    if "endpoint" not in ai_section:
+        return None
+    raw_endpoint = ai_section["endpoint"]
+    if not isinstance(raw_endpoint, str) or raw_endpoint not in SUPPORTED_ENDPOINTS:
+        supported = ", ".join(sorted(SUPPORTED_ENDPOINTS))
+        raise RuntimeError(
+            f"Unsupported ai.endpoint value: {raw_endpoint!r}. "
+            f"Use one of: {supported}"
+        )
+    return raw_endpoint
+
+
+def _resolve_messages_max_tokens(ai_section: dict) -> int:
+    """Return the validated ``ai.messages_default_max_tokens`` value."""
+    if "messages_default_max_tokens" not in ai_section:
+        return DEFAULT_MESSAGES_MAX_TOKENS
+    raw_value = ai_section["messages_default_max_tokens"]
+    # ``type(...) is int`` deliberately rejects bool (a subclass of int).
+    if type(raw_value) is not int or raw_value <= 0:
+        raise RuntimeError(
+            "ai.messages_default_max_tokens must be a positive integer, "
+            f"got {raw_value!r}"
+        )
+    return raw_value
 
 
 def load_config() -> AIConfig:
@@ -122,10 +169,24 @@ def load_config() -> AIConfig:
         pool=float(timeout_raw.get("pool", 10)),
     )
 
-    # Normalize api_base: auto-append /v1 if not present
-    api_base = ai_section.get("api_base", "https://api.openai.com/v1")
-    if not api_base.rstrip("/").endswith("/v1"):
-        api_base = api_base.rstrip("/") + "/v1"
+    endpoint = _resolve_endpoint(ai_section)
+    messages_default_max_tokens = _resolve_messages_max_tokens(ai_section)
+
+    if endpoint is None:
+        # Legacy mode: auto-append /v1 if not present (trailing slash preserved)
+        raw_base = ai_section.get("api_base", "https://api.openai.com/v1")
+        if not raw_base.rstrip("/").endswith("/v1"):
+            api_base = raw_base.rstrip("/") + "/v1"
+        else:
+            api_base = raw_base
+    else:
+        # Explicit mode: trim trailing slashes, keep every path segment as-is
+        raw_base = ai_section.get("api_base", "https://api.openai.com")
+        if not isinstance(raw_base, str) or not raw_base:
+            raise RuntimeError(
+                "ai.api_base must be a non-empty string when ai.endpoint is set."
+            )
+        api_base = raw_base.rstrip("/")
 
     # Temperature config: global override or per-endpoint
     temperature = ai_section.get("temperature")
@@ -145,6 +206,8 @@ def load_config() -> AIConfig:
         timeout=timeout,
         temperature=temperature,
         endpoint_temperatures=endpoint_temperatures,
+        endpoint=endpoint,
+        messages_default_max_tokens=messages_default_max_tokens,
     )
 
 

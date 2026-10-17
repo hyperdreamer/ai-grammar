@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
+import yaml
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
@@ -179,6 +180,210 @@ def test_config_env_var_not_set(tmp_path, monkeypatch):
     from backend.config import load_config
 
     with pytest.raises(RuntimeError, match="API key not found"):
+        load_config()
+
+
+# ---------------------------------------------------------------------------
+# Endpoint-aware config tests
+# ---------------------------------------------------------------------------
+
+# Sentinel: pass this to _write_ai_config to omit the key entirely, so tests can
+# tell an absent key apart from a present YAML ``null``.
+_OMITTED = object()
+
+
+def _write_ai_config(tmp_path, monkeypatch, **ai_overrides):
+    """Write a config.yaml whose ai section always has a valid test API key."""
+    ai_section = {"api_key": "test-key-12345"}
+    for key, value in ai_overrides.items():
+        if value is not _OMITTED:
+            ai_section[key] = value
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.safe_dump({"ai": ai_section}, sort_keys=False), encoding="utf-8"
+    )
+    monkeypatch.setattr("backend.config.CONFIG_PATH", config_file)
+    return config_file
+
+
+def test_config_supported_endpoints_and_defaults():
+    """The supported endpoint collection is exact and immutable."""
+    from backend.config import DEFAULT_MESSAGES_MAX_TOKENS, SUPPORTED_ENDPOINTS
+
+    assert set(SUPPORTED_ENDPOINTS) == {
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages",
+    }
+    assert len(SUPPORTED_ENDPOINTS) == 3
+    assert DEFAULT_MESSAGES_MAX_TOKENS == 4096
+    with pytest.raises((AttributeError, TypeError)):
+        SUPPORTED_ENDPOINTS.add("/v1/other")  # type: ignore[attr-defined]
+
+
+def test_config_ai_config_endpoint_field_defaults():
+    """AIConfig defaults select legacy mode and the 4096 Messages limit."""
+    from backend.config import AIConfig
+
+    cfg = AIConfig()
+    assert cfg.endpoint is None
+    assert cfg.messages_default_max_tokens == 4096
+
+
+@pytest.mark.parametrize(
+    "raw_api_base,expected_base",
+    [
+        (_OMITTED, "https://api.openai.com/v1"),
+        ("https://gateway", "https://gateway/v1"),
+        ("https://gateway/v1", "https://gateway/v1"),
+        ("https://gateway/", "https://gateway/v1"),
+        ("https://gateway/v1/", "https://gateway/v1/"),
+    ],
+    ids=["omitted", "no-v1-suffix", "v1-suffix", "trailing-slash", "v1-trailing-slash"],
+)
+def test_config_legacy_mode_api_base(
+    tmp_path, monkeypatch, raw_api_base, expected_base
+):
+    """Omitted ai.endpoint keeps the legacy /v1 normalization unchanged."""
+    _write_ai_config(tmp_path, monkeypatch, api_base=raw_api_base)
+
+    from backend.config import load_config
+
+    cfg = load_config()
+    assert cfg.endpoint is None
+    assert cfg.api_base == expected_base
+    assert cfg.messages_default_max_tokens == 4096
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["/v1/chat/completions", "/v1/responses", "/v1/messages"],
+)
+def test_config_explicit_mode_default_api_base(tmp_path, monkeypatch, endpoint):
+    """An explicit endpoint with omitted api_base resolves to api.openai.com."""
+    _write_ai_config(tmp_path, monkeypatch, endpoint=endpoint)
+
+    from backend.config import load_config
+
+    cfg = load_config()
+    assert cfg.endpoint == endpoint
+    assert cfg.api_base == "https://api.openai.com"
+    assert cfg.messages_default_max_tokens == 4096
+
+
+@pytest.mark.parametrize(
+    "raw_api_base,expected_base",
+    [
+        ("https://gateway/proxy/", "https://gateway/proxy"),
+        ("https://gateway/proxy", "https://gateway/proxy"),
+        ("https://gateway/proxy/v1", "https://gateway/proxy/v1"),
+    ],
+    ids=["trailing-slash", "plain", "v1-suffix"],
+)
+def test_config_explicit_mode_api_base(tmp_path, monkeypatch, raw_api_base, expected_base):
+    """Explicit mode trims trailing slashes without rewriting path segments."""
+    _write_ai_config(
+        tmp_path,
+        monkeypatch,
+        endpoint="/v1/messages",
+        api_base=raw_api_base,
+    )
+
+    from backend.config import load_config
+
+    cfg = load_config()
+    assert cfg.endpoint == "/v1/messages"
+    assert cfg.api_base == expected_base
+
+
+def test_config_explicit_mode_retains_messages_default(tmp_path, monkeypatch):
+    """A configured messages_default_max_tokens is retained in explicit mode."""
+    _write_ai_config(
+        tmp_path,
+        monkeypatch,
+        endpoint="/v1/messages",
+        messages_default_max_tokens=8192,
+    )
+
+    from backend.config import load_config
+
+    cfg = load_config()
+    assert cfg.endpoint == "/v1/messages"
+    assert cfg.messages_default_max_tokens == 8192
+
+
+@pytest.mark.parametrize(
+    "raw_endpoint",
+    [
+        None,
+        "chat/completions",
+        "/responses",
+        "https://api.openai.com/v1/responses",
+        "/v1/unknown",
+        42,
+    ],
+    ids=["null", "missing-slash", "missing-v1", "full-url", "unsupported", "non-string"],
+)
+def test_config_rejects_invalid_endpoint(tmp_path, monkeypatch, raw_endpoint):
+    """A present ai.endpoint must be one of the exact supported values."""
+    _write_ai_config(tmp_path, monkeypatch, endpoint=raw_endpoint)
+
+    from backend.config import load_config
+
+    with pytest.raises(RuntimeError):
+        load_config()
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [0, -1, True, "4096", 1.0, None, []],
+    ids=["zero", "negative", "bool", "string", "float", "null", "list"],
+)
+def test_config_rejects_invalid_messages_default_max_tokens(
+    tmp_path, monkeypatch, raw_value
+):
+    """messages_default_max_tokens must be a positive non-bool integer."""
+    _write_ai_config(
+        tmp_path, monkeypatch, messages_default_max_tokens=raw_value
+    )
+
+    from backend.config import load_config
+
+    with pytest.raises(RuntimeError):
+        load_config()
+
+
+def test_config_messages_default_max_tokens_omitted(
+    tmp_path, monkeypatch
+):
+    """Omitting messages_default_max_tokens yields the 4096 default."""
+    _write_ai_config(tmp_path, monkeypatch)
+
+    from backend.config import load_config
+
+    cfg = load_config()
+    assert cfg.messages_default_max_tokens == 4096
+
+
+@pytest.mark.parametrize(
+    "raw_api_base",
+    ["", None, []],
+    ids=["empty-string", "null", "list"],
+)
+def test_config_explicit_mode_rejects_invalid_api_base(
+    tmp_path, monkeypatch, raw_api_base
+):
+    """Explicit mode rejects an empty or non-string api_base before use."""
+    _write_ai_config(
+        tmp_path,
+        monkeypatch,
+        endpoint="/v1/chat/completions",
+        api_base=raw_api_base,
+    )
+
+    from backend.config import load_config
+
+    with pytest.raises(RuntimeError):
         load_config()
 
 
