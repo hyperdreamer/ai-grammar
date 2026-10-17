@@ -116,7 +116,7 @@ def _require_model(payload: Mapping[str, Any], configured_model: str) -> str:
 
 
 def _require_usage_tokens(payload: Mapping[str, Any]) -> int:
-    """Validate the usage envelope and return its total token count.
+    """Validate the Chat Completions usage envelope and return its token count.
 
     An absent ``usage`` or ``total_tokens`` yields ``0``. Every token-count field
     that is present is validated, even when ``total_tokens`` decides the result.
@@ -132,6 +132,92 @@ def _require_usage_tokens(payload: Mapping[str, Any]) -> int:
         if field in usage:
             _require_non_negative_int(usage[field], f"usage.{field}")
     return usage.get("total_tokens", 0)
+
+
+def _require_responses_usage_tokens(payload: Mapping[str, Any]) -> int:
+    """Validate the Responses usage envelope and return its token count.
+
+    Unlike Chat Completions, an absent *or null* ``usage`` normalizes to ``0``.
+    ``total_tokens`` decides the result when it is present and non-null, but every
+    present non-null component is validated regardless; when ``total_tokens`` is
+    absent or null the validated ``input_tokens``/``output_tokens`` sum is used.
+    """
+    usage = payload.get("usage", _ABSENT)
+    if usage is _ABSENT or usage is None:
+        return 0
+    if not isinstance(usage, Mapping):
+        raise ProviderResponseError(
+            f"provider response field usage must be an object, got {usage!r}"
+        )
+
+    component_sum = 0
+    for field in ("input_tokens", "output_tokens"):
+        value = usage.get(field, _ABSENT)
+        if value is _ABSENT or value is None:
+            continue
+        component_sum += _require_non_negative_int(value, f"usage.{field}")
+
+    total = usage.get("total_tokens", _ABSENT)
+    if total is _ABSENT or total is None:
+        return component_sum
+    return _require_non_negative_int(total, "usage.total_tokens")
+
+
+def _responses_output_text(payload: Mapping[str, Any]) -> str:
+    """Concatenate the usable ``output_text`` parts of a Responses envelope.
+
+    Only ``message`` output items are inspected, and within them only
+    ``output_text`` content parts. Selected text is appended in provider order
+    without separators; non-message items and non-``output_text`` parts are
+    ignored. At least one selectable part is required.
+    """
+    output = payload.get("output", _ABSENT)
+    if not isinstance(output, list):
+        raise ProviderResponseError(
+            f"provider response field output must be an array, got {output!r}"
+        )
+
+    texts: list[str] = []
+    for item_index, item in enumerate(output):
+        if not isinstance(item, Mapping):
+            raise ProviderResponseError(
+                f"provider response field output[{item_index}] must be an object, "
+                f"got {item!r}"
+            )
+        if item.get("type") != "message":
+            # Reasoning, tool-call, and other non-message items never carry output.
+            continue
+
+        content = item.get("content", _ABSENT)
+        if not isinstance(content, list):
+            raise ProviderResponseError(
+                "provider response field "
+                f"output[{item_index}].content must be an array, got {content!r}"
+            )
+
+        for part_index, part in enumerate(content):
+            if not isinstance(part, Mapping):
+                raise ProviderResponseError(
+                    "provider response field "
+                    f"output[{item_index}].content[{part_index}] must be an object, "
+                    f"got {part!r}"
+                )
+            if part.get("type") != "output_text":
+                continue
+            text = part.get("text", _ABSENT)
+            if not isinstance(text, str):
+                raise ProviderResponseError(
+                    "provider response field "
+                    f"output[{item_index}].content[{part_index}].text must be a "
+                    f"string, got {text!r}"
+                )
+            texts.append(text)
+
+    if not texts:
+        raise ProviderResponseError(
+            "provider response has no usable output_text parts"
+        )
+    return "".join(texts)
 
 
 def _endpoint_url(config: AIConfig) -> str:
@@ -220,6 +306,72 @@ class ChatCompletionsAdapter:
         return {
             "content": content,
             "tokens": _require_usage_tokens(payload),
+            "model": _require_model(payload, configured_model),
+        }
+
+
+class ResponsesAdapter:
+    """The OpenAI Responses protocol (explicit ``/v1/responses`` mode)."""
+
+    def build_request(
+        self,
+        *,
+        config: AIConfig,
+        system_prompt: str,
+        user_text: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> ProviderRequest:
+        body: dict[str, Any] = {
+            "model": config.model,
+            "instructions": system_prompt,
+            "input": user_text,
+            "temperature": temperature,
+            # Always present and exactly the JSON boolean false.
+            "store": False,
+        }
+        # Only include max_output_tokens for a positive caller limit.
+        if max_tokens is not None and max_tokens > 0:
+            body["max_output_tokens"] = max_tokens
+
+        return {
+            "url": _endpoint_url(config),
+            "headers": {
+                "Authorization": f"Bearer {config.api_key}",
+                "Content-Type": "application/json",
+            },
+            "body": body,
+        }
+
+    def parse_response(
+        self, payload: object, *, configured_model: str
+    ) -> ProviderResult:
+        if not isinstance(payload, Mapping):
+            raise ProviderResponseError(
+                f"provider response must be an object, got {type(payload).__name__}"
+            )
+
+        # Completion state first: no other field can rescue a non-completed call.
+        status = payload.get("status", _ABSENT)
+        if not isinstance(status, str) or status != "completed":
+            raise ProviderResponseError(
+                "provider response field status must be 'completed', "
+                f"got {status!r}"
+            )
+
+        # Error fields are checked before the output list is ever touched, so an
+        # error-bearing envelope can never contribute text.
+        for field in ("error", "incomplete_details"):
+            value = payload.get(field, _ABSENT)
+            if value is not _ABSENT and value is not None:
+                raise ProviderResponseError(
+                    f"provider response field {field} must be absent or null, "
+                    f"got {value!r}"
+                )
+
+        return {
+            "content": _responses_output_text(payload),
+            "tokens": _require_responses_usage_tokens(payload),
             "model": _require_model(payload, configured_model),
         }
 

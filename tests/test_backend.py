@@ -1052,3 +1052,624 @@ def test_chat_adapter_rejects_non_object_payload(payload):
 
     with pytest.raises(ProviderResponseError):
         _parse_chat(payload)
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Responses adapter tests
+# ---------------------------------------------------------------------------
+
+#: Sentinel for "the envelope key is missing entirely" in parametrized cases.
+_MISSING = object()
+
+
+class _OutputRead(RuntimeError):
+    """Raised when an adapter reads the guarded output list too early."""
+
+
+class _GuardedOutput(list):
+    """A real list that raises on every read of its contents.
+
+    ``isinstance(guarded, list)`` stays True, so an adapter that validates the
+    envelope in the wrong order reaches this object and trips it. A correctly
+    ordered adapter rejects populated ``error``/``incomplete_details`` fields
+    first and never touches the payload's output.
+    """
+
+    def _trip(self, how):
+        raise _OutputRead(f"output read via {how} before envelope validation")
+
+    def __getitem__(self, index):
+        self._trip("__getitem__")
+
+    def __iter__(self):
+        self._trip("__iter__")
+
+    def __len__(self):
+        self._trip("__len__")
+
+    def __contains__(self, item):
+        self._trip("__contains__")
+
+    def get(self, *args, **kwargs):
+        self._trip("get")
+
+
+def _responses_config(**overrides):
+    """Build an AIConfig for Responses tests, applying *overrides* last."""
+    from backend.config import AIConfig
+
+    fields = {
+        "model": "test-model",
+        "api_key": "test-key",
+        "api_base": "https://gateway/proxy/",
+        "endpoint": "/v1/responses",
+    }
+    fields.update(overrides)
+    return AIConfig(**fields)
+
+
+def _responses_payload():
+    """The approved Responses fixture: decoys plus three usable output_text parts."""
+    return {
+        "id": "resp_test",
+        "object": "response",
+        "status": "completed",
+        "error": None,
+        "incomplete_details": None,
+        "model": "upstream-responses-model",
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "output_text", "text": "<ignored non-message decoy>"}
+                ],
+            },
+            {
+                "type": "message",
+                "id": "msg_test",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "<part 1>", "annotations": []},
+                    {"type": "refusal", "text": "<ignored non-output_text decoy>"},
+                    {"type": "output_text", "text": "<part 2>", "annotations": []},
+                ],
+            },
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "output_text", "text": "<ignored between-message decoy>"}
+                ],
+            },
+            {
+                "type": "message",
+                "id": "msg_test_2",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "<part 3>", "annotations": []}
+                ],
+            },
+        ],
+        "usage": {"input_tokens": 7, "output_tokens": 8, "total_tokens": 99},
+    }
+
+
+def _parse_responses(payload, configured_model="test-model"):
+    """Parse *payload* with the Responses adapter."""
+    from backend.providers import ResponsesAdapter
+
+    return ResponsesAdapter().parse_response(
+        payload, configured_model=configured_model
+    )
+
+
+# -- request construction ---------------------------------------------------
+
+
+def test_responses_adapter_build_request_explicit_mode():
+    """Explicit mode appends /v1/responses and sends the exact Responses body."""
+    from backend.providers import ResponsesAdapter
+
+    config = _responses_config(api_base="https://gateway/proxy/")
+    request = ResponsesAdapter().build_request(
+        config=config,
+        system_prompt="SYSTEM PROMPT",
+        user_text="USER TEXT",
+        temperature=0.1,
+        max_tokens=None,
+    )
+
+    assert request["url"] == "https://gateway/proxy/v1/responses"
+    assert request["headers"] == {
+        "Authorization": "Bearer test-key",
+        "Content-Type": "application/json",
+    }
+    assert request["body"] == {
+        "model": "test-model",
+        "instructions": "SYSTEM PROMPT",
+        "input": "USER TEXT",
+        "temperature": 0.1,
+        "store": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "api_base,expected_url",
+    [
+        ("https://gateway/proxy/", "https://gateway/proxy/v1/responses"),
+        ("https://gateway/proxy", "https://gateway/proxy/v1/responses"),
+        ("https://gateway/proxy/v1", "https://gateway/proxy/v1/v1/responses"),
+    ],
+    ids=["trailing-slash-base", "plain-base", "v1-prefixed-base"],
+)
+def test_responses_adapter_url_is_plain_concatenation(api_base, expected_url):
+    """Trailing slashes are trimmed; no URL resolution drops gateway prefixes."""
+    from backend.providers import ResponsesAdapter
+
+    config = _responses_config(api_base=api_base)
+    request = ResponsesAdapter().build_request(
+        config=config,
+        system_prompt="SYS",
+        user_text="USER",
+        temperature=0.3,
+        max_tokens=None,
+    )
+    assert request["url"] == expected_url
+
+
+@pytest.mark.parametrize(
+    "max_tokens,expected",
+    [
+        (None, "omitted"),
+        (0, "omitted"),
+        (-1, "omitted"),
+        (128, 128),
+    ],
+    ids=["omitted", "zero", "negative", "positive"],
+)
+def test_responses_adapter_max_output_tokens_matrix(max_tokens, expected):
+    """Only a positive token limit becomes max_output_tokens; store is always False."""
+    from backend.providers import ResponsesAdapter
+
+    config = _responses_config(api_base="https://gateway/proxy/")
+    request = ResponsesAdapter().build_request(
+        config=config,
+        system_prompt="SYSTEM PROMPT",
+        user_text="USER TEXT",
+        temperature=0.3,
+        max_tokens=max_tokens,
+    )
+
+    assert request["url"] == "https://gateway/proxy/v1/responses"
+    assert request["headers"] == {
+        "Authorization": "Bearer test-key",
+        "Content-Type": "application/json",
+    }
+    body = request["body"]
+    assert body["model"] == "test-model"
+    assert body["instructions"] == "SYSTEM PROMPT"
+    assert body["input"] == "USER TEXT"
+    assert isinstance(body["input"], str)
+    assert body["temperature"] == 0.3
+    assert body["store"] is False
+
+    if expected == "omitted":
+        assert "max_output_tokens" not in body
+        assert set(body) == {"model", "instructions", "input", "temperature", "store"}
+    else:
+        assert body["max_output_tokens"] == expected
+        assert set(body) == {
+            "model",
+            "instructions",
+            "input",
+            "temperature",
+            "store",
+            "max_output_tokens",
+        }
+
+
+def test_responses_adapter_places_prompts_and_temperature_verbatim():
+    """Instructions and input are copied verbatim; model/temperature are retained."""
+    from backend.providers import ResponsesAdapter
+
+    system_prompt = "SYSTEM  with  spaces\nand a newline"
+    user_text = "  leading and trailing whitespace  \n\ttabbed  "
+    config = _responses_config(model="gpt-4o-mini")
+    body = ResponsesAdapter().build_request(
+        config=config,
+        system_prompt=system_prompt,
+        user_text=user_text,
+        temperature=0.42,
+        max_tokens=64,
+    )["body"]
+
+    assert body["model"] == "gpt-4o-mini"
+    assert body["instructions"] == system_prompt
+    assert body["input"] == user_text
+    assert body["temperature"] == 0.42
+    assert body["max_output_tokens"] == 64
+    assert body["store"] is False
+
+
+# -- success extraction -----------------------------------------------------
+
+
+def test_responses_adapter_normalizes_output_text_and_usage():
+    """Only message output_text parts concatenate; total_tokens takes precedence."""
+    result = _parse_responses(_responses_payload())
+
+    assert result == {
+        "content": "<part 1><part 2><part 3>",
+        "tokens": 99,
+        "model": "upstream-responses-model",
+    }
+
+
+def test_responses_adapter_falls_back_to_component_sum_when_total_null():
+    """A null total_tokens sums the validated input/output components."""
+    payload = _responses_payload()
+    payload["usage"]["total_tokens"] = None
+
+    assert _parse_responses(payload)["tokens"] == 15
+
+
+@pytest.mark.parametrize("usage_state", [_MISSING, None], ids=["absent", "null"])
+def test_responses_adapter_absent_or_null_usage_normalizes_to_zero(usage_state):
+    """Responses allows an absent or explicitly null usage envelope."""
+    payload = _responses_payload()
+    if usage_state is _MISSING:
+        payload.pop("usage")
+    else:
+        payload["usage"] = None
+
+    assert _parse_responses(payload)["tokens"] == 0
+
+
+def test_responses_adapter_falls_back_when_model_absent():
+    """An absent model key uses the configured model."""
+    payload = _responses_payload()
+    payload.pop("model")
+
+    assert _parse_responses(payload, configured_model="fallback-model")["model"] == (
+        "fallback-model"
+    )
+
+
+# -- completion state -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        _MISSING,
+        None,
+        False,
+        1,
+        {},
+        "failed",
+        "cancelled",
+        "incomplete",
+        "in_progress",
+        "queued",
+        "unknown-status",
+    ],
+    ids=[
+        "missing",
+        "null",
+        "false",
+        "int",
+        "object",
+        "failed",
+        "cancelled",
+        "incomplete",
+        "in_progress",
+        "queued",
+        "unknown",
+    ],
+)
+def test_responses_adapter_rejects_non_completed_status(status):
+    """Only the exact string 'completed' is a usable envelope, despite usable text."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    if status is _MISSING:
+        payload.pop("status")
+    else:
+        payload["status"] = status
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+def test_responses_adapter_rejects_failed_status_with_route_valid_text():
+    """A failed envelope is rejected even when output holds parseable operation JSON."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    payload["status"] = "failed"
+    payload["output"] = [
+        {
+            "type": "message",
+            "content": [
+                {"type": "output_text", "text": '{"polished":"Polished output"}'}
+            ],
+        }
+    ]
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+@pytest.mark.parametrize(
+    "error_state", [_MISSING, None], ids=["error-omitted", "error-null"]
+)
+@pytest.mark.parametrize(
+    "details_state",
+    [_MISSING, None],
+    ids=["incomplete-details-omitted", "incomplete-details-null"],
+)
+def test_responses_adapter_accepts_absent_or_null_error_fields(
+    error_state, details_state
+):
+    """A completed envelope is valid when both error fields are absent or null."""
+    payload = _responses_payload()
+    for field, state in (
+        ("error", error_state),
+        ("incomplete_details", details_state),
+    ):
+        if state is _MISSING:
+            payload.pop(field)
+        else:
+            payload[field] = None
+
+    assert _parse_responses(payload) == {
+        "content": "<part 1><part 2><part 3>",
+        "tokens": 99,
+        "model": "upstream-responses-model",
+    }
+
+
+@pytest.mark.parametrize("field", ["error", "incomplete_details"])
+@pytest.mark.parametrize(
+    "value",
+    [{}, {"code": "provider_error"}, [], ["populated"], "", "populated", False, True, 0, 1, 0.0, 1.5],
+    ids=[
+        "empty-object",
+        "populated-object",
+        "empty-array",
+        "populated-array",
+        "empty-string",
+        "populated-string",
+        "false",
+        "true",
+        "zero",
+        "positive-int",
+        "zero-float",
+        "fractional-float",
+    ],
+)
+def test_responses_adapter_rejects_populated_error_fields_before_output_access(
+    field, value
+):
+    """Any present non-null error field is fatal before the output is read."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    payload["output"] = _GuardedOutput(payload["output"])
+    payload[field] = value
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+def test_responses_guarded_output_trips_when_read():
+    """Positive control: the guard fires if extraction is actually attempted."""
+    payload = _responses_payload()
+    payload["output"] = _GuardedOutput(payload["output"])
+
+    with pytest.raises(_OutputRead):
+        _parse_responses(payload)
+
+
+# -- output shape validation ------------------------------------------------
+
+
+def _only_content(content):
+    """Build an output list holding one message item with *content*."""
+    return [{"type": "message", "content": content}]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("output"),
+        lambda p: p.__setitem__("output", None),
+        lambda p: p.__setitem__("output", {"type": "message"}),
+        lambda p: p.__setitem__("output", "not a list"),
+        lambda p: p.__setitem__("output", []),
+        lambda p: p.__setitem__("output", ["not an object"]),
+        lambda p: p.__setitem__("output", [None]),
+        lambda p: p.__setitem__("output", [{"type": "message"}]),
+        lambda p: p.__setitem__("output", _only_content(None)),
+        lambda p: p.__setitem__("output", _only_content("text")),
+        lambda p: p.__setitem__("output", _only_content({"type": "output_text"})),
+        lambda p: p.__setitem__("output", _only_content(["not a part"])),
+        lambda p: p.__setitem__("output", _only_content([{"type": "output_text"}])),
+        lambda p: p.__setitem__(
+            "output", _only_content([{"type": "output_text", "text": None}])
+        ),
+        lambda p: p.__setitem__(
+            "output", _only_content([{"type": "output_text", "text": 5}])
+        ),
+        lambda p: p.__setitem__(
+            "output", _only_content([{"type": "output_text", "text": ["x"]}])
+        ),
+        lambda p: p.__setitem__(
+            "output",
+            [
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "output_text", "text": "decoy"}],
+                }
+            ],
+        ),
+        lambda p: p.__setitem__(
+            "output", _only_content([{"type": "refusal", "text": "decoy"}])
+        ),
+    ],
+    ids=[
+        "output-absent",
+        "output-null",
+        "output-object",
+        "output-string",
+        "output-empty",
+        "output-item-string",
+        "output-item-null",
+        "content-absent",
+        "content-null",
+        "content-string",
+        "content-object",
+        "content-part-string",
+        "output-text-absent",
+        "output-text-null",
+        "output-text-int",
+        "output-text-list",
+        "only-reasoning-decoy",
+        "only-refusal-part",
+    ],
+)
+def test_responses_adapter_rejects_unusable_output(mutate):
+    """Missing/malformed output and unusable output_text parts are fatal."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    mutate(payload)
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [5, None, [], {}, True],
+    ids=["int", "null", "list", "dict", "bool"],
+)
+def test_responses_adapter_rejects_present_non_string_model(model):
+    """A present model must be a string; only an absent key falls back."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    payload["model"] = model
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, [], "envelope", 7],
+    ids=["null", "list", "string", "int"],
+)
+def test_responses_adapter_rejects_non_object_payload(payload):
+    """The response envelope itself must be a JSON object."""
+    from backend.providers import ProviderResponseError
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+# -- usage shape validation -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [False, True, 1, "1", []],
+    ids=["false", "true", "int", "string", "list"],
+)
+def test_responses_adapter_rejects_non_object_usage(usage):
+    """A present non-object usage envelope is a provider response error."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    payload["usage"] = usage
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+@pytest.mark.parametrize("field", ["total_tokens", "input_tokens", "output_tokens"])
+@pytest.mark.parametrize(
+    "value",
+    [-1, True, 1.0, 1.5, "1", [], {}],
+    ids=[
+        "negative",
+        "bool",
+        "float-integral",
+        "float-fractional",
+        "string",
+        "list",
+        "dict",
+    ],
+)
+def test_responses_adapter_rejects_invalid_count_values(field, value):
+    """Every token count must be an exact non-negative integer."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    # The fixture's other counts stay valid, so only *field* is at fault.
+    payload["usage"][field] = value
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
+
+
+@pytest.mark.parametrize("component", ["input_tokens", "output_tokens"])
+@pytest.mark.parametrize("state", [_MISSING, None], ids=["absent", "null"])
+def test_responses_adapter_absent_or_null_components_keep_total(component, state):
+    """Absent/null components stay valid and do not change total_tokens=99."""
+    payload = _responses_payload()
+    if state is _MISSING:
+        payload["usage"].pop(component)
+    else:
+        payload["usage"][component] = None
+
+    assert _parse_responses(payload)["tokens"] == 99
+
+
+@pytest.mark.parametrize(
+    "total_state", [_MISSING, None], ids=["total-absent", "total-null"]
+)
+@pytest.mark.parametrize(
+    "input_state", [_MISSING, None], ids=["input-absent", "input-null"]
+)
+@pytest.mark.parametrize(
+    "output_state", [_MISSING, None], ids=["output-absent", "output-null"]
+)
+def test_responses_adapter_absent_counts_normalize_to_zero(
+    total_state, input_state, output_state
+):
+    """Absent/null totals and components all contribute zero."""
+    payload = _responses_payload()
+    usage = payload["usage"]
+    for field, state in (
+        ("total_tokens", total_state),
+        ("input_tokens", input_state),
+        ("output_tokens", output_state),
+    ):
+        if state is _MISSING:
+            usage.pop(field)
+        else:
+            usage[field] = None
+
+    assert _parse_responses(payload)["tokens"] == 0
+
+
+def test_responses_adapter_null_total_still_validates_components():
+    """A null total_tokens does not excuse an invalid component count."""
+    from backend.providers import ProviderResponseError
+
+    payload = _responses_payload()
+    payload["usage"]["total_tokens"] = None
+    payload["usage"]["input_tokens"] = "7"
+
+    with pytest.raises(ProviderResponseError):
+        _parse_responses(payload)
